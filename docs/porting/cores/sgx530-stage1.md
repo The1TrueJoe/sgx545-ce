@@ -659,6 +659,31 @@ each landmark gets its own row:
 The test program needs 0x40 bytes and overlaps PDS1's slot, which the SGX530's event
 registers don't use. The normal start goes back to 0xa6c = 1.
 
+## After the fourteenth attempt: is 0xa70 the program's length?
+
+Attempt 14 (log 2026-11-12-0038) ran the row-aligned programs with 0xa6c = 1 and 0xa70 = 6.
+- No PC reached a branch target. Program A's self-loop on row 3 never held the PDS: the
+  PC showed row 1 (…ac), 0xf33c and 0.
+- 0xa68's low four bits read back 0.
+- Every `PDS_PC_BASE` value so far is row-aligned, so it may be the row fetched rather
+  than a per-instruction PC.
+
+**Reading (G): 0xa70 is the program's length, and 6 cut A short.** On the SGX545, 6 is
+exactly PDS0's size in dwords: one 4-dword data row plus MOVS and HALT. If the PDS fetches
+only 0xa70 dwords:
+- the MOVS program (attempts 8-11) was whole;
+- program A (4 rows, 16 dwords) was cut off inside row 1, before either branch;
+- attempt 12's 0xa70 grid only ran the MOVS program, which can't show execution.
+
+**Attempt 15:** program A, 0xa6c = 1, and 0xa70 ∈ {1, 2, 3, 4, 6, 8, 12, 16, 20, 32, 64}.
+The list covers dwords and rows.
+- A PC held on row 3 (…b4) for some value means the PDS executes the SGX545's BRA. The
+  smallest such value also gives 0xa70's unit (C).
+- Then the same values with program C, and with D (0xa6c = 0, code from byte 0).
+- If no value holds the loop, 0xa70 isn't the length. Then the PDS ISA itself is the
+  question, with a test of whether row 1's content changes the trace at all: zeros, HALTs,
+  or the self-loop at row 1.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
