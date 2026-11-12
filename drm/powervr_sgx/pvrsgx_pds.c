@@ -83,20 +83,27 @@ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf
 /* Start the microkernel at offset e: DOUTU with word 1 = 2. */
 /*
  * The stage-1 sweep's minimal event programs (docs/PDS.md encodings): does the
- * SGX530's PDS execute at all? A: two branches to code word 1, so a running PDS
- * loops on it. B: a halt. C: a branch to word 3 over two halts. D: A with no
- * data segment.
+ * SGX530's PDS execute at all? Its PC reads back by 16-byte rows, so each test
+ * puts its landmark in a row of its own. A: a branch from row 1 into row 3,
+ * which branches to itself, so a running PDS sits on row 3. C: a branch from
+ * row 1 to row 2, which halts. D: A from byte 0, with no data segment. They
+ * run over PDS1's slot, which no SGX530 event register uses.
  */
-static const u32 sweep_prog[][4] = {
-	[1] = { 0x97000001, 0x97000001 },
-	[2] = { 0xaf000000 },
-	[3] = { 0x97000003, 0xaf000000, 0xaf000000, 0xaf000000 },
-	[4] = { 0x97000001, 0x97000001 },
+#define BRA(t)	(0x97000000 | (t))
+#define HALT	0xaf000000
+
+static const u32 sweep_prog[][12] = {
+	[1] = { BRA(8), HALT, HALT, HALT, HALT, HALT, HALT, HALT, BRA(8), HALT, HALT, HALT },
+	[2] = { BRA(4), HALT, HALT, HALT, HALT, HALT, HALT, HALT },
+	[3] = { BRA(8), HALT, HALT, HALT, HALT, HALT, HALT, HALT, BRA(8), HALT, HALT, HALT },
 };
+
+#undef BRA
+#undef HALT
 
 static void pds_sweep_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 {
-	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, sdev->sweep_prog == 4 ? 0 : 4);
+	struct pvrsgx_pds p = pvrsgx_pds_prog(sdev, b, sdev->sweep_prog == 3 ? 0 : 4);
 
 	for (unsigned int i = 0; i < ARRAY_SIZE(sweep_prog[0]); i++)
 		if (sweep_prog[sdev->sweep_prog][i])

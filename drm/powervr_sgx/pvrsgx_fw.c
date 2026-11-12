@@ -567,12 +567,11 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
 	/*
-	 * Event data 0 is where the event program's code starts. The SGX530 counts
-	 * dwords (stage 1, log 2026-11-12-0002: the PDS starts at program + 0x0a6c),
-	 * so it is the 4-dword data segment; the SGX545's 1 is that in 16-byte rows (G).
+	 * Event data 0 is where the event program's code starts, in 16-byte rows
+	 * (stage 1, log 2026-11-12-0002: the PDS starts at program + 16 bytes x
+	 * 0x0a6c): 1, past the one-row data segment, on both cores.
 	 */
-	u32 data0 = fam->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS ? 1 : 4;
-	u32 data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
+	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
 
 	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
@@ -802,8 +801,8 @@ struct sweep_variant {
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .prog = 1 }, { .prog = 2 }, { .prog = 3 },
-	{ .prog = 4, .data0 = 0 + 1 },
+	{ .prog = 1 }, { .prog = 2 },
+	{ .prog = 3, .data0 = 0 + 1 },
 	{ .prog = 1, .a68_low = 0x1 }, { .prog = 1, .a68_low = 0x4 },
 	{ .prog = 1, .a68_low = 0xf },
 };
@@ -814,7 +813,7 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 			  sv->data1 || sv->prog || sv->a68_low ? "" : "baseline");
 
 	if (sv->prog)
-		n += scnprintf(buf + n, len - n, " program %c", 'A' + sv->prog - 1);
+		n += scnprintf(buf + n, len - n, " program %c", "?ACD"[sv->prog & 3]);
 	if (sv->a68_low)
 		n += scnprintf(buf + n, len - n, " 0xa68 low 0x%x", sv->a68_low);
 
