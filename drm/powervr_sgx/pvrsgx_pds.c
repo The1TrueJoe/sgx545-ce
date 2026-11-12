@@ -14,6 +14,9 @@
 
 /* DOUTU word 0: temporary registers, in fours. */
 #define PDS_DOUTU_TEMPS		GENMASK(31, 24)
+/* MOVS: the DOUT destination and the condition code (docs/PDS.md). */
+#define PDS_MOVS_DEST		GENMASK(4, 0)
+#define PDS_MOVS_CC		GENMASK(26, 24)
 
 /*
  * DOUTU word 0 for microkernel code at device address a, in the kernel code
@@ -94,8 +97,15 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		doutu = (doutu & ~PDS_DOUTU_TEMPS) |
 			FIELD_PREP(PDS_DOUTU_TEMPS, sw & PVRSGX_SWEEP_TEMPS4 ? 1 : 0);
 
-	if ((sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) ||
-	    (sw & PVRSGX_SWEEP_INTERLEAVE)) {
+	if (sw & PVRSGX_SWEEP_ALL_SLOTS) {
+		/* The DOUTU gets (doutu, doutu, doutu) under any data layout. */
+		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
+		pvrsgx_pds_ds(&p, PDS_D0(1), doutu);
+		pvrsgx_pds_ds(&p, PDS_D1(0), doutu);
+		pvrsgx_pds_ds(&p, PDS_D1(1), doutu);
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(0), PDS_D0(0), PDS_D0(0));
+	} else if ((sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) ||
+		   (sw & PVRSGX_SWEEP_INTERLEAVE)) {
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
 		pvrsgx_pds_ds(&p, PDS_D0(1), w1);
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
@@ -111,6 +121,13 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		pvrsgx_pds_ds(&p, PDS_D1(1), w1);
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D1(1), PDS_D0(1), PDS_D0(0));
 	}
+	/* The sweep's MOVS destination (b0-4) and condition (b24-26), event program only. */
+	if (b == PVRSGX_FW_PDS0 && sdev->sweep_dest)
+		p.w[p.data + p.pc - 1] = (p.w[p.data + p.pc - 1] & ~PDS_MOVS_DEST) |
+					  FIELD_PREP(PDS_MOVS_DEST, sdev->sweep_dest - 1);
+	if (b == PVRSGX_FW_PDS0 && sdev->sweep_cc)
+		p.w[p.data + p.pc - 1] = (p.w[p.data + p.pc - 1] & ~PDS_MOVS_CC) |
+					  FIELD_PREP(PDS_MOVS_CC, sdev->sweep_cc - 1);
 	pvrsgx_pds_halt(&p);
 }
 

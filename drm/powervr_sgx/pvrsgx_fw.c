@@ -777,46 +777,27 @@ static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
-#define D1	PVRSGX_SWEEP_DATA0_2
-#define W0	PVRSGX_SWEEP_DOUTU_W1_0
-#define IL	PVRSGX_SWEEP_INTERLEAVE
-#define DM	PVRSGX_SWEEP_DM2
-#define T4	PVRSGX_SWEEP_TEMPS4
-#define T0	PVRSGX_SWEEP_TEMPS0
-#define P3	PVRSGX_SWEEP_PADS_DM3
+#define AS	PVRSGX_SWEEP_ALL_SLOTS
 
+/* dest and cc: the event program's MOVS fields, + 1 (0 keeps DOUTU, always). */
 static const struct {
 	u32 flags;
+	u8 dest, cc;
 	const char *name;
 } sweep[] = {
-	{ 0, "baseline" },
-	{ D1, "event data 2" },
-	{ W0, "DOUTU word 1 = 0" },
-	{ IL, "2-dword interleave" },
-	{ DM, "code base 15 DM 2" },
-	{ D1 | W0, "data 2, word 1 = 0" },
-	{ D1 | IL, "data 2, interleave" },
-	{ D1 | DM, "data 2, DM 2" },
-	{ W0 | DM, "word 1 = 0, DM 2" },
-	{ D1 | W0 | DM, "data 2, word 1 = 0, DM 2" },
-	{ T4, "4 temporaries" },
-	{ D1 | T4, "data 2, 4 temporaries" },
-	{ T0, "0 temporaries" },
-	/* With code_base_pads: the pads' data masters all 3. */
-	{ P3, "pads DM 3" },
-	{ P3 | D1, "pads DM 3, data 2" },
-	{ P3 | W0, "pads DM 3, word 1 = 0" },
-	{ P3 | DM, "pads DM 3, base 15 DM 2" },
-	{ P3 | D1 | W0, "pads DM 3, data 2, word 1 = 0" },
+	{ 0, 0, 0, "baseline (MOVS dest 5, cc 7)" },
+	{ 0, 4 + 1, 0, "MOVS dest 4" },
+	{ 0, 6 + 1, 0, "MOVS dest 6" },
+	{ 0, 7 + 1, 0, "MOVS dest 7" },
+	{ 0, 1 + 1, 0, "MOVS dest 1" },
+	{ 0, 0 + 1, 0, "MOVS dest 0" },
+	{ 0, 2 + 1, 0, "MOVS dest 2" },
+	{ 0, 0, 3 + 1, "MOVS cc 3" },
+	{ 0, 0, 0 + 1, "MOVS cc 0" },
+	{ AS, 0, 0, "all four slots the DOUTU word" },
 };
 
-#undef D1
-#undef W0
-#undef IL
-#undef DM
-#undef T4
-#undef T0
-#undef P3
+#undef AS
 
 /*
  * Whether the diagnostic ladder ran: its EVENT_TIMER write (0xa5a, timer
@@ -875,6 +856,8 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 		return 0;
 	sgx_wr(sdev, sdev->cr->event_pds_enable, 0);
 	sdev->sweep_flags = 0;
+	sdev->sweep_dest = 0;
+	sdev->sweep_cc = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -929,6 +912,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
 			sdev->sweep_flags = sweep[v].flags;
+			sdev->sweep_dest = sweep[v].dest;
+			sdev->sweep_cc = sweep[v].cc;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
 			/*
