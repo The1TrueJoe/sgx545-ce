@@ -17,7 +17,9 @@
  *                     pixel's red + green is ff (within the rounding) and
  *                     both pure colours are present
  *   scaled WxH        the colour case resolved into a buffer half the size
- *                     (EXT_framebuffer_multisample_blit_scaled): runs
+ *                     with EXT_framebuffer_multisample_blit_scaled's
+ *                     SCALED_RESOLVE_FASTEST filter (a scaled resolve with
+ *                     GL_LINEAR is GL_INVALID_OPERATION by the spec): runs
  *
  * at 720x480 (the capture's size) and 256x256 (the small-target tiling mode,
  * which no capture covers).
@@ -191,7 +193,7 @@ run(int w, int h, int depth, int scaled)
    glBindFramebuffer_(GL_READ_FRAMEBUFFER, fm);
    glBindFramebuffer_(GL_DRAW_FRAMEBUFFER, fs);
    glBlitFramebuffer_(0, 0, w, h, 0, 0, dw, dh, GL_COLOR_BUFFER_BIT,
-                      scaled ? GL_LINEAR : GL_NEAREST);
+                      scaled ? GL_SCALED_RESOLVE_FASTEST_EXT : GL_NEAREST);
    glBindFramebuffer_(GL_READ_FRAMEBUFFER, fs);
    glReadPixels_(0, 0, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE, px);
    GLenum err = glGetError_();

@@ -233,6 +233,49 @@ style), unless it says capture. In order of how much each unblocks:
 - **H8, seamless cube filtering.** A LINEAR sample on a cube map's face edge,
   with the T0 and T3 bits that no capture sets swept one at a time.
 
+### Results (a CE5300 board, 2026-11-11)
+
+Open stack: powervr_sgx (uAPI rev 3, the samples field) and the open
+microkernel, `sgx_hwt` from this tree. Log `2026-11-11-2120-gl3-driver`.
+
+**H2.** Every code 0x00-0x1f samples without a fault. The texel is 0xc0804020
+in every dword of a 2x2 strided texture with an 8-dword pitch. Nearest at
+(0.5, 0.5) reads texel (1, 1), which starts at byte 34 of the heap, and the
+plain sample's T3 (00800800) returns:
+
+| codes | r0 (r1) | reading |
+|---|---|---|
+| 0x00, 0x01 | 0x00000040 | 8 bits, raw: byte 33 |
+| 0x07-0x0b | 0x0000c080 | 16 bits, raw: bytes 34-35 |
+| 0x02-0x06, 0x17-0x1b | 0xcc008800 … 0xffd18d49 | 16-bit packed formats expanded to 8888 (0x02, 0x04, 0x05, 0x19, 0x1a and 0x1b as TEX.md §1) |
+| 0x0c, 0x0f, 0x10, 0x11, 0x12, 0x16, 0x1f | 0xc0804020 | the dword unchanged |
+| 0x0d | 0xc0204080 | R and B swapped |
+| 0x13 | 0x40804020 | alpha 0xc0 → 0x40 |
+| 0x14 | 0xff8040c0 | byte 3 to byte 0, alpha forced to ff |
+| 0x15 | 0x00804020 | alpha forced to 0 |
+| 0x1e | 0xff804020 | alpha forced to ff (XRGB) |
+| 0x1c, 0x1d | 0xff000000 | constant |
+| 0x0e | 0x04010802 (r1 0xffff0200) | **RGB10_A2 unorm, returned as four 16-bit unorm channels in two registers**: 0x20, 0x10, 0x8 and 3 scale to 0x0802, 0x0401, 0x0200 and 0xffff |
+
+0x12 returns NaN payloads, a signalling NaN, a denormal, -0, the largest
+finite float, a negative integer and a plain bit pattern unchanged (7/7). So
+**R32UI, R32I and R32F sample raw through 0x12**, and wider integer formats
+can sample as R32 at four times the width: integer textures are NEAREST only,
+so four fetches cost nothing in filtering. 0x0e shows that the sampler can
+write two result registers. The register count follows the format, so the
+wider float formats may have their own codes outside this T3.
+
+**H1.** Hook: a test-supplied end-of-tile program that writes the frame's own
+target works (`eot_own`: RT 0x11111111). One that ends on RT2 alone works
+too (`eot_rt2_only`: RT2 0x11111111), so the second target's PBE words are
+right. **Any end-of-tile program with a PBE emit that does not end the
+program hangs the GPU.** That covers two targets (`eot_twice_k0_f0`), the
+same target twice (`eot_rt_twice`) and two targets with a `phas` wait
+between them (`eot_twice_phas`). The kernel's job timeout resets it each
+time, and the microkernel starts again. So sideband b6-11 is untested: a
+second emit needs something the non-final emit lacks. MRT stays unknown, and
+the fallback is a 3D pass per target.
+
 ## Verdict
 
 - **GL 3.0 can be exposed honestly** if H1 (or the pass-per-target fallback)
@@ -291,10 +334,17 @@ behind its cap only when piglit and dEQP pass it.
 
 ## Status
 
-Done in the driver, built and unit-tested on the host, **not yet run on a
-CE5300 board** (piglit `arb_draw_instanced`, `arb_instanced_arrays`,
-`arb_base_instance`'s draws, `nv_primitive_restart` and
-`gl-3.1-primitive-restart` are the gate):
+Done in the driver and run on a CE5300 board (2026-11-11): the piglit gate
+of 39 `arb_draw_instanced`, `arb_instanced_arrays`, `arb_base_instance`,
+`nv_primitive_restart` and `drawelements-instanced` tests gives 30 pass, 7
+skip and 2 not built, with no fail or crash. The skips are
+`point-vertex-id` (×4) and `arb_base_instance` (×2), which need GLSL 1.40
+or GL 3.1, plus `no-core-profile`. dEQP-GLES2 is test for test the uAPI
+rev 3 baseline (78 fail, 16638 pass). The fixed-function piglit list loses
+five crashes (`getteximage-depth`, `texsubimage-depth-formats`,
+`teximage-errors` pass, `copyteximage 1d/2d` fail). Two tests,
+`fbo-alphatest-nocolor` and its `-ff` variant, now start and fail: a
+framebuffer with no colour buffer isn't drawn (`begin_frame`).
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
@@ -316,10 +366,25 @@ textures (`lower_rect` with the size from `SGX_K_TEXSIZE`).
 4-sample colour and depth/stencil renderbuffers when the kernel reports
 `rt_max_samples` 4, resolved by the PBE, a per-sample ZLS buffer (the
 context's own when no depth buffer is bound), resolves through
-`glBlitFramebuffer` as copies. Not run on a board yet: `mesa/tests/sgx_msaa.c`
-checks the quarter-coverage edge pixels and per-sample depth at 720×480 and
-256×256, with piglit's `ext_framebuffer_multisample` tests after it. Not
-done: multisampled window surfaces (EGL configs), depth/stencil resolves,
+`glBlitFramebuffer` as copies. On a CE5300 board (2026-11-11),
+`mesa/tests/sgx_msaa.c` passes colour and depth at 720×480 and at 256×256
+(edge pixels at one, two and three quarters: 311/461/311 and 126/197/123;
+per-sample depth keeps red out of the covered samples). Its scaled case
+used GL_LINEAR, which the spec refuses for a multisampled source
+(GL_INVALID_OPERATION, correctly). It now uses
+`GL_SCALED_RESOLVE_FASTEST_EXT` and hasn't been run again yet. piglit
+`ext_framebuffer_multisample` (4 samples and the count-agnostic tests):
+`minmax` and the three `negative-*` tests pass. The `accuracy`, `blit`,
+`turn-on-off` and similar tests skip, since they require
+ARB_framebuffer_object, so that cap is also what opens the 4x piglit
+coverage. `samples`, `renderbuffer-samples` and
+`renderbufferstorage-samples` fail because Mesa answers
+`GL_RENDERBUFFER_SAMPLES` only with ARB_framebuffer_object, which st turns on
+with the `mixed_framebuffer_sizes` cap. `dlist` fails in display-list
+compile. The cap needs mixed attachment sizes to work first: the render
+takes the colour buffer's size, and a depth buffer's ZLS layout follows the
+render, so a depth buffer of another size would be stored in the wrong
+layout. Not done: multisampled window surfaces (EGL configs), depth/stencil resolves,
 GL_MULTISAMPLE off on a 4x target (the render target's samples are fixed
 per render), sample coverage and alpha to coverage.
 
