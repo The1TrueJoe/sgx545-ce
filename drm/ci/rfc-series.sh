@@ -79,7 +79,7 @@ for f in "$DRM"/powervr_sgx/*.c; do
 done
 KUNIT=1 kconfig > "$D/Kconfig"
 mkdir -p "$D/tests"
-cp "$DRM"/powervr_sgx/tests/*.c "$DRM/powervr_sgx/tests/.kunitconfig" "$D/tests/"
+cp "$DRM"/powervr_sgx/tests/*.[ch] "$DRM"/powervr_sgx/tests/*.txt "$DRM/powervr_sgx/tests/.kunitconfig" "$D/tests/"
 git add "$D"
 git commit -q -F "$MSG/12-kunit.txt"
 git log --oneline -13
