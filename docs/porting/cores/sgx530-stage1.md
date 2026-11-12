@@ -1888,3 +1888,32 @@ Ordered cheapest first. "Cheap" = kernel-side, no new image; "medium" = one new 
 Recommend **H-A and H-B first** (cheap, no image, one board slot), then **H-C**. Report each
 result to the coordinator before any long run. The analysis-side capture remains the definitive
 answer; these narrow it and may unblock sooner.
+
+## The vendor-launch test (sgx530-vendor-setup.md §9), queued ahead of H-C
+
+The analysis side's static read of the vendor stack
+([sgx530-vendor-setup.md](sgx530-vendor-setup.md)) says gates 1/3/4 are one launch-context
+difference, not three, and gives the vendor's event-task launch. This is built from that doc and
+runs ahead of H-C. It is **driver-side**: the aluwr/stout probe images are the unchanged stage-1
+ones (the `event` entry is at offset 0, so no in-segment offset to encode; `temps` = 18). Nothing
+in `ukernel/` changes, so the SGX545 golden stays byte-identical. The driver (sgx530-kernel) makes
+the launch changes:
+
+1. **Event PDS data in the 8-word interleave** (§2): place the three DOUTU words at data-segment
+   memory words **0, 1, 8** (DS0[0], DS0[1], DS1[0]).
+2. **The DOUTU words** (§3): word 0 = **0x0020000F** (code base 15 in bits 0-3, offset 0, bit 21
+   set, **bits 22-31 clear** — in particular do *not* encode the manifest temp count into bits
+   24-31), word 1 = **0x04000000**, word 2 = **0x00000001**.
+3. **Event control words:** `0xa6c` = **3**, `0xa70` = **0x00013d01**.
+4. **Map the kernel data arena with `EDM_PROTECT`** again (revert the attempt-45 stopgap), to test
+   the store path under the vendor's requestor assumption (§6).
+5. Keep `phas.i` first (the probe cores already do).
+
+**Readout** (as in stage 1): `aluwr` — does an ALU write to a **temporary** retire (fault at the
+OR'd page 0x0fd7d000, not the leftover 0x0c004000; gate 1)? `stout_o0`/`stout_r5` — does a **store**
+commit to DRAM without faulting on an `EDM_PROTECT` page (gates 3/4)?
+
+**Bisect** if writes retire: word 2 first, then word 1, then word-0 bit 21, then `0xa70`. Then
+re-run one DOUTA-then-DOUTU under the 8-word interleave to close gate 2. If the store still does not
+commit with `EDM_PROTECT` on, vary word 1 bit 26 alone. Same board rules and lock turn-taking as
+H-A/H-B; batch into one slot if those have not run yet.
