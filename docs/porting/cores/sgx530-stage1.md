@@ -2144,3 +2144,41 @@ aluwr byte-identical, 530 tests pass):**
    xorr5 with that word reverted: **0x00a90000** ⇒ still retires (that word not the
    lever), **0x0fa93000** ⇒ retire broke (that word is necessary). No new image — the
    vl_* params already exist.
+
+## §9 batch (22:01 UTC): the minimal launch, and the three write paths
+
+Five loads under §9 (clean, no hang, 77 °C). and_r5 confirmed gate 1 orthogonally
+(no fault at 0x0fa93000 — r5 became ctlblk, the load read it).
+
+**Bisect — minimal temp-retire launch = word2=1 AND word0 bit21 (word1 free):**
+- `xorr5` vl_w2=0 → **0x0fa93000** (retire broke) → **word2=1 necessary**. Settles the
+  earlier aluwr-based "word2 inert" verdict: it was void (subset trap), word2 matters.
+- `xorr5` vl_w1=2 → **0x00a90000** (still retires) → **word1 not the lever** (2 works).
+  Notable: word1 = 0x04000000 (vendor-setup §6's leading write-context candidate) does
+  not grant temp retirement.
+- `xorr5` vl_w0=0xf (no bit21) → **0x0fa93000** (retire broke) → **word0 bit21 necessary**.
+
+**What §9 fixes and does NOT fix:**
+- **temp ALU writes RETIRE** (xorr5) — the register file works.
+- **pa via ALU does NOT retire** (xorpa0, fault 0x0fa93000) — but NOT a blocker: the
+  vendor writes PA0–PA2 via attribute writes / DOUTA (vendor-setup §5), not ALU, and
+  the standalone-DOUTA path works (C).
+- **st.a.d silently DROPS** (stor5: store r5 to [ctlblk+0x200], mapped EDMPROTECT,
+  zeroed → no fault, 0 commit). The stage-1 silent drop persists under §9.
+- **str (EUR_CR) and limm: UNTESTED under §9.** The microkernel uses `st.a.d` for the
+  control block / sync / wait-timeout (ukernel.py), `str` for all register programming,
+  and `limm` for constants.
+
+**Pivotal next test: `sgx530_limmwr_r5` (existing image).** `limm r5, #0xa5a; str r5 →
+EVENT_TIMER`; no fault, loops. Read EVENT_TIMER (0xacc): **0xa5a** = limm AND str work;
+**0x0fa93000** (low 24 = 0xa93000) = str works, limm wrote the leftover (limm broken);
+**unchanged/0** = str does not commit. img
+`dbec9d41ef8809090529c0dcca1af1e2f8bba8f5f4dbe6c67752957d0310fa2f`, pkg
+`4a6c94ae0405f1fe32dbdef4c49ea8f07cd46958a1fde9e96e512fc18bfac215` (crc 0xd7a5c698).
+
+**Strategic read.** `st.a.d` dropping need not block a modern driver: in the uAPI model
+the KERNEL owns every firmware-visible structure, and drm_sched/dma_fence signal
+completion from the host IRQ, not from the microkernel's own memory writes. So `str` is
+the hinge — if the task can program registers (BIF/DPM/kicks), the EDM drives the TA/3D
+and the host owns memory; if `str` also drops, it is full host-kick. pa-via-ALU and
+st.a.d are not on the critical path either way.

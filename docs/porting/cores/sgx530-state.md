@@ -39,15 +39,31 @@ blocker is now **solved** for the register file:
   r5's leftover made `or r5,r5,r17` a value-no-op. `xor` is non-identity there (see
   the runbook's "subset trap" section).
 
-Still being confirmed under §9, in order:
-- **pa-bank retire** — `sgx530_xorpa0` (xor into pa0); the vendor task writes PA2.
-- **memory stores commit to EDMPROTECT** — `sgx530_stor5` (store r5 to [ctlblk], a
-  base §9 does not seed, unlike the stout probe's pa0); the microkernel needs this for
-  sync objects and status words.
+**Minimal temp-retire launch (bisect, 22:01 UTC):** word2=1 **and** word0 bit21;
+word1 is free (0x04000000 or 2 both retire). Notably word1 = 0x04000000, vendor-setup
+§6's leading write-context candidate, is **not** the temp-retire lever.
+
+**What §9 does and does NOT fix (the microkernel's write paths):**
+
+| path | instr | under §9 | note |
+|---|---|---|---|
+| temp register file | ALU (xor/or) | **retires (C, xorr5)** | all computation / scratch |
+| pa bank | ALU | does not retire (C, xorpa0) | **not a blocker** — the vendor writes PA0–PA2 via **attribute writes (DOUTA)**, not ALU (vendor-setup §5); the standalone-DOUTA path works (C) |
+| memory store | `st.a.d` | **silently drops (C, stor5)** | no fault, no commit; the stage-1 drop persists under §9 |
+| EUR_CR register | `str` | **untested under §9** | BIF/DPM/kick programming — pivotal |
+| load immediate | `limm` | **untested under §9** | constants everywhere |
+
+**Strategic read.** `st.a.d` dropping need not block a modern driver: in the uAPI
+model the **kernel** owns every firmware-visible structure (sync objects, control
+block), and drm_sched/dma_fence signals completion from the **host IRQ**, not from the
+microkernel writing sync words. So the hinge is **`str`**: if the task can program
+registers, the EDM can drive the TA/3D while the host owns memory; if not, it is full
+host-kick. Next test: `sgx530_limmwr_r5` (`limm r5,#0xa5a; str r5→EVENT_TIMER`), read
+EVENT_TIMER — 0xa5a = limm+str both work, 0x0fa93000 = str works but limm doesn't,
+unchanged = str drops.
 
 So the gates table below is the **pre-§9** picture. The output-only restructure it
-motivated is **no longer required** if pa retire and stores also return under §9; the
-open microkernel can then run on the 530 with the vendor launch folded into init.
+motivated is no longer the only path; §9 + host-owned memory may suffice if `str` works.
 
 ## What works (C, on hardware)
 
