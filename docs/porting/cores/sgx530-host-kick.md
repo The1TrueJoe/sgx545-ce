@@ -237,6 +237,8 @@ interleave, polling.
    PIXELBE_END_RENDER + DPM_3D_MEM_FREE (§5) → **completion** (§5).
 4. Confirm each gap-13 register offset on the board as you reach it (stage-1
    method). The 545 sequence is the template; the 530 value is what you verify.
+   [sgx530-gap13-registers.md](sgx530-gap13-registers.md) lists these offsets in
+   cheapest-first confirmation order (self-validating pokes before full renders).
 5. Only then: OOM (§6), FBO interleave (§6/UKERNEL.md §6 "two DPM slots"), and
    moving from polling to the hardware-bit ISR.
 
