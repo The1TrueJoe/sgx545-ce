@@ -483,6 +483,25 @@ sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
    return true;
 }
 
+/* every spare lacks the texture's device contents (a render into it, a new
+ * tail) */
+static void
+spares_stale(struct sgx_resource *res)
+{
+   for (unsigned i = 0; i < res->n_spares; i++)
+      res->spare[i].n_dirty = SGX_ALT_ALL;
+}
+
+/* a spare sampled by the frame being recorded */
+static bool
+spare_in_frame(struct sgx_screen *screen, struct sgx_resource *res)
+{
+   for (unsigned i = 0; i < res->n_spares; i++)
+      if (res->spare[i].use_seq == sgxws_next_seq(screen->hw))
+         return true;
+   return false;
+}
+
 static void
 sgx_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 {
@@ -498,12 +517,18 @@ sgx_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
        * a pointer to its sync data) */
       if (screen->hw && (sgxws_target_bo(screen->hw) == &res->bo ||
                          res->use_seq == sgxws_next_seq(screen->hw) ||
-                         res->alt_use_seq == sgxws_next_seq(screen->hw)))
+                         spare_in_frame(screen, res)))
          sgxws_flush(screen->hw, 0);
       if (screen->hw)
          sgxws_wait_idle(screen->hw, 2000);
       sgxws_bo_free(screen->dev, &res->bo);
-      sgxws_bo_free(screen->dev, &res->alt);
+      for (unsigned i = 0; i < res->n_spares; i++)
+         sgxws_bo_free(screen->dev, &res->spare[i].bo);
+      if (res->n_spares)
+         p_atomic_add(&screen->spare_bytes,
+                      -(int64_t)res->n_spares *
+                         (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
+      free(res->spare);
       sgxws_bo_free(screen->dev, &res->cube0);
       simple_mtx_unlock(&screen->lock);
    }
@@ -605,7 +630,7 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
       sgxws_bo_prepare_target(screen->dev,
                               &res->bo); /* (the caller holds the lock) */
       res->rendered |= 1u << level;
-      res->n_alt_dirty = SGX_ALT_ALL; /* the render isn't in the second copy */
+      spares_stale(res); /* the render isn't in the spares */
       if (!level)
          res->level0_gen++;
       return true;
@@ -917,78 +942,130 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
 }
 
 static void
-alt_dirty_add(struct sgx_resource *res, unsigned level, unsigned layer,
-              unsigned x0, unsigned y0, unsigned x1, unsigned y1)
+spare_dirty_add(struct sgx_tex_copy *sp, unsigned level, unsigned layer,
+                unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
-   if (!res->alt.va || res->n_alt_dirty == SGX_ALT_ALL)
+   if (sp->n_dirty == SGX_ALT_ALL)
       return;
-   if (res->n_alt_dirty == ARRAY_SIZE(res->alt_dirty)) {
-      res->n_alt_dirty = SGX_ALT_ALL;
+   /* a box it already owes, or one inside it (a lightmap page updated at
+    * the same place every draw), costs nothing more */
+   for (unsigned i = 0; i < sp->n_dirty; i++)
+      if (sp->dirty[i].level == level && sp->dirty[i].layer == layer &&
+          sp->dirty[i].x0 <= x0 && sp->dirty[i].y0 <= y0 &&
+          sp->dirty[i].x1 >= MIN2(x1, 0xffff) && sp->dirty[i].y1 >= MIN2(y1, 0xffff))
+         return;
+   if (sp->n_dirty == ARRAY_SIZE(sp->dirty)) {
+      sp->n_dirty = SGX_ALT_ALL;
       return;
    }
-   res->alt_dirty[res->n_alt_dirty].level = level;
-   res->alt_dirty[res->n_alt_dirty].layer = layer;
-   res->alt_dirty[res->n_alt_dirty].x0 = x0;
-   res->alt_dirty[res->n_alt_dirty].y0 = y0;
-   res->alt_dirty[res->n_alt_dirty].x1 = MIN2(x1, 0xffff);
-   res->alt_dirty[res->n_alt_dirty].y1 = MIN2(y1, 0xffff);
-   res->n_alt_dirty++;
+   sp->dirty[sp->n_dirty].level = level;
+   sp->dirty[sp->n_dirty].layer = layer;
+   sp->dirty[sp->n_dirty].x0 = x0;
+   sp->dirty[sp->n_dirty].y0 = y0;
+   sp->dirty[sp->n_dirty].x1 = MIN2(x1, 0xffff);
+   sp->dirty[sp->n_dirty].y1 = MIN2(y1, 0xffff);
+   sp->n_dirty++;
+}
+
+/* A texture's spares stay within 1 MiB, one at least: up to 15 for a
+ * 64 KiB lightmap page, one for a 4 MiB texture */
+static unsigned
+sgx_tex_spares_max(struct sgx_resource *res)
+{
+   size_t size = align(MAX2(sgx_tex_size(&res->base), 1), 4096);
+
+   return CLAMP((1u << 20) / size, 1, SGX_TEX_SPARES_MAX);
+}
+
+/* an idle spare, a new one, or none (all busy and no room for another) */
+static struct sgx_tex_copy *
+spare_get(struct sgx_context *ctx, struct sgx_resource *res, uint32_t done)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+   struct sgx_tex_copy *sp;
+
+   /* a shared buffer is one BO another device holds (and D6's flags are on
+    * it): never swapped for a spare (none is a texture today) */
+   if (res->shared)
+      return NULL;
+   /* a texture rendered into and not read back (an unsynchronized map
+    * skips the catch-up): its device copy has what the CPU copy lacks, and
+    * the frame recording into it holds &res->bo (sgxws_target_bo) */
+   if (res->rendered || sgx_recording(ctx) == res)
+      return NULL;
+   for (unsigned i = 0; i < res->n_spares; i++)
+      if (!sgxws_seq_after(res->spare[i].use_seq, done))
+         return &res->spare[i];
+   if (res->n_spares == sgx_tex_spares_max(res))
+      return NULL;
+   if (!res->spare) {
+      res->spare = calloc(SGX_TEX_SPARES_MAX, sizeof(*res->spare));
+      if (!res->spare)
+         return NULL;
+   }
+   sp = &res->spare[res->n_spares];
+   simple_mtx_lock(&screen->lock);
+   if (sgxws_bo_alloc(screen->dev, &sp->bo, SGXWS_MEM_TEXTURE,
+                      align(MAX2(sgx_tex_size(&res->base), 1), 4096), 0x1000)) {
+      memset(&sp->bo, 0, sizeof(sp->bo));
+      simple_mtx_unlock(&screen->lock);
+      return NULL;
+   }
+   simple_mtx_unlock(&screen->lock);
+   p_atomic_add(&screen->spare_bytes,
+                (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
+   sp->use_seq = 0;
+   sp->n_dirty = SGX_ALT_ALL;
+   res->n_spares++;
+   return sp;
 }
 
 /*
  * A write to a texture's level box (already in the CPU copy) onto the device
  * copy.  An application that animates sprites of a texture atlas updates it
- * while the frames before still sample it: writing under a render in flight
- * would show half-updated sprites, and waiting for the GPU at every update
- * threw the CPU/GPU overlap away.  So a busy copy is left to
- * its renders and the other copy takes over, brought up to date from the
- * CPU copy first.
+ * while the frames before still sample it, and a GL1 game updates a lightmap
+ * page between the draws of one frame: writing under a render in flight
+ * would show half-updated sprites or lightmaps, and waiting for the GPU at
+ * every update threw the CPU/GPU overlap away.  So a busy copy is left to
+ * its renders and an idle spare takes over, brought up to date from the CPU
+ * copy first; only with every copy busy and no room for another does the
+ * write wait.
  */
 static void
 tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level,
           unsigned layer, unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 {
-   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
    uint32_t done = ctx->hw ? sgxws_done_seq(ctx->hw) : 0;
 
    if (ctx->hw && sgxws_seq_after(res->use_seq, done)) {
-      struct sgxws_bo b;
-      uint32_t u;
+      struct sgx_tex_copy *sp = spare_get(ctx, res, done);
 
-      if (!res->alt.va) {
-         simple_mtx_lock(&screen->lock);
-         if (sgxws_bo_alloc(screen->dev, &res->alt, SGXWS_MEM_TEXTURE,
-                            align(MAX2(sgx_tex_size(&res->base), 1), 4096),
-                            0x1000))
-            memset(&res->alt, 0, sizeof(res->alt));
-         simple_mtx_unlock(&screen->lock);
-         res->n_alt_dirty = SGX_ALT_ALL;
-         res->alt_use_seq = 0;
-      }
-      if (!res->alt.va || sgxws_seq_after(res->alt_use_seq, done)) {
-         /* no second copy, or both busy: wait for the renders */
+      if (!sp) {
+         /* every copy busy: wait for the renders, then write in place */
          ctx->stats.tex_flushes += ctx->stats.on;
          sgx_finish(ctx);
       }
-      if (res->alt.va) {
-         b = res->bo, res->bo = res->alt, res->alt = b;
-         u = res->use_seq, res->use_seq = res->alt_use_seq,
-         res->alt_use_seq = u;
-         if (res->n_alt_dirty == SGX_ALT_ALL) {
+      if (sp) {
+         struct sgxws_bo b = res->bo;
+         uint32_t u = res->use_seq;
+
+         res->bo = sp->bo, res->use_seq = sp->use_seq;
+         if (sp->n_dirty == SGX_ALT_ALL) {
             for (unsigned l = 0; l <= res->base.last_level; l++)
                sgx_tex_encode_level(res, l);
          } else {
-            for (unsigned i = 0; i < res->n_alt_dirty; i++)
-               sgx_tex_encode_box(res, res->alt_dirty[i].level,
-                                  res->alt_dirty[i].layer, res->alt_dirty[i].x0,
-                                  res->alt_dirty[i].y0, res->alt_dirty[i].x1,
-                                  res->alt_dirty[i].y1);
+            for (unsigned i = 0; i < sp->n_dirty; i++)
+               sgx_tex_encode_box(res, sp->dirty[i].level, sp->dirty[i].layer,
+                                  sp->dirty[i].x0, sp->dirty[i].y0,
+                                  sp->dirty[i].x1, sp->dirty[i].y1);
          }
-         res->n_alt_dirty = 0;
+         /* the copy that was current is up to date */
+         sp->bo = b, sp->use_seq = u, sp->n_dirty = 0;
       }
    }
    sgx_tex_encode_box(res, level, layer, x0, y0, x1, y1);
-   alt_dirty_add(res, level, layer, x0, y0, x1, y1);
+   for (unsigned i = 0; i < res->n_spares; i++)
+      spare_dirty_add(&res->spare[i], level, layer, x0, y0, x1, y1);
    if (!level)
       res->level0_gen++;
 }
@@ -1065,7 +1142,7 @@ sgx_resource_tail(struct sgx_context *ctx, struct sgx_resource *res,
    if (ctx->hw && sgxws_seq_after(res->use_seq, sgxws_done_seq(ctx->hw)))
       sgx_finish(ctx);
    sgx_tex_set_tail(res, last);
-   res->n_alt_dirty = SGX_ALT_ALL; /* the second copy has the old tail */
+   spares_stale(res); /* the spares have the old tail */
 }
 
 static void

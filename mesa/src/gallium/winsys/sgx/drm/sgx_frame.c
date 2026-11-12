@@ -2285,13 +2285,19 @@ slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
 {
    uint32_t seq = c->slot_kick[i].seq;
 
+   bool timed = ms && c->slot_kick[i].kicked_ns;
+
    if (!sgxws_seq_after(seq, c->done_seq))
       return 0;
-   if (c->dev->kif->wait_seq(c, seq, ms))
-      return -ETIMEDOUT;
-   if (c->slot_kick[i].kicked_ns) {
-      uint64_t ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
+   /* Render latency times only the renders a wait sees end: one already
+    * done when first looked at ended at some point since its kick that
+    * isn't known (a compositor idle between frames looks seconds later). */
+   if (c->dev->kif->wait_seq(c, seq, timed ? 0 : ms)) {
+      uint64_t ns;
 
+      if (!timed || c->dev->kif->wait_seq(c, seq, ms))
+         return -ETIMEDOUT;
+      ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
       c->ns_latency += ns;
       c->n_latency++;
       if (c->slot_kick[i].scanout) {
@@ -2911,7 +2917,11 @@ sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
    st->gpu_verts = c->gpu_verts;
    st->state_sent = c->state_sent;
    st->state_skipped = c->state_skipped;
+   st->bo_allocs = c->dev->bo_allocs;
+   st->bo_cached = c->dev->bo_cached;
+   st->bo_busy = c->dev->bo_busy;
    if (reset) {
+      c->dev->bo_allocs = c->dev->bo_cached = c->dev->bo_busy = 0;
       c->state_sent = c->state_skipped = 0;
       c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait =
          c->ns_slot_wait = 0;

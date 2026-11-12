@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """Rebuild the SGX545 serial image and verify it against the recorded golden
 hash (ukernel/golden/sgx545.sha256). The image is never stored in the repo, so
