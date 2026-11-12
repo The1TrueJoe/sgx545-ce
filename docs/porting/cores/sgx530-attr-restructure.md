@@ -140,6 +140,17 @@ likely to fit.
   control block and neighbour page for stout_o0's distinctive 0x0fd7d000 (misplaced vs not
   committed). **Load-bearing:** the microkernel must store its scratch to the control block, so a
   task store must become host-visible before any of the restructure runs.
+- **A retiring LOAD destination — a fourth gate.** Only an **ALU write to an output** is confirmed
+  to retire. But the microkernel also **loads** from memory (heartbeat, status, the CCB), and the
+  loaded value must land where a later instruction reads it. The assembler encodes `ld.a.d` into a
+  **temp** (does not retire) or the **pa bank** (`ld.a.d pa0, pa0` — the open stack's uniform-load
+  form, ISA.md), **but not an output** (`ld.a.d o1`/`o5` both emit the same word, dst field zero, an
+  "Unhandled #dst1 encode case"). So outputs — the one file known to retire — cannot receive a load.
+  The candidate load destination is the **pa bank**. The built probe `sgx530_aluwr_pa0w`
+  (`or pa0, r5, r17; ld.a.d r3, pa0`, ab1f53cc) tests whether a task can write pa at all: a fault at
+  0x0fd7d000 = pa retires (and since `ld` can target pa, loads can land there); the leftover = pa is
+  not writable, and then loads have **no** retiring destination — the vendor capture (temps working)
+  becomes the only path. As fundamental as the store gate.
 - **Emit-at-end semantics.** Outputs are normally emitted to the output buffer when a task
   ends. Every output probe self-loops, so emit is untested. If the microkernel's EDM-style task
   emits outputs on completion, using them as scratch could write scratch to memory. Confirm the
