@@ -601,6 +601,33 @@ first useful read is cc 0:
 The MOVS-side variants are crossed with the two likeliest readings of 0xa70: 4, the data
 segment in dwords, and 6, the whole program.
 
+## After the thirteenth attempt: does the PDS execute at all?
+
+Attempt 13 (log 2026-11-12-0022) ran 34 variants from the 0xa6c = 4 start. The PC showed
+the MOVS's address and never the HALT's, even with cc 0, which should skip the MOVS. So the
+PDS fetches the first code word and doesn't execute it. Either the SGX530's PDS encoding
+differs from the SGX545's (PDS.md), or the PDS waits on something before it executes
+any instruction.
+
+**Attempt 14:** host-built PDS0 programs. The data segment stays (4 dwords, 0xa6c = 4),
+and every encoding is the SGX545's, hardware-confirmed there. PDS.md has BRA as
+`9 cc target` (the target an instruction index from the first code word) and HALT as
+`af000000`.
+
+| Program (code words) | If the PDS executes | If it doesn't |
+|---|---|---|
+| A: `97000001 97000001` (bra #1; bra #1, a self-loop on word 1) | the PC sits on code word 1 | the PC stays on word 0 |
+| B: `af000000` (halt) | the PC leaves word 0 or goes idle | as now |
+| C: `97000003 af000000 af000000 af000000` (bra #3 over two HALTs) | the PC is seen at word 3 | word 0 |
+| D: A with 0xa6c = 0 and the loop at words 0-1 (no data segment) | word 1 | word 0 |
+
+The self-loop is the clearest test. A PDS that executes ends up looping on word 1, so the 10 ms
+samples catch it there.
+
+Also read 0xa68's low four bits back after writing them (0x1, 0x4, 0xf). The SGX545
+writes the address & ~0xf. If the bits stick on the SGX530, they're a field: candidates are
+a data size or a row count. Then rerun A with them set.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
