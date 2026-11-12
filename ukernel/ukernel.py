@@ -518,7 +518,9 @@ def build(a):
             # ld through the one output USSE_ODIST names. It must read its own source's
             # leftover (o0 -> r0 0x0055d000, o9 -> r31 0x0d04f000); any other page means a
             # later write clobbered it == the outputs alias. Bring-up only.
-            srcs = [0, 1, 2, 3, 4, 5, 6, 8, 16, 31]   # ten distinct confirmed leftovers
+            # eleven distinct confirmed leftovers; USSE_ODIST_N picks how many outputs
+            # to write (10 for o0..o9, 11 to include o10 for the margin-1 check).
+            srcs = [0, 1, 2, 3, 4, 5, 6, 8, 16, 31, 17][:USSE_ODIST_N]
             for k, s in enumerate(srcs):
                 a.i(f"or o{k}, r{s}, r{s}")
             a.i(f"ld.a.d r3, o{USSE_ODIST}, #0")

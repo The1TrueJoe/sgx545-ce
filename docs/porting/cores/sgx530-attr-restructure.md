@@ -70,17 +70,20 @@ the control-block base and `r14` the PD table — §2(A) puts both in primary at
 read directly as `pa0`/`pa1` (an attribute works as an `ld`/`st` base; `ld.a.d r3, pa0` is
 confirmed). They leave the scratch budget entirely. So **peak OUTPUT pressure = 12 − 2 = 10.**
 
-**Attempt 42 (C): all of o0..o10 are writable** — every one faults at 0x0fd7d000. So ≥10 usable
-outputs holds, and the restructure is **a per-core reallocation, no spill:** a 530 register remap
-in `ukernel.py`'s emit layer (scratch → `o0..o9`), plus the §2(A) attribute change for the two
-bases (r17, r14 → PA0, PA1), plus per-core gating. Contained — it changes the register
-convention, not each path's logic. The `<10 usable` spill case does not arise.
+**Attempt 42 (C): all of o0..o10 are writable** — every one faults at 0x0fd7d000. That is
+**eleven** writable outputs against a peak of 10, so the restructure is **a per-core
+reallocation, no spill:** a 530 register remap in `ukernel.py`'s emit layer (scratch → `o0..o9`),
+plus the §2(A) attribute change for the two bases (r17, r14 → PA0, PA1), plus per-core gating.
+Contained — it changes the register convention, not each path's logic. The `<10 usable` spill
+case does not arise. **The margin is one** (eleven outputs, ten needed) *if* o10 is distinct too.
 
 **One caveat gates it (G):** attempt 42 wrote the *same* value to every output, so the outputs
 are not yet shown to be **distinct** physical registers. A reallocation needs 10 distinct scratch
 slots; if the "11 outputs" are aliases of fewer physical registers, the budget collapses. The
-distinctness probe (`sgx530_odist0/9`: write o0..o9 ten distinct values, read the endpoints)
-settles it. **Go/no-go: GO for the clean reallocation, conditional on the distinctness check.**
+distinctness sweep (`sgx530_odist0..10`: write o0..o10 eleven distinct values and read each in
+turn — each must read its own source's leftover, else a later write clobbered it = aliasing)
+settles it, and o10 tells whether the margin is one or zero. **Go/no-go: GO for the clean
+reallocation, conditional on the distinctness check.**
 
 ## 4. Which microkernel paths change
 
@@ -150,6 +153,25 @@ instructions between* its DOUTAs and its DOUTU, where the probe puts them adjace
 `pds3` tests these together against the one construction known to work on the 545. If it is still
 flat, the order-swap diagnostic (DOUTU first, then DOUTA) shows whether a DOUTA breaks *any*
 following DOUT or only this sequence.
+
+**The pds3-mirror spec (from docs/SRVINIT.md "Buffer contents", capture-confirmed).** pds3's
+DOUTU is the word **`07003885`**, which "sends ds1[3], ds0[0] = 2, ds0[1]" (SRVINIT.md): DOUTU
+word 0 = ds1[3] (a DS1 word holding `doutu(entry)`), word 1 = ds0[0] = **2** (the microkernel
+phase count), word 2 = ds0[1], dest 5. Its DOUTAs are `douta in0/in2/in4` to PA0-PA2 with ctrl
+0/0x100/0x200 — the **value comes from an input** (in0), not a DS word. A minimal mirror probe:
+
+    data: ds0[0] = 2 ; ds0[1] = 0 ; ds1[0] = 0 (DOUTA ctrl for PA0) ; ds1[3] = doutu(reader entry)
+    in0  = V  (the PA0 value, supplied as the task input by the host)
+    code: douta in0, ds1[0], in0, in0        # PA0 = in0 = V, ctrl 0  (value from an INPUT)
+          <several non-DOUT instructions>     # pds3 has ~30 here; the probe had none
+          movs 07003885                       # DOUTU: w0=ds1[3]=entry, w1=ds0[0]=2, w2=ds0[1]
+          halt
+
+The four deltas from the failing probe, any of which could be the cause: DOUTA value from an
+input not a DS word; DOUTU word 1 = 2 (the probe's was 0); DOUTU word 0 from a DS1 word; and
+non-DOUT spacing between the DOUTA and the DOUTU. The reader (`sgx530_pa0`) launched by the DOUTU
+reads PA0; a fault at V = both the DOUTA wrote PA0 and the DOUTU launched the reader. Build it
+from the SRVINIT.md description above, not from `srvinit.c` (whose pds3 is our reconstruction).
 
 **If DOUTA-then-DOUTU cannot be made to work**, the fallback is persistence: a standalone DOUTA
 (confirmed to persist) sets the pointers, and the driver re-issues it after every reset / resume
