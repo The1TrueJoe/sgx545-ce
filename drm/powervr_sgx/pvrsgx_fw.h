@@ -70,5 +70,6 @@ void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot);
 
 /* Bring-up probe (vendor-setup §9), event program and launch words. */
 extern bool pvrsgx_stage1_vlaunch;
+extern int pvrsgx_vl_w0, pvrsgx_vl_w1, pvrsgx_vl_w2, pvrsgx_vl_a70;
 
 #endif /* PVRSGX_FW_H */

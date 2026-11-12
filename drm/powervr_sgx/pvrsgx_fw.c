@@ -438,6 +438,14 @@ bool pvrsgx_stage1_vlaunch;
 module_param_named(stage1_vlaunch, pvrsgx_stage1_vlaunch, bool, 0444);
 MODULE_PARM_DESC(stage1_vlaunch, "The vendor-stack event program and launch words (sgx530 vendor-setup §9 probe)");
 
+/* §9 bisect: override a launch word or 0xa70; -1 keeps the vendor value. */
+int pvrsgx_vl_w0 = -1, pvrsgx_vl_w1 = -1, pvrsgx_vl_w2 = -1, pvrsgx_vl_a70 = -1;
+module_param_named(vl_w0, pvrsgx_vl_w0, int, 0444);
+module_param_named(vl_w1, pvrsgx_vl_w1, int, 0444);
+module_param_named(vl_w2, pvrsgx_vl_w2, int, 0444);
+module_param_named(vl_a70, pvrsgx_vl_a70, int, 0444);
+MODULE_PARM_DESC(vl_w2, "stage1_vlaunch DOUTU word 2 override (-1 = vendor's 1; bisect toward the open value)");
+
 static u32 data_pte_flags(struct pvrsgx_device *sdev)
 {
 	if (!sdev->family->event_pds_guessed)
@@ -707,7 +715,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	/* §9: the vendor's event control words. */
 	if (pvrsgx_stage1_vlaunch) {
 		data0 = 3;
-		data1 = 0x00013d01;
+		data1 = pvrsgx_vl_a70 >= 0 ? (u32)pvrsgx_vl_a70 : 0x00013d01;
 	}
 
 	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */

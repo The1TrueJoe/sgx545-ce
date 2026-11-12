@@ -157,9 +157,9 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	 */
 	if (b == PVRSGX_FW_PDS0 && pvrsgx_stage1_vlaunch) {
 		p = pvrsgx_pds_prog(sdev, b, 12);
-		p.w[0] = 0x0020000f;	/* DOUTU word 0 = DS0[0] */
-		p.w[1] = 0x04000000;	/* DOUTU word 1 = DS0[1] */
-		p.w[8] = 0x00000001;	/* DOUTU word 2 = DS1[0], 8-word interleave */
+		p.w[0] = pvrsgx_vl_w0 >= 0 ? (u32)pvrsgx_vl_w0 : 0x0020000f;	/* DS0[0] */
+		p.w[1] = pvrsgx_vl_w1 >= 0 ? (u32)pvrsgx_vl_w1 : 0x04000000;	/* DS0[1] */
+		p.w[8] = pvrsgx_vl_w2 >= 0 ? (u32)pvrsgx_vl_w2 : 0x00000001; /* DS1[0] */
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
 		pvrsgx_pds_halt(&p);
 		return;
