@@ -1096,9 +1096,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       }
       /* a program that discards: its feedback nop is the last instruction
        * (the compiler's layout); the depth plane goes in after the iterated
-       * inputs, by one more PDS iteration */
+       * inputs, by one more PDS iteration. The compiled program's discards,
+       * not the shader's: a sampler view's swizzle can fold one away (an RGB
+       * texture's alpha is 1) */
       so->discard_pa = -1;
-      if (orig->info.fs.uses_discard) {
+      if (out.discards) {
          if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u
                                                            << 32) {
             fprintf(
@@ -1198,7 +1200,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             .w1 = out.iters[i].pointcoord ? 0x10 : 0,
          };
       }
-      if (so->code && orig->info.fs.uses_discard) {
+      if (so->code && out.discards) {
          /* the triangle's depth plane (source 0x22, 3 components) after the
           * inputs: pa<n> on, n = the registers the iterations above fill (an
           * F32 component 1, an F16 pair 1, a sampled texel or the vertex

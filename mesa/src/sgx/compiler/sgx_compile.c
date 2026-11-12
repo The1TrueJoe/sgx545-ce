@@ -6985,6 +6985,15 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       ret = sgx_finish_program(c, out);
       if (ret == 0 && split)
          split_output(out);
+      /* a program that discards (phase 0 of a split one) ends in its
+       * feedback point, where the driver puts the visibility test */
+      if (ret == 0 && out->discards &&
+          (!out->n_blocks ||
+           out->blocks[out->n_blocks - 1].kind != SGX_BLOCK_FEEDBACK ||
+           out->blocks[out->n_blocks - 1].at != out->n_code - 1)) {
+         sgx_fail(c, "discard: the feedback point isn't the last instruction");
+         ret = -1;
+      }
    }
    out->stage = c->stage;
    out->log = c->log;
