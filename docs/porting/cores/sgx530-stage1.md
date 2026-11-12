@@ -1268,6 +1268,42 @@ for operand rK. Run these first:
 
 Then document the `ld.a.d` operand decode C in ISA.md and hand it to cleanroom-isa.
 
+## After the thirty-first attempt: limm doesn't write its register
+
+Attempt 31 (log 2026-11-12-0350): the register-number sweep has **no pattern** — r0 →
+0x0055d000, r1 → 0x0722a000, r2 → 0x003e1000, r4 → 0x09e06000, r6 → 0x0503f000, r8 →
+0x08779000, r16 → 0x002ba000, r31 → 0x0d04f000, plus r5 → 0x0c004000 and r17 → 0x0fd79000.
+
+So `ld.a.d` reads the named register correctly, and each register holds a **stable
+power-on/reset leftover value** at task start. r5 (0x0c004000) and r17 (0x0fd79000) kept the
+same page across three boots **and** across whatever `limm` wrote into them before the load.
+So **`limm` never wrote its destination** — that is why the `limm` value was irrelevant
+(attempt 30) and the leftovers are stable. `ld.a.d`'s operand decode is fine; the question is
+`limm`'s destination encoding, or whether `limm` executes at all on the SGX530.
+
+**Attempt 32: does `limm` write?** (`cores/sgx530_limmwr_r{5,17,0}.py`). `phas.i`, then
+`limm rK, #0xa5a`, then `str rK` to `EVENT_TIMER` (`str` reads the register back). No load
+before it, so nothing faults first.
+
+| Probe | reg | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| limmwr_r5 | r5 | dbec9d41ef880909… | 4a6c94ae0405f1fe… |
+| limmwr_r17 | r17 | f9d92d918d41bf9d… | a9dcba48f2c9197f… |
+| limmwr_r0 | r0 | c78e65c5c998db18… | 0b18629005dbeee9… |
+
+Build each then mkukfw; all same through asm.py and `sgx-asm`. Read `EVENT_TIMER`:
+- **0xa5a:** `limm` wrote the register and `str` read it — both work. Then the real fault is
+  elsewhere, and the leftover reading needs revisiting.
+- **the register's leftover** (r5 0x0c004000, r17 0x0fd79000): `limm` did not write it. Then
+  the SGX530 decodes `limm`'s destination field, or the whole `limm`, differently — the next
+  sweep is `limm rK` for several K, each read back by `str`, to find where the write lands.
+- **0 or something else:** `str` itself may not read the register as expected; cross-check
+  with a second register.
+
+This is the real blocker: with `limm` not writing, every constant and address the microkernel
+builds is its register's leftover. Decode it C and hand the `limm` (or `str`) behavior to
+cleanroom-isa.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
