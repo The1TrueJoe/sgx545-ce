@@ -162,11 +162,21 @@ archive refuse automated reads; not bypassed).
 - **MAINTAINERS:** `M:` Joseph alone, no `R:` line. The cover letter offers a
   reviewer slot in one sentence.
 - **Driver license:** the drm/imagination convention, `GPL-2.0-only OR MIT` on
-  the driver files (`MODULE_LICENSE("Dual MIT/GPL")`). The uAPI header keeps
+  the driver files. The uAPI header keeps
   `(GPL-2.0-only WITH Linux-syscall-note) OR MIT`, as `pvr_drm.h` does, and
-  the files shared with Mesa stay MIT. To do after the per-core restructure,
-  since it touches every file. The register header is derived from the GPL
-  `sgx545defs.h`; it stays `GPL-2.0-only` unless Joseph decides otherwise.
+  the files shared with Mesa stay MIT. The register header `pvrsgx_regs.h` is
+  derived from the GPL `sgx545defs.h`, so it stays `GPL-2.0-only`. With one
+  GPL-only file in the module, the module as a whole is not dual-licensed:
+  `MODULE_LICENSE` stays `"GPL"`, the plain form mixed modules use, rather
+  than `"Dual MIT/GPL"`. To do after the per-core restructure, since it
+  touches every file.
+- **The init table in `pvrsgx_core.c`:** register values the hardware needs,
+  functional data like nouveau's init values. No special license treatment.
+  Its comments call them the core's start-up register settings, with no word
+  on how they were obtained; `docs/SRVINIT.md` in this repository documents
+  them. Today the comment says "the values are the vendor script's": that
+  changes with the license pass, since `pvrsgx_core.c` is in the per-core
+  restructure.
 - **Firmware license:** linux-firmware's LICENSE-CRITERIA, section 3.1 item 3:
   a license must "include a patent grant adequate for device operation", and
   "if your standard license text is silent on patents, expect this to be
