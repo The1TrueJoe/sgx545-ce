@@ -45,6 +45,7 @@
 #include "util/libsync.h"
 #include "util/macros.h"
 #include "util/simple_mtx.h"
+#include "util/u_math.h"
 #include "util/vma.h"
 
 #include "sgx_frame.h"
@@ -72,6 +73,20 @@ struct zombie {
    uint64_t point;
 };
 
+/* Freed buffers kept for reuse.  glamor makes and frees pixmaps all the
+ * time, and a new buffer's first map allocates its pages and makes them
+ * write-combined: a cache flush, and a TLB flush on every CPU.  Never a buffer
+ * another device or process has seen; handed out again only once the
+ * timeline is past every job submitted before it was freed. */
+#define PSGX_CACHE_BYTES (32u << 20)
+#define PSGX_CACHE_NS 1000000000ull /* idle for longer: released */
+
+struct cached_bo {
+   struct psgx_bo *bo;
+   uint64_t point;    /* the last job that may still use it */
+   uint64_t freed_ns;
+};
+
 /* the uAPI revision this backend speaks: the driver's DRM minor version */
 #define PSGX_UAPI_REVISION 3
 
@@ -94,6 +109,10 @@ struct psgx_dev {
    unsigned n_zombies, max_zombies;
    struct psgx_bo **imports; /* imported buffers, to share one GEM handle */
    unsigned n_imports, max_imports;
+   struct cached_bo *cache; /* oldest first */
+   unsigned n_cache, max_cache;
+   uint64_t cache_bytes;
+   uint64_t done; /* the timeline's value when last read */
 };
 
 struct psgx_bo {
@@ -104,6 +123,7 @@ struct psgx_bo {
    enum sgx_heap heap;
    bool code;     /* a code object: map is a copy */
    bool shared;   /* imported or exported: synced through its dma-buf */
+   bool seen;     /* its handle went outside the winsys: never cached */
    int dmabuf_fd; /* shared: the dma-buf, for its fences; else -1 */
    unsigned refs; /* imports of the same dma-buf */
    void *map;
@@ -267,6 +287,130 @@ reap(struct psgx_dev *dd, bool all)
    dd->n_zombies = n;
 }
 
+/* a buffer's handle, address and mapping go; with the lock held.  Its unmap
+ * and close wait for the jobs up to point. */
+static void
+bo_release(struct psgx_dev *dd, struct psgx_bo *impl, uint64_t point)
+{
+   if (dd->n_zombies == dd->max_zombies) {
+      unsigned max = dd->max_zombies ? 2 * dd->max_zombies : 64;
+      struct zombie *z = realloc(dd->zombies, max * sizeof(*z));
+
+      if (!z) {
+         /* nowhere to keep it: wait for the GPU instead */
+         reap(dd, true);
+         timeline_wait(dd, dd->point, 5000);
+      } else {
+         dd->zombies = z;
+         dd->max_zombies = max;
+      }
+   }
+   if (dd->n_zombies < dd->max_zombies) {
+      dd->zombies[dd->n_zombies++] = (struct zombie){
+         impl->handle, impl->va, impl->base.size, impl->heap, point,
+      };
+   } else {
+      vm_unmap(dd, impl->va, impl->base.size);
+      gem_close(dd, impl->handle);
+      util_vma_heap_free(&dd->vma[impl->heap], impl->va, impl->base.size);
+   }
+   if (impl->code)
+      free(impl->map);
+   else if (impl->map)
+      munmap(impl->map, impl->base.size);
+   if (impl->dmabuf_fd >= 0)
+      close(impl->dmabuf_fd);
+   free(impl);
+}
+
+/* the cached buffers idle for too long go, and the oldest while over keep
+ * bytes; with the lock held */
+static void
+cache_trim(struct psgx_dev *dd, uint64_t keep)
+{
+   uint64_t now = sgxws_now_ns();
+   unsigned n = 0;
+
+   while (n < dd->n_cache &&
+          (dd->cache_bytes > keep ||
+           now - dd->cache[n].freed_ns > PSGX_CACHE_NS)) {
+      dd->cache_bytes -= dd->cache[n].bo->base.size;
+      bo_release(dd, dd->cache[n].bo, dd->cache[n].point);
+      n++;
+   }
+   if (n) {
+      memmove(dd->cache, dd->cache + n, (dd->n_cache - n) * sizeof(*dd->cache));
+      dd->n_cache -= n;
+   }
+}
+
+/* allocation sizes above 16 KiB in quarter steps of a power of two, so a
+ * freed buffer fits the next one of about its size (25% at most to spare) */
+static uint64_t
+bucket_size(uint64_t bytes)
+{
+   if (bytes <= 0x4000)
+      return bytes;
+   return ALIGN_POT(bytes, 1ull << (util_logbase2_64(bytes) - 2));
+}
+
+/* a cached buffer of exactly this heap, size and alignment that no job uses
+ * any more, newest first; with the lock held */
+static struct psgx_bo *
+cache_take(struct psgx_dev *dd, enum sgx_heap heap, uint64_t bytes,
+           uint64_t align)
+{
+   bool read = false;
+
+   cache_trim(dd, PSGX_CACHE_BYTES);
+   for (unsigned i = dd->n_cache; i-- > 0;) {
+      struct cached_bo *c = &dd->cache[i];
+      struct psgx_bo *impl = c->bo;
+
+      if (impl->heap != heap || impl->base.size != bytes ||
+          (impl->va & (align - 1)))
+         continue;
+      /* idle by the timeline, not by assumption */
+      if (c->point > dd->done && !read) {
+         dd->done = timeline_value(dd);
+         read = true;
+      }
+      if (c->point > dd->done) {
+         dd->base.bo_busy++;
+         continue;
+      }
+      dd->cache_bytes -= bytes;
+      memmove(c, c + 1, (dd->n_cache - i - 1) * sizeof(*c));
+      dd->n_cache--;
+      return impl;
+   }
+   return NULL;
+}
+
+/* a freed buffer into the cache, or false; with the lock held */
+static bool
+cache_put(struct psgx_dev *dd, struct psgx_bo *impl)
+{
+   if (impl->seen || impl->shared || impl->dmabuf_fd >= 0 || impl->code ||
+       impl->base.size > PSGX_CACHE_BYTES / 4)
+      return false;
+   if (dd->n_cache == dd->max_cache) {
+      unsigned max = dd->max_cache ? 2 * dd->max_cache : 64;
+      struct cached_bo *c = realloc(dd->cache, max * sizeof(*c));
+
+      if (!c)
+         return false;
+      dd->cache = c;
+      dd->max_cache = max;
+   }
+   dd->cache[dd->n_cache++] = (struct cached_bo){
+      impl, dd->point, sgxws_now_ns(),
+   };
+   dd->cache_bytes += impl->base.size;
+   cache_trim(dd, PSGX_CACHE_BYTES);
+   return true;
+}
+
 /* an address for size bytes in a heap; with the lock held */
 static uint64_t
 va_alloc(struct psgx_dev *dd, enum sgx_heap heap, uint64_t size, uint64_t align)
@@ -275,7 +419,8 @@ va_alloc(struct psgx_dev *dd, enum sgx_heap heap, uint64_t size, uint64_t align)
 
    reap(dd, false);
    va = util_vma_heap_alloc(&dd->vma[heap], size, align);
-   if (!va && dd->n_zombies) {
+   if (!va && (dd->n_zombies || dd->n_cache)) {
+      cache_trim(dd, 0); /* memory pressure: the cache goes */
       reap(dd, true);
       va = util_vma_heap_alloc(&dd->vma[heap], size, align);
    }
@@ -337,6 +482,26 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
       heap = SGX_HEAP_GENERAL;
    if (heap >= 16 || !dd->has_heap[heap])
       return -EINVAL;
+   d->bo_allocs++;
+   if (!code) {
+      bytes = bucket_size(bytes);
+      simple_mtx_lock(&dd->lock);
+      impl = cache_take(dd, heap, bytes, align > 0x1000 ? align : 0x1000);
+      simple_mtx_unlock(&dd->lock);
+      if (impl) {
+         d->bo_cached++;
+         impl->write_point = 0;
+         impl->base.cpu_dirty = false;
+         /* zero as new pages are, but textures: their contents are
+          * undefined until written, and they are the big ones */
+         if (heap != SGX_HEAP_TEXTURE)
+            memset(impl->map, 0, bytes);
+         bo->impl = &impl->base;
+         bo->va = impl->va;
+         bo->map = impl->map;
+         return 0;
+      }
+   }
    if (!(impl = calloc(1, sizeof(*impl))))
       return -ENOMEM;
    impl->base.kif = &psgx_kif;
@@ -346,7 +511,16 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    impl->code = code;
    impl->dmabuf_fd = -1;
    impl->refs = 1;
-   if ((e = create_bo(dd, bytes, code, &impl->handle))) {
+   e = create_bo(dd, bytes, code, &impl->handle);
+   if (e && dd->n_cache) {
+      /* memory pressure: the cache goes */
+      simple_mtx_lock(&dd->lock);
+      cache_trim(dd, 0);
+      reap(dd, true);
+      simple_mtx_unlock(&dd->lock);
+      e = create_bo(dd, bytes, code, &impl->handle);
+   }
+   if (e) {
       mesa_loge("sgx: CREATE_BO %#llx failed: %d", (unsigned long long)bytes,
                 e);
       free(impl);
@@ -428,38 +602,10 @@ psgx_bo_free(struct sgxws_dev *d, struct sgxws_bo *bo)
          }
       }
    }
-   if (dd->n_zombies == dd->max_zombies) {
-      unsigned max = dd->max_zombies ? 2 * dd->max_zombies : 64;
-      struct zombie *z = realloc(dd->zombies, max * sizeof(*z));
-
-      if (!z) {
-         /* nowhere to keep it: wait for the GPU instead */
-         reap(dd, true);
-         timeline_wait(dd, dd->point, 5000);
-      } else {
-         dd->zombies = z;
-         dd->max_zombies = max;
-      }
-   }
-   if (dd->n_zombies < dd->max_zombies) {
-      dd->zombies[dd->n_zombies++] = (struct zombie){
-         impl->handle, impl->va, impl->base.size, impl->heap, dd->point,
-      };
-   } else {
-      vm_unmap(dd, impl->va, impl->base.size);
-      gem_close(dd, impl->handle);
-      util_vma_heap_free(&dd->vma[impl->heap], impl->va, impl->base.size);
-   }
+   if (!cache_put(dd, impl))
+      bo_release(dd, impl, dd->point);
    reap(dd, false);
    simple_mtx_unlock(&dd->lock);
-
-   if (impl->code)
-      free(impl->map);
-   else if (impl->map)
-      munmap(impl->map, impl->base.size);
-   if (impl->dmabuf_fd >= 0)
-      close(impl->dmabuf_fd);
-   free(impl);
 }
 
 static int
@@ -568,6 +714,9 @@ psgx_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd)
 
    if (impl->code)
       return -EINVAL;
+   simple_mtx_lock(&ddev(d)->lock);
+   impl->seen = true;
+   simple_mtx_unlock(&ddev(d)->lock);
    if (drmPrimeHandleToFD(ddev(d)->fd, impl->handle, DRM_CLOEXEC | DRM_RDWR,
                           fd))
       return -errno;
@@ -582,7 +731,13 @@ psgx_bo_export(struct sgxws_dev *d, const struct sgxws_bo *bo, int *fd)
 static int
 psgx_bo_kms_handle(const struct sgxws_bo *bo, uint32_t *handle)
 {
-   *handle = dbo(bo)->handle;
+   struct psgx_bo *impl = dbo(bo);
+
+   /* the display device holds it now: never cached */
+   simple_mtx_lock(&impl->dev->lock);
+   impl->seen = true;
+   simple_mtx_unlock(&impl->dev->lock);
+   *handle = impl->handle;
    return 0;
 }
 
@@ -1049,6 +1204,7 @@ psgx_dev_destroy(struct sgxws_dev *d)
    struct drm_powervr_sgx_ioctl_destroy_vm_context_args a = {.handle = dd->vm};
 
    simple_mtx_lock(&dd->lock);
+   cache_trim(dd, 0);
    reap(dd, true);
    simple_mtx_unlock(&dd->lock);
    xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_DESTROY_VM_CONTEXT, &a);
@@ -1061,6 +1217,7 @@ psgx_dev_destroy(struct sgxws_dev *d)
    simple_mtx_destroy(&dd->lock);
    free(dd->zombies);
    free(dd->imports);
+   free(dd->cache);
    free(dd);
 }
 
