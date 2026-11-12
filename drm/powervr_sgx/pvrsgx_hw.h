@@ -52,4 +52,16 @@ static inline u32 sgx_cr_bif_dir_list_base(unsigned int n)
 #define SGX_MMU_PTE_CACHECONSISTENT		BIT(3)
 #define SGX_MMU_PTE_EDMPROTECT			BIT(4)
 
+/*
+ * The OMAP SGX's OCP wrapper, at 0xfe00 in the GPU window (TI's GPL OMAP3
+ * services, ocpdefs.h). Offsets are from the block. Readable on the 36xx
+ * while the module is enabled; not on the 34xx (mainline commit 3b72fc895a2e).
+ */
+#define SGX_OCP_BASE				0xfe00
+#define SGX_OCP_SIZE				0x110
+#define SGX_OCP_REVISION			0x000
+#define SGX_OCP_SYSCONFIG			0x010
+#define SGX_OCP_DEBUG_CONFIG			0x108
+#define SGX_OCP_DEBUG_STATUS			0x10c
+
 #endif /* PVRSGX_HW_H */

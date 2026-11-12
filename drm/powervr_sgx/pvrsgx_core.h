@@ -134,6 +134,11 @@ struct pvrsgx_core_family {
 	 * refuse to kick if the program address doesn't read back.
 	 */
 	bool event_pds_guessed;
+	/**
+	 * @ukernel_temps: Temporary registers the microkernel's entry DOUTU
+	 * asks for (bits 24-31, in fours). 0 keeps pvrsgx_doutu()'s 32.
+	 */
+	u8 ukernel_temps;
 	/** @init_regs: Init script part 2's register writes, in order. */
 	const struct pvrsgx_core_init_reg *init_regs;
 	/** @num_init_regs: Entries in @init_regs. */
@@ -162,6 +167,7 @@ struct pvrsgx_core_info {
 
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
 bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
+u16 pvrsgx_core_uapi_quirks(const struct pvrsgx_core_family *f, const u32 **quirks);
 
 /*
  * One memory context: the microkernel, TA, 3D and 2D all translate through

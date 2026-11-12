@@ -51,6 +51,23 @@ had to turn into a per-core field. Facts about the core itself are in
 9. **The out-of-tree DDK patch breaks on any refactor of the files it touches.**
    `drm/ci/ddk-compat.patch` has to be rebased (a 3-way `git merge-file` against the old
    patched tree) whenever those files change, or the CE5300 CI fails.
+10. **Stage 1 assumed nothing ran between the start and the status read.** On a
+    device-tree core, runtime PM is active right after probe and autosuspends 500 ms
+    later. The suspend sends the microkernel's power-off through the CCB, stage 6 work,
+    and stops the heartbeat the runbook reads a second later. The first attempt pinned it
+    by hand (`power/control` = `on`). The driver now holds a runtime-PM reference on a
+    single-context core (kernel.md section 9).
+11. **A failed start said too little.** One line after 500 ms (init 0, two memory reads
+    outstanding, no fault) couldn't tell a stuck interconnect from a stalled table walk
+    or a program that never ran. On a core with guessed event registers, the start now
+    logs `CLKGATESTATUS`, `EVENT_STATUS`, `BIF_MEM_REQ_STAT` and `BIF_INT_STAT` with the
+    clocks on, before the kick, and every 100 ms after it. Where the SoC has a readable
+    interconnect wrapper (the OMAP36xx's OCP block), it logs that too. Plan the
+    diagnostics into stage 1 before the first attempt, not after it.
+12. **The SoC's interconnect wrapper is part of the core's bring-up.** TI's GPL OMAP3
+    services name it (`ocpdefs.h`), and mainline's ti-sysc programs it. The fact sheet
+    lists it ([cores/sgx530.md](cores/sgx530.md), "The OCP wrapper"). Another SoC's
+    glue may have its own.
 
 ### SGX545 assumptions turned into per-core fields
 

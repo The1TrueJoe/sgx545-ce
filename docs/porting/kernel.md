@@ -84,11 +84,28 @@ Three patterns:
   node (`reg`, one interrupt, `core`/`mem`/`sys` clocks, a power domain), with
   compatibles `img,powervr-sgx530`, `-sgx540` and `-sgx544`. The platform driver is
   `pvrsgx_of.c` (`CONFIG_DRM_POWERVR_SGX_OF`); its `of_device_id` table carries the core
-  number in `.data`. It maps only the first `PVRSGX_REGS_MIN` bytes of `reg`, and it
+  number in `.data`. It uses the binding as it is upstream, with no additions: it matches
+  the generic compatible (`img,powervr-sgx530`), so every SoC listed with it is covered,
+  and the probe tells revisions apart by reading `CORE_REVISION`. An OMAP3430 (rev 121)
+  is identified and refused until it has a part entry. It maps only the first `PVRSGX_REGS_MIN` bytes of `reg`, and it
   handles the TI layout only: no clocks on the GPU node, a ti-sysc parent that clocks
   and powers the module whenever the GPU device is runtime-resumed. A part with its own
   `clocks` or `resets` (Allwinner, Ingenic) is refused until the driver enables them. An
   SGX535 has no compatible in that binding yet; it needs an addition to the binding.
+
+  What the binding says about the other parts, for the RFC (checked 2026-11-11 against
+  mainline's `img,powervr-sgx.yaml`):
+  - It requires only `compatible`, `reg` and `interrupts`, and forbids anything else
+    (`additionalProperties: false`). There is no `resets` property for any part, so the
+    driver's refusal of one can't trigger on a valid tree.
+  - TI parts may not have `clocks` or `power-domains` on the GPU node, except the AM6548,
+    which requires `power-domains`. The OMAP3630 case (a ti-sysc parent) is the one the
+    driver handles. An AM6548 has a power domain and no ti-sysc parent, so today's probe
+    would refuse it ("no runtime-PM parent"); it needs the power domain as its runtime-PM
+    path.
+  - Allwinner A31 (`core`, `mem`) and Ingenic JZ4780 (one clock) require `clocks` and
+    `clock-names`, from `core`, `mem`, `sys`. Supporting them means enabling those clocks
+    in the driver's runtime PM. The binding needs no change for that.
 
 Done: `dmesg` shows the driver probing the device. A device whose bus names no known core
 is refused with "not an SGX core this driver knows" before any register access.
@@ -229,6 +246,12 @@ Traps:
   board on the first resume (commit 1d170e9).
 - No runtime suspend while a render context exists (commit ce42391): a restart between
   a client's renders loses state the microkernel keeps.
+- A device-tree core is runtime-active straight after its probe, so it autosuspends
+  500 ms later. That suspend is the microkernel's power-off, sent through the CCB: stage 6
+  work, long before stage 5 has passed. A single-context core (the SGX530) holds a
+  runtime-PM reference from probe to remove (`pvrsgx_power_init`) until this stage is
+  shown on it. The SGX545 paths are unchanged: PCI keeps runtime PM forbidden until
+  probe ends, and gma500's SGX is multi-context.
 
 ## 10. Several clients
 
