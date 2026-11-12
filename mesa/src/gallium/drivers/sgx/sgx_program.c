@@ -945,6 +945,31 @@ pack_int_outputs(nir_shader *nir, unsigned kind)
    return progress;
 }
 
+/* nir_lower_clip_vs stores CLIP_DIST0 (planes 0-3) only when one of them is
+ * enabled, CLIP_DIST1 (4-7) only when one of those is.  The compiler counts
+ * the planes from the variables (0..n-1, the TA's output select), so with
+ * planes 4 and 5 alone it enables 0-5 and planes 0-3 read whatever cp
+ * registers held: those distances written 0.0 (inside), as the lowering
+ * itself writes a disabled plane below the last one. */
+static void
+fill_clip_dist0(nir_shader *nir)
+{
+   bool d0 = false, d1 = false;
+
+   nir_foreach_shader_out_variable (var, nir) {
+      d0 |= var->data.location == VARYING_SLOT_CLIP_DIST0;
+      d1 |= var->data.location == VARYING_SLOT_CLIP_DIST1;
+   }
+   if (!d1 || d0)
+      return;
+   nir_variable *v = nir_variable_create(nir, nir_var_shader_out,
+                                         glsl_vec4_type(), "sgx_clipdist0");
+   v->data.location = VARYING_SLOT_CLIP_DIST0;
+   nir_builder b = nir_builder_at(nir_after_impl(nir_shader_get_entrypoint(nir)));
+   nir_store_var(&b, v, nir_imm_vec4(&b, 0, 0, 0, 0), 0xf);
+   nir->info.outputs_written |= BITFIELD64_BIT(VARYING_SLOT_CLIP_DIST0);
+}
+
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
@@ -1113,6 +1138,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * alpha-tested ones: the test before the visibility feedback, the colour
     * after it for the pixels that pass (out.code1); the compiler decides */
    opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
+   if (vertex)
+      fill_clip_dist0(nir);
    /* an integer colour buffer: output 0 packed for it, as one word */
    if (!vertex && so->rt_int) {
       unsigned kind = so->rt_int;
