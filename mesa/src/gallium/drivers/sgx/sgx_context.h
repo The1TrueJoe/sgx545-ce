@@ -88,6 +88,9 @@ struct sgx_pipe_shader {
    uint64_t *code1;
    unsigned n_code1;
    int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
+   /* writes gl_FragDepth (SGX_DEBUG=fragdepth, test H10): in pa<depth_pa> at
+    * the feedback nop for a depthf; -1 doesn't */
+   int depth_pa;
    /* dependent samples: the SA register of each one's 4 texture state words,
     * and its sampler */
    unsigned dep_sa[SGX_MAX_DEP_SAMPLES], dep_sampler[SGX_MAX_DEP_SAMPLES],

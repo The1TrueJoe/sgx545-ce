@@ -1156,6 +1156,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * (the compiler's layout); the depth plane goes in after the iterated
        * inputs, by one more PDS iteration */
       so->discard_pa = -1;
+      so->depth_pa = -1;
       if (orig->info.fs.uses_discard) {
          if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u
                                                            << 32) {
@@ -1168,8 +1169,13 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          }
       }
       /* gl_FragDepth waits in pa<depth_pa> at the feedback nop for a depthf
-       * whose form isn't traced yet: until then the triangle's own depth */
-      if (out.writes_depth && !ctx->warned_frag_depth) {
+       * there, whose form is a guess (ISA.md): only with SGX_DEBUG=fragdepth
+       * (test H10); otherwise the triangle's own depth */
+      if (out.writes_depth && so->code &&
+          (sgx_drv_debug & SGX_DEBUG_FRAG_DEPTH) && so->n_code &&
+          so->code[so->n_code - 1] == (uint64_t)0xf8000140u << 32) {
+         so->depth_pa = out.depth_pa;
+      } else if (out.writes_depth && !ctx->warned_frag_depth) {
          fprintf(
             stderr,
             "sgx: gl_FragDepth not written yet (the triangle's depth is used)\n");
@@ -1287,14 +1293,20 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             so->prog.sec_dwords = 9 + so->const_dwords;
          }
       }
+      if (so->code && so->depth_pa >= 0) {
+         /* depthf reads its depth, and the depth words in sa3, sa4 */
+         so->prog.pa_dwords = MAX2(so->prog.pa_dwords, so->depth_pa + 1);
+         so->prog.sec_dwords = 9 + so->const_dwords;
+      }
+      struct sgxws_fs_feedback fb = {so->discard_pa, so->depth_pa};
       so->prog.code =
          !so->code ? 0
          : so->code1 && so->discard_pa >= 0
             ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
-                                    so->n_code1, so->color_reg, NULL,
-                                    so->discard_pa, so->temps)
+                                    so->n_code1, so->color_reg, NULL, &fb,
+                                    so->temps)
             : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg,
-                              NULL, so->discard_pa, so->temps);
+                              NULL, &fb, so->temps);
       if (last_plain >= 0)
          so->prog.douti[last_plain].last_iter = true;
       if (last_sample >= 0)
@@ -1324,6 +1336,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
    if (!so)
       return NULL;
    so->discard_pa = -1;
+   so->depth_pa = -1;
    if (cso->type == PIPE_SHADER_IR_NIR)
       nir = cso->ir.nir;
    else
@@ -1459,6 +1472,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
+   (*slot)->depth_pa = -1;
    (*slot)->points = points;
    if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, 0, NULL, 0,
                        vtx_fmt, points, 0, NULL) ||
@@ -1550,6 +1564,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
+   (*slot)->depth_pa = -1;
    (*slot)->srgb = srgb;
    (*slot)->srgb_filter = srgb_filter;
    memcpy((*slot)->swz, swz, sizeof(swz));
@@ -1585,12 +1600,13 @@ sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (!so->code)
       return 0;
    simple_mtx_lock(&screen->lock);
+   struct sgxws_fs_feedback fb = {so->discard_pa, so->depth_pa};
    va = so->code1 && so->discard_pa >= 0
            ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
-                                   so->n_code1, so->color_reg, b,
-                                   so->discard_pa, so->temps)
+                                   so->n_code1, so->color_reg, b, &fb,
+                                   so->temps)
            : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
-                             so->discard_pa, so->temps);
+                             &fb, so->temps);
    /* past the table's size, the slots are reused in turn, their programs
     * freed (dEQP's fragment_ops.interaction draws one shader with dozens of
     * blends) */

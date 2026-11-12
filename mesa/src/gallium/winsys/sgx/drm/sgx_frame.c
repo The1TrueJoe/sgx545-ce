@@ -2587,32 +2587,33 @@ wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
 static uint32_t
 upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
           const uint64_t *code1, unsigned count1, unsigned color_pa,
-          const struct sgxws_blend *blend, int discard_pa, unsigned temps);
+          const struct sgxws_blend *blend, const struct sgxws_fs_feedback *fb,
+          unsigned temps);
 
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned color_pa, const struct sgxws_blend *blend,
-                int discard_pa, unsigned temps)
+                const struct sgxws_fs_feedback *fb, unsigned temps)
 {
-   return upload_fs(c, code, count, NULL, 0, color_pa, blend, discard_pa,
-                    temps);
+   return upload_fs(c, code, count, NULL, 0, color_pa, blend, fb, temps);
 }
 
 uint32_t
 sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                       const uint64_t *code1, unsigned n1, unsigned color_pa1,
-                      const struct sgxws_blend *blend, int discard_pa,
-                      unsigned temps)
+                      const struct sgxws_blend *blend,
+                      const struct sgxws_fs_feedback *fb, unsigned temps)
 {
-   return upload_fs(c, code, n, code1, n1, color_pa1, blend, discard_pa,
-                    temps);
+   return upload_fs(c, code, n, code1, n1, color_pa1, blend, fb, temps);
 }
 
 static uint32_t
 upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
           const uint64_t *code1, unsigned count1, unsigned color_pa,
-          const struct sgxws_blend *blend, int discard_pa, unsigned temps)
+          const struct sgxws_blend *blend, const struct sgxws_fs_feedback *fb,
+          unsigned temps)
 {
+   int discard_pa = fb ? fb->discard_pa : -1, depth_pa = fb ? fb->depth_pa : -1;
    uint32_t *w = malloc((count + count1 + 12) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
@@ -2622,7 +2623,7 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
    /* a constant-colour blend works in r0, r1 */
    if (blend && blend->blend && blend->constant && temps < 2)
       temps = 2;
-   if (discard_pa >= 0) {
+   if (discard_pa >= 0 || depth_pa >= 0) {
       /*
        * A program that discards runs in two phases (ISA.md "Phases, visibility
        * feedback and discard"):
@@ -2631,18 +2632,30 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
        * p1, and atst8 [end] in place of the compiler's feedback nop (its last
        * instruction); phase 1, on an even instruction, = the colour out
        * without end, then phas.i #0, #0 [end].
+       * A gl_FragDepth write puts depthf pa<depth_pa>, sa3, sa4 [end] there
+       * instead ((p1) depthf with a discard), and without a discard a no-op
+       * in pcoeff's slot (sgxws_fs_feedback).
        */
       uint8_t reloc[1] = {0};
 
       put(w, &n, 0,
           0xfa440100u | ((temps + 3) / 4)); /* phas.i #phase1, #t [wait=1] */
-      put(w, &n,
-          0xb0000004u | (uint32_t)discard_pa << 14 |
-             (uint32_t)(discard_pa + 1) << 7,
-          0xf8300004u); /* pcoeff pa<n>, pa<n+1>, sa4 */
+      if (discard_pa >= 0)
+         put(w, &n,
+             0xb0000004u | (uint32_t)discard_pa << 14 |
+                (uint32_t)(discard_pa + 1) << 7,
+             0xf8300004u); /* pcoeff pa<n>, pa<n+1>, sa4 */
+      else
+         put(w, &n, 0xa0000000u, 0x28a10002u); /* mov pa0, pa0 [skipinv rcnt] */
       put_code(w, &n, code, count - 1);
-      put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14,
-          0xf9340406u); /* atst8 [end] */
+      if (depth_pa >= 0)
+         /* (p1) depthf pa<d>, sa3, sa4 [end]: h9-10 = 2 (p1) with a discard,
+          * 0 (every pixel) without (ISA.md, gl_FragDepth: guess) */
+         put(w, &n, 0xf0000184u | (uint32_t)depth_pa << 14,
+             discard_pa >= 0 ? 0xfb340404u : 0xfb340004u);
+      else
+         put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14,
+             0xf9340406u); /* atst8 [end] */
       if (n & 1)
          put(w, &n, 0, 0xf8000140u); /* nop: phase 1 on 16 bytes */
       w[0] = n;                      /* relocated to an absolute pc */

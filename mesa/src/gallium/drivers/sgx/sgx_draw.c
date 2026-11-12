@@ -1621,8 +1621,11 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          if (!fsp.code)
             return;
       }
-      /* pass type: a blend 1; discard 4, or 2 with a blend (ISA.md) */
-      st.pass_type = fs->discard_pa >= 0     ? (blend && blend->blend ? 2 : 4)
+      /* pass type: a blend 1; discard 4, or 2 with a blend; a depthf
+       * (gl_FragDepth) 5, as the vendor driver's points with depthf (ISA.md;
+       * for triangles a guess, H10) */
+      st.pass_type = fs->depth_pa >= 0       ? 5
+                     : fs->discard_pa >= 0   ? (blend && blend->blend ? 2 : 4)
                      : blend && blend->blend ? 1
                                              : 0;
       d.fs = &fsp;
@@ -1649,7 +1652,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
        * "Phases, visibility feedback and discard"): sa3 = 0xe000 | ISPA's depth
        * compare (7 with the test off) | 8 without depth writes (always 0xe00f,
        * LESS 0xe001, LEQUAL no write 0xe00b); sa4 = 0xee00 [G] */
-      if (fs->discard_pa >= 0) {
+      if (fs->discard_pa >= 0 || fs->depth_pa >= 0) {
          fsk[3] = 0xe000 | (st.depth_func ? (st.depth_func - 0x200) & 7 : 7) |
                   (st.depth_write ? 0 : 8);
          fsk[4] = 0xee00;
@@ -2021,6 +2024,12 @@ sgx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
     * VDM draw words (docs/GL3.md), so each instance gets its own draw, with
     * gl_InstanceID in a vertex constant and its instanced elements' values
     * fetched for it (setup_fetch). */
+   /* depth textures renders stored into, before the frame records a draw
+    * that samples them (sgx_resource_zls_for_sampling) */
+   for (unsigned i = 0; i < ARRAY_SIZE(ctx->views); i++)
+      if (ctx->views[i] && ctx->views[i]->texture)
+         sgx_resource_zls_for_sampling(ctx,
+                                       sgx_resource(ctx->views[i]->texture));
    if (ctx->stats.on)
       t = os_time_get_nano();
    ctx->base_instance = info->start_instance;

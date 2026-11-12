@@ -136,7 +136,7 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    /* the uniform-colour program's setup (its secondary loads sa9, which the
     * test doesn't read), the test as the main program */
    sgxws_prog_builtin(c, SGXWS_FS_UNIFORM, &fs);
-   fs.code = sgxws_upload_fs(c, code, n, 0, NULL, -1, 16);
+   fs.code = sgxws_upload_fs(c, code, n, 0, NULL, NULL, 16);
    fs.temps = 16;
    if (!fs.code) {
       printf("%s error upload\n", name);

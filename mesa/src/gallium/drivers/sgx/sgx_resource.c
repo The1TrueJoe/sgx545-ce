@@ -940,6 +940,20 @@ tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level,
       res->level0_gen++;
 }
 
+/* A depth texture a render stored into: the depth is in its ZLS buffer
+ * only, so before a draw samples it, the ZLS buffer is read into the CPU
+ * copy and level 0's sampled copy is rewritten from it (fbo-depthtex). */
+void
+sgx_resource_zls_for_sampling(struct sgx_context *ctx, struct sgx_resource *res)
+{
+   if (!res->zls_stored || !res->zls.map || !res->data || !res->zls_w ||
+       !sgx_tex_depth(res->base.format) ||
+       res->base.target != PIPE_TEXTURE_2D || res->base.array_size > 1)
+      return;
+   zls_sync_for_map(ctx, res);
+   tex_write(ctx, res, 0, 0, 0, 0, ~0u, ~0u);
+}
+
 bool
 sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res)
 {

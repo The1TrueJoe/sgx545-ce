@@ -415,16 +415,30 @@ void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
  */
 uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                          unsigned temps);
+/* A fragment program's visibility feedback (docs/ISA.md "Phases, visibility
+ * feedback and discard"); the program's last instruction (phase 0's, when
+ * split) is the compiler's feedback nop.
+ *  - discard_pa >= 0: it discards (p1 = keep); the PDS iterates the depth
+ *    plane into pa<discard_pa>.. for pcoeff, and atst8 takes the nop's place.
+ *  - depth_pa >= 0: it writes gl_FragDepth, in pa<depth_pa> at the nop;
+ *    depthf takes the nop's place, predicated on p1 when it also discards.
+ *    Without a discard, pcoeff's slot is a no-op (`mov pa0, pa0`), as in
+ *    the vendor driver's points path. The draw's pass type is 5. */
+struct sgxws_fs_feedback {
+   int discard_pa;
+   int depth_pa;
+};
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                          unsigned color_pa, const struct sgxws_blend *blend,
-                         int discard_pa, unsigned temps);
+                         const struct sgxws_fs_feedback *fb, unsigned temps);
 /* a program split around its discard: code (phase 0) ends at the feedback
  * nop, code1 (phase 1, only for the pixels that pass) leaves the colour in
  * pa<color_pa1> */
 uint32_t sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code,
                                unsigned n, const uint64_t *code1, unsigned n1,
                                unsigned color_pa1,
-                               const struct sgxws_blend *blend, int discard_pa,
+                               const struct sgxws_blend *blend,
+                               const struct sgxws_fs_feedback *fb,
                                unsigned temps);
 void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
                        uint32_t w[2]);

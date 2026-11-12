@@ -123,6 +123,11 @@ bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
                          unsigned level, unsigned layer,
                          struct sgxws_target *t);
 
+/* before a draw samples res: a depth texture's stored depth (ZLS) into its
+ * sampled copy */
+void sgx_resource_zls_for_sampling(struct sgx_context *ctx,
+                                   struct sgx_resource *res);
+
 /* brings res->cube0 up to date with level 0 (sgx_tex_words samples it) */
 bool sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res);
 

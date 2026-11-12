@@ -54,6 +54,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"zlsdump", SGX_DEBUG_ZLS_DUMP,
     "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
+   {"fragdepth", SGX_DEBUG_FRAG_DEPTH,
+    "write gl_FragDepth with depthf at the feedback point, pass type 5 (a guess: test H10, docs/GL3.md)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
     "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
    DEBUG_NAMED_VALUE_END};
