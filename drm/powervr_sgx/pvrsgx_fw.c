@@ -529,6 +529,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	u32 dm = cr->use_code_base_dm_shift;
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	u32 enable = cr->event_pds_enable_all;
+	/* The SGX530's PDS_PC_BASE: G, the base the event offset is added to. */
+	u32 pc_base = h->pds_pixel.base;
 	int err;
 
 	/* The bring-up sweep's variants (sweep_name[]); 0 is the normal start. */
@@ -552,6 +554,12 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	case 9:
 		enable = 0x7fffffff;
 		break;
+	case 10:
+		pc_base = f->addr[PVRSGX_FW_PDS0] & ~0xfu;
+		break;
+	case 11:
+		pc_base = h->kernel_code.base;
+		break;
 	}
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
@@ -568,6 +576,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
+	sgx_wr_opt(sdev, cr->pds_pc_base, pc_base);
 	/* Variant 8 sets DOUT_TIMEOUT_DISABLE (b6); later ones clear it again. */
 	if (cr->pds_ctrl && sdev->sweep_variant >= 8)
 		sgx_wr(sdev, cr->pds_ctrl, sdev->sweep_variant == 8 ? BIT(6) : 0);
@@ -752,7 +761,8 @@ static const char *const sweep_name[] = {
 	"baseline", "event data 2, 6", "event data 4, 6", "event data 1, 2",
 	"event data 0, 0", "DOUTU word 1 = 0", "2-dword data interleave",
 	"USE_CODE_BASE_15 data master 2", "PDS DOUT_TIMEOUT_DISABLE",
-	"event PDS enable 0x7fffffff",
+	"event PDS enable 0x7fffffff", "PDS_PC_BASE the event program",
+	"PDS_PC_BASE the kernel code heap",
 };
 
 static bool timer_moved(struct pvrsgx_device *sdev)
