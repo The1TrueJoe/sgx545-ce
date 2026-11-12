@@ -331,6 +331,7 @@ ISA_CORE = 545               # the instruction encodings: sgx-asm -c sgx<ISA_COR
 DIAG_ENTRY = None            # a bring-up marker: the event entry stores markers before
                              # phas.i (cores/sgx530_diag.py); None = the normal entry
 DIAG_PHAS = True             # False drops the event entry's phas.i (diagnostic builds only)
+PROBES = None                # code-base-unit probes past the image (cores/sgx530_probe.py)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000

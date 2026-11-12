@@ -2648,6 +2648,19 @@ def build(a):
     a.i("(p0) ba kick")                            # drain it now, don't wait a tick
     a.end()
 
+    if PROBES:
+        # bring-up only (cores/sgx530_probe.py): one probe per page past the image,
+        # for the host to map at the address another code-base unit would start at.
+        # Each writes its own EVENT_TIMER value (b24 clear) and ends
+        page = 0x1000 // 8
+        for k in PROBES:
+            n = sum(1 for kind, _ in a.lines if kind != "label")
+            a.lines.extend([("raw", (0, 0))] * (-n % page))   # zeros up to the page
+            a.label(f"probe_{k}")
+            a.i(f"limm r0, #{PROBE_TIMER + k}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r0")
+            a.end()
+
     return a
 
 

@@ -20,6 +20,7 @@ PDS programs and host-kick table at — the open equivalent of the DDK build's
 fixed constants (docs/SRVINIT.md, "What still comes from Imagination").
 """
 import json
+import re
 import os
 import struct
 import sys
@@ -143,8 +144,16 @@ def _encode_asm(items):
     return words
 
 
+def temps(items):
+    """the temporaries the image needs: its highest rN, plus 1 (i0-i3 are r124+)"""
+    n = [int(m.group(1)) for kind, v in items if kind == "text"
+         for m in re.finditer(r"\br(\d+)\b", v)]
+    return max((r for r in n if r < 124), default=-1) + 1
+
+
 def assemble():
     items, offset, patches = resolve()
+    assemble.items = items
     tool = os.environ.get("SGX_ASM")
     if tool:
         words, used = _encode_sgxasm(items, tool), "sgx-asm"
@@ -184,6 +193,8 @@ def main():
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }
+    manifest["temps"] = temps(assemble.items)    # r registers the image uses (highest + 1): what an
+                                        # entry DOUTU's temporary count has to cover
     if f"sgx{ukernel.ISA_CORE}" != ukernel.CORE_NAME:   # assembled with another core's encodings
         manifest["isa"] = f"sgx{ukernel.ISA_CORE}"
     if resolve.waits:             # a core built with bounded waits: id -> what it polls

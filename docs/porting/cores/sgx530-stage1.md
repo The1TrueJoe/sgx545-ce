@@ -152,7 +152,7 @@ Without it, step 1 goes unread, and an all-zero result can't tell row 1 from row
 
 | `EVENT_TIMER` | wait | version | heartbeat | init | What it means |
 |---|---|---|---|---|---|
-| 0 | 0 | 0 | 0 | 0 | None of our code ran: the entry program's data under the SGX530's layout, the DOUTU against `USE_CODE_BASE_15`, or `limm`/`str` encode differently. Or the SGX530 needs `phas.i` first (U). Next: the entry side. |
+| 0 | 0 | 0 | 0 | 0 | None of our code ran: the entry program's data under the SGX530's layout, the DOUTU against `USE_CODE_BASE_15`, or `limm`/`str` encode differently. Or the SGX530 needs `phas.i` first (U). Read the BIF registers to tell them apart (gap 9). A BIF page fault at 0x00400000 (`BIF_FAULT` b12-27) means `USE_CODE_BASE` counts in 16 B units on the SGX530, and base 15 = 0x40000 points there. A fault at 0x04000000 would mean 256 B units. No fault leaves the unit at 128 B and points at the PDS side: the entry program or the DOUTU. Next: the entry side. |
 | 0xa5a | 0 | 0 | 0 | 0 | Our code runs and register stores work; the memory store doesn't land. Suspects: `st.a.d [moe]`, or the patched address. |
 | 0xa5a | 0xd1a60001 | 0 | 0 | 0 | Memory stores work, so the address patch is right. `ldr` or the `wdf` after it stops. |
 | 0xa5a | 0xd1a60001 | 0x01120000 | 0 | 0 | `ld.a.d` or `imae`. |
@@ -186,6 +186,105 @@ entry falls through. It is the follow-up if the diagnostic entry stops at heartb
 - Expected: image 0x4330 (17200 B, sha256 c42a740e…) and crc 0x5bd6b2f7.
 - The same patches, and the packaged file is 8d1a634f….
 - A pass gives the same results as the last row above.
+
+## After the third attempt
+
+Attempt 3 (log 2026-11-11-2053) landed in the all-zero row with no BIF fault: `EVENT_TIMER`
+stayed 0 at every sample. So the USSE ran none of the image. `USE_CLKS` stayed on,
+`BIF_MEM_REQ_STAT` read 2 throughout, and nothing faulted.
+
+**Why not a sled of markers at other offsets.** At start, the firmware directory maps
+only the code arena (0x02000000-0x0200dfff), the PD table (0x0200f000) and the data arena
+(0x02400000-0x0240dfff). Every misreading I can construct lands outside them:
+- a code-base unit of 16, 32, 64 or 256 B puts base 15 at 0x00400000, 0x00800000,
+  0x01000000 or 0x04000000;
+- a narrower base-index field sends the task through a pixel or vertex code base, none
+  programmed into a mapped page;
+- bit 27 read as part of the offset puts the task megabytes past the arena.
+
+Each would fault, and three attempts saw no fault. So copies of step 1 elsewhere only
+help if the SGX530's fault reporting itself doesn't work. Nothing so far shows that.
+
+**What fits instead: the task is never scheduled.** The DOUTU's word 0 has `0x8000000` in
+the field PDS.md reads as the temporary count in fours (bits 24-31): 8, or 32
+temporaries. That reading is a guess even on the SGX545. The image uses r0-r17 and r23
+(r23 only in the TA kick's link save), so 24 temporaries. Stage 1 needs only r0-r17. The
+manifest now records `"temps": 24` (build.py: the image's highest rN plus 1). The SGX530's
+per-task limit is U. If it can't give one task 32, the task waits forever: no
+instruction, no fault, the clocks on. That is attempt 3.
+
+**Attempt 4, one variable:** the same `sgx530_diag` image, with the entry DOUTU's bits
+24-31 = 6 (24 temporaries, the manifest's `temps`) instead of 8. Everything else stays.
+The runbook's ladder table reads the same.
+
+If it lands in the all-zero row again, the next variables are, in order:
+1. the event data registers 0xa6c/0xa70 (1 and 6, a guess on the SGX545 too: probably
+   the data size and something else);
+2. DOUTU word 1 (2, the microkernel templates' value);
+3. the MOVS selects under a one-word interleave.
+
+## The fourth attempt: probes for the code-base unit
+
+This attempt is meant to answer as much as one board slot can. `cores/sgx530_probe.py` is
+`sgx530_diag`'s ladder, unchanged at offset 0, followed by nine probes past the image, one
+per 4 KiB page. Each probe writes its own `EVENT_TIMER` value (b24 clear) and ends.
+
+The entry DOUTU's offset is 0, so its own unit can't matter. The probes test the other
+unknown, `USE_CODE_BASE`'s unit. The host writes field 0x40000, the kernel code heap at
+0x02000000 in 128 B units. Under a unit of 2^k bytes, base 15 would start at
+0x40000 << k. With the module parameter `code_base_probes=1` (off by default, and only
+for an `event_pds_guessed` core's first start), powervr_sgx maps probe k's code-arena
+page there, read-only like the code arena:
+- it maps them before the reset, whose `INVALDC` covers them;
+- it logs `code-base unit probes mapped`;
+- it unmaps them right after the init wait.
+
+Without the parameter, nothing extra is mapped, and the probe image runs as the plain ladder.
+The 0xd000 page holds probe 9 and the PDS programs together.
+
+| k | Unit | Map at | Code-arena offset | `EVENT_TIMER` |
+|---|---|---|---|---|
+| 0 | 1 B | 0x00040000 | 0x5000 | 0xb00 |
+| 1 | 2 B | 0x00080000 | 0x6000 | 0xb01 |
+| 2 | 4 B | 0x00100000 | 0x7000 | 0xb02 |
+| 3 | 8 B | 0x00200000 | 0x8000 | 0xb03 |
+| 4 | 16 B | 0x00400000 | 0x9000 | 0xb04 |
+| 5 | 32 B | 0x00800000 | 0xa000 | 0xb05 |
+| 6 | 64 B | 0x01000000 | 0xb000 | 0xb06 |
+| 7 | 128 B | 0x02000000 (the image itself) | 0x0 | 0xa5a: the ladder |
+| 8 | 256 B | 0x04000000 | 0xc000 | 0xb08 |
+| 9 | 512 B | 0x08000000 | 0xd000 | 0xb09 |
+
+A unit of 1 KiB or more would start past the 28-bit space.
+
+Build it:
+- `python3 ukernel/build.py sgx530_probe …`, then mkukfw as before.
+- The image is 53272 B (0xd018), sha256 1356a4c5…, the same through asm.py and
+  `sgx-asm`.
+- `--check` should print image 0xd018, crc 0xd6bbd623, features 0x4, entry program 0 at
+  0x0, and patches 0x10/0x18.
+- The packaged file is fa39d633…. The event program moves to 0x0200d020, still inside
+  the code arena: the PDS programs end at 0xd220, under 0xe000.
+
+The 24-temporary entry DOUTU (bits 24-31 = 6; "After the third attempt") is in the same
+driver build, kernel a8a66544, for every SGX530 start. That gives two ways to run the
+fourth attempt (the coordinator picks):
+- **Temporaries only:** the `sgx530_diag` image (845463a3…), no parameter. Read it
+  with the ladder table above.
+- **Temporaries and probes:** the `sgx530_probe` image (fa39d633…) with
+  `code_base_probes=1`. Check the log line. Without it, a 0 below says nothing about the
+  unit.
+
+Reading the combined run:
+
+| `EVENT_TIMER` after the kick | What it means |
+|---|---|
+| 0xa5a, then the ladder as in its table | The base unit is 128 B. The task now starts, so the temporary count was the block. |
+| 0xb0k | The base unit is 2^k B. The temporary count may have mattered as well; the next attempt keeps 24 and fixes the unit. |
+| 0 | Neither the unit (if the alias pages are mapped as described) nor the temporary count. Next: 0xa6c/0xa70. |
+
+A BIF fault now says the same as before; the probe pages make no new fault
+possible.
 
 ## Abort conditions
 
