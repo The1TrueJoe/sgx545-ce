@@ -348,8 +348,8 @@ earlier licensing and provenance audit.
 
 ## Firmware (the open SGX microkernel, `ukernel/`)
 
-The microkernel is MIT-licensed source (`ukernel/ukernel.py`) assembled to a
-small binary a loader runs on the SGX core. Upstreaming has two destinations:
+The microkernel is MIT OR Apache-2.0 source (`ukernel/ukernel.py`) assembled to
+a small binary a loader runs on the SGX core. Upstreaming has two destinations:
 the **source** (this repository `powervr_sgx`, under `ukernel/`) and the **built
 binary** (linux-firmware, loaded by the DRM driver).
 
@@ -357,7 +357,7 @@ binary** (linux-firmware, loaded by the DRM driver).
 |---|---|
 | Reproducible build | **Done.** Pure-CPython assembler, no timestamps/paths/randomness; byte-identical `.bin`+`.json` on any machine, any CPython ≥ 3.7. One command: `ukernel/build.sh`. |
 | Pinned toolchain | **Done (documented).** Only CPython ≥ 3.7; no external packages. Recorded in `ukernel/README.md` → Building. |
-| MIT license | **Done.** `ukernel/LICENSE` + an `SPDX-License-Identifier: MIT` header on every source file. |
+| MIT OR Apache-2.0 license | **Done.** `ukernel/LICENSE` holds both texts + an `SPDX-License-Identifier: MIT OR Apache-2.0` header on every source file (dual-licensed for linux-firmware's patent-grant criterion, LICENSE-CRITERIA §3.1). |
 | Release manifest | **Done.** `core`, `version` (major.minor), `features`, `build_id`, sizes, entry offsets, patch sites. |
 | Per-core identity | **Done.** The per-core config `cores/<core>.py:CORE_NAME` (selected by `build.py <core>` / `SGX_CORE`, default sgx545) names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
 | Feature-bit documentation | **Done.** `ukernel/README.md` → Feature bits (bit 0 CLEANUP_V2, bit 1 SECURE). |
@@ -380,7 +380,7 @@ Version: 1.0
 Source: https://github.com/The1TrueJoe/powervr_sgx   (ukernel/ — ukernel.py +
         cores/<core>.py + build.py; the DRM driver's packaging tool applies the
         header/feature bits)
-License: MIT.  See LICENSE.powervr_sgx for details.
+License: MIT OR Apache-2.0.  See LICENSE.powervr_sgx for details.
 ```
 
 Naming (no project name upstream; one file per core; the driver's own
@@ -393,10 +393,10 @@ build.py, the driver, the docs and the test scripts.
 
 **Still needed before linux-firmware submission:**
 
-1. **MIT license file entry.** linux-firmware carries each file's license text in
-   its own tree and the WHENCE `License:` line references it. Add the MIT text as
-   `LICENSE.powervr_sgx` (or reuse an existing MIT entry if the maintainers prefer)
-   and point the `License:` line at it.
+1. **License file entry.** linux-firmware carries each file's license text in
+   its own tree and the WHENCE `License:` line references it. Add the MIT and
+   Apache-2.0 texts (reuse linux-firmware's existing entries for either if the
+   maintainers prefer) and point the `License:` line at them.
 2. **Public source URL.** **Set** — the source is the monorepo
    `https://github.com/The1TrueJoe/powervr_sgx` (`ukernel/`), which must be publicly
    reachable at submission so a third party can reproduce the binary from it.
