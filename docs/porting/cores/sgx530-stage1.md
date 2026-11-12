@@ -1405,6 +1405,43 @@ Build each then mkukfw; all same through asm.py and `sgx-asm`. Readout is the fa
   neither DOUTU word 0 nor `phas.i` — next look at `phas.i`'s other fields (rate, the
   phase-count semantics without `USE_UNLIMITED_PHASES`) or a `setfc`/MOE-style setup.
 
+## The host-side init diff (the coordinator's survey, likely the register-file setup)
+
+The 545 `init_regs` (part 2) writes **16** setup registers; our 530 `init_regs` writes **3**.
+All of these offsets are unnamed in both the 530 and 545 GPL headers — they come from the
+captured 545 srvinit script (SRVINIT.md), so **G**. The 530 was stripped to the minimum plus
+0xa74 (attempt 18). Missing on the 530 (13), with the 545's values:
+
+| offset | 545 value | note |
+|---|---|---|
+| 0x818 | 0x7ff | USE/partition allocation (G) — prime temp-setup suspect |
+| 0x810 | 1 | " |
+| 0x814 | 0xffff | " |
+| 0x800 | 0x30 | " (0x800 is `EVENT_STATUS_TPC_CLEAR`'s offset on the 530; the write is a different block) |
+| 0x804 | 0xffff | " |
+| 0x4e8 | 0x100 | (G) |
+| 0xa00 | 0x7c000 | (G) |
+| 0x13c | 0 | (G) |
+| 0xa7c | 0 | (G) |
+| 0xa80 | 0 | (G) |
+| 0xa78 | 0x2c | tested alone in attempt 18 (no PDS effect) |
+| 0xaac | 0x45 | " |
+| 0xabc | 0xe | `PDS` on the 530 (K); tested alone, no effect |
+
+The 530 writes only `EVENT_HOST_ENABLE`, `EVENT_HOST_ENABLE2`, `0xa74 = 0x208200`.
+
+**The hypothesis (strong): the missing writes include the host-side USE register-file /
+temp-partition setup the task needs.** 0x810/0x814/0x818 = 1/0xffff/0x7ff and 0x800/0x804 =
+0x30/0xffff read like resource allocation. Without them the task has no register file, so
+writes drop and reads return leftovers — attempts 31-35 exactly. Attempt 18 tested the PDS
+block (0xa78/0xaac/0xabc/0xa00) only against "does the PDS run," never against "do writes
+land," and never wrote 0x810-0x818 / 0x800-0x804 / 0x4e8 / 0x13c at all.
+
+**Proposed: write the full 545 `init_regs` set on the 530**, then test with `aluwr`. If
+writes then land (0x0fd7d000), bisect to the needed subset — start with the 0x810/0x814/0x818
+group. Driver-side (the 530 `init_regs` table), under the standing go (unnamed registers,
+known 545 values, as attempt 18). If it works, re-run the real image: likely init completing.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
