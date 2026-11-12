@@ -264,9 +264,6 @@ struct pvrsgx_device {
 
 #define to_pvrsgx_device(drm) container_of_const(drm, struct pvrsgx_device, base)
 
-/**
- * struct pvrsgx_file - Per-open state
- */
 /*
  * A file's limits: every context and RT dataset takes kernel memory from
  * device-wide ranges, so one client may not take them all.
@@ -274,6 +271,9 @@ struct pvrsgx_device {
 #define PVRSGX_MAX_FILE_CONTEXTS	64
 #define PVRSGX_MAX_FILE_RTDS		64
 
+/**
+ * struct pvrsgx_file - Per-open state
+ */
 struct pvrsgx_file {
 	/** @sdev: The device. */
 	struct pvrsgx_device *sdev;
