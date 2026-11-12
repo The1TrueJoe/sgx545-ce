@@ -1590,6 +1590,13 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
+      /* a shader for several colour buffers (gl_FragData[1..]): the base is
+       * the first buffer's variant (remap_outputs), so that a draw into one
+       * buffer has a program and a draw into several gets a variant each */
+      if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+          (nir->info.outputs_written &
+           BITFIELD64_RANGE(FRAG_RESULT_DATA1, 7)))
+         so->rt_target = 1;
       bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false,
                                0, NULL);
 
