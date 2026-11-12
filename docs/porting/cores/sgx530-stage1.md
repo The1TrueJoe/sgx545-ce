@@ -503,6 +503,23 @@ As the last step of the sweep:
 A fault at 0x0e800000 confirms the path. None means the earlier "would fault" arguments
 don't hold, and the probes and pads are the only evidence of where a task went.
 
+**Order and recovery.** The board has no remote power switch, so a wedge costs a manual
+power cycle. The calibration therefore runs last, after every pad pass is logged, and
+recovers like this:
+1. Write `EVENT_KICKER` back to the kicker buffer and `EVENT_KICK` nothing more.
+2. Run the driver's recovery reset, `pvrsgx_reset(recovery = true)`. With list 0 on the
+   scratch directory, it maps the scratch page at each faulting address, so the held
+   request completes, then resets the BIF and the cores again (up to 32 rounds). That path is
+   proven on the SGX545's hang recovery but not yet on the SGX530.
+3. Read `BIF_INT_STAT` once more. It must be 0 before the normal failed-probe teardown.
+4. If it isn't 0 after the 32 rounds: log it, hold the cores and the BIF in reset
+   (`SOFT_RESET` = BIF | cores), and unload without any further register access.
+   That leaves nothing for a pending request to complete into. Expect to need the
+   board owner for a power cycle only if the board stops answering.
+
+If the kernel side can't do steps 2-4 for this start, it should skip the calibration.
+The pad passes don't need it.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
