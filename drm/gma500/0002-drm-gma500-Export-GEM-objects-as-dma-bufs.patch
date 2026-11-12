@@ -1,4 +1,4 @@
-From d4820d977a9c212fff1ef00cc126f5c605467836 Mon Sep 17 00:00:00 2001
+From 80bfa329ce3ef93f4db945e2c8eb3293ab14f8a7 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Tue, 10 Nov 2026 23:37:45 -0500
 Subject: [PATCH 2/5] drm/gma500: Export GEM objects as dma-bufs
@@ -308,5 +308,5 @@ index 27df6ff4e..539f8f20a 100644
  
  static inline struct psb_gem_object *to_psb_gem_object(struct drm_gem_object *obj)
 -- 
-2.50.1 (Apple Git-155)
+2.50.1
 
