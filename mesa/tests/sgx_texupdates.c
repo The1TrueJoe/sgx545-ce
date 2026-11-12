@@ -7,10 +7,12 @@
  * surface: every draw must sample its own version, and the updates should
  * not wait for the GPU. On a pbuffer, the last frame read back.
  *
- *   sgx_texupdates [updates [frames]]   (default 32 updates, 100 frames)
+ *   sgx_texupdates [updates [frames [overdraw]]]   (default 32, 100, 0)
  *
- * Draw i fills the 8-pixel column i of a 256x16 target from a 128x128 RGB
- * texture whose top-left 16x16 box was just replaced with colour i. Prints
+ * Draw i fills the 8-pixel column i of a 256x128 target from a 128x128 RGB
+ * texture whose top-left 16x16 box was just replaced with colour i; overdraw
+ * first blends that many full-target quads of another texture, so a wait
+ * for the GPU costs what it does under a game's frame. Prints
  * the time per frame and PASS/FAIL per column; exit 0 when all pass. Run with
  * SGX_DEBUG=stats for the driver's texture-write flushes.
  *
@@ -30,7 +32,7 @@
 #include <GL/glext.h>
 
 #define W 256
-#define H 16
+#define H 128
 #define T 128 /* texture size */
 #define B 16  /* the updated box */
 
@@ -64,6 +66,7 @@ static void colour(int i, unsigned char *c)
 int main(int argc, char **argv)
 {
    int n = argc > 1 ? atoi(argv[1]) : 32, frames = argc > 2 ? atoi(argv[2]) : 100;
+   int over = argc > 3 ? atoi(argv[3]) : 0;
    if (n < 1 || n > W / 8)
       n = 32;
    if (frames < 1)
@@ -129,9 +132,11 @@ int main(int argc, char **argv)
    G(PFNGLMATRIXMODEPROC, glMatrixMode);
    G(PFNGLLOADIDENTITYPROC, glLoadIdentity);
    G(PFNGLORTHOPROC, glOrtho);
+   G(PFNGLDISABLEPROC, glDisable);
+   G(PFNGLBLENDFUNCPROC, glBlendFunc);
 
-   printf("renderer: %s; %d updates a frame, %d frames\n", glGetString(GL_RENDERER),
-          n, frames);
+   printf("renderer: %s; %d updates a frame, %d frames, overdraw %d\n",
+          glGetString(GL_RENDERER), n, frames, over);
    glViewport(0, 0, W, H);
    glMatrixMode(GL_PROJECTION);
    glLoadIdentity();
@@ -142,8 +147,13 @@ int main(int argc, char **argv)
    /* a lightmap page: 128x128 RGB, grey, NEAREST */
    static unsigned char page[T * T * 3], box[B * B * 3];
    memset(page, 128, sizeof(page));
-   GLuint tex;
+   GLuint tex, bg;
    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+   glGenTextures(1, &bg);
+   glBindTexture(GL_TEXTURE_2D, bg);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, T, T, 0, GL_RGB, GL_UNSIGNED_BYTE, page);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
    glGenTextures(1, &tex);
    glBindTexture(GL_TEXTURE_2D, tex);
    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, T, T, 0, GL_RGB, GL_UNSIGNED_BYTE, page);
@@ -167,6 +177,20 @@ int main(int argc, char **argv)
       double tf = now_ms();
       glClearColor(0, 0, 0, 1);
       glClear(GL_COLOR_BUFFER_BIT);
+      if (over) {
+         float fq[8] = {0, 0, W, 0, W, H, 0, H}, fs[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+         memcpy(xy, fq, sizeof(fq));
+         memcpy(st, fs, sizeof(fs));
+         glBindTexture(GL_TEXTURE_2D, bg);
+         glEnable(GL_BLEND);
+         glBlendFunc(GL_ONE, GL_ONE);
+         for (int k = 0; k < over; k++)
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+         glDisable(GL_BLEND);
+         glBindTexture(GL_TEXTURE_2D, tex);
+         for (int k = 0; k < 4; k++)
+            st[2 * k] = st[2 * k + 1] = u;
+      }
       for (int i = 0; i < n; i++) {
          unsigned char ci[3];
          colour(i, ci);

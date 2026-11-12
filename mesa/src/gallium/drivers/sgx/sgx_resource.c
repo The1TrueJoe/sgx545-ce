@@ -732,6 +732,13 @@ spare_dirty_add(struct sgx_tex_copy *sp, unsigned level, unsigned layer,
 {
    if (sp->n_dirty == SGX_ALT_ALL)
       return;
+   /* a box it already owes, or one inside it (a lightmap page updated at
+    * the same place every draw), costs nothing more */
+   for (unsigned i = 0; i < sp->n_dirty; i++)
+      if (sp->dirty[i].level == level && sp->dirty[i].layer == layer &&
+          sp->dirty[i].x0 <= x0 && sp->dirty[i].y0 <= y0 &&
+          sp->dirty[i].x1 >= MIN2(x1, 0xffff) && sp->dirty[i].y1 >= MIN2(y1, 0xffff))
+         return;
    if (sp->n_dirty == ARRAY_SIZE(sp->dirty)) {
       sp->n_dirty = SGX_ALT_ALL;
       return;
