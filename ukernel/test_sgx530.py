@@ -179,6 +179,27 @@ def test_diag_entry(core="sgx530_diag"):
           "  OK")
 
 
+def test_probes():
+    """stage 1's probe build (cores/sgx530_probe.py): the ladder as in sgx530_diag,
+    and each probe, on its own page, writes its own EVENT_TIMER value and ends"""
+    from cores import sgx530_probe as P
+    test_diag_entry("sgx530_probe")
+    code, man = load("sgx530_probe")
+    seen = []
+    for k in P.PROBES:
+        off = man["entries"][f"probe_{k}"]
+        assert off % 0x1000 == 0 and off >= 0x1000, f"probe {k} at {off:#x}: not on its own page"
+        u, mem, regs = machine(code, initialised=False)
+        u.task(off // 8, max_steps=100)
+        w = [(a, v) for (op, a, v, pc) in regs.log if op == "str"]
+        assert w == [(C.CR_EVENT_TIMER, P.PROBE_TIMER + k)], (k, w)
+        assert not (P.PROBE_TIMER + k) & 0x1000000
+        seen.append(off)
+    assert len(set(seen)) == len(P.PROBES) and 7 not in P.PROBES
+    print(f"  probes: {len(P.PROBES)} pages from {min(seen):#x}, EVENT_TIMER "
+          f"{P.PROBE_TIMER:#x}+k each, image {man['bytes']} B  OK")
+
+
 def man_text(core):
     """a diagnostic image's instruction texts, by index"""
     os.environ["SGX_CORE"] = core
@@ -350,6 +371,7 @@ def main():
     test_stage1_named(code, man)
     test_diag_entry()
     test_diag_entry("sgx530_diag_nophas")
+    test_probes()
     test_getmiscinfo(code, man)
     test_restore_pd(code, man)
     test_bounded_wait(code, man)
