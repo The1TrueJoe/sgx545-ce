@@ -906,12 +906,19 @@ struct sweep_variant {
  * baseline; then the event program does a DOUTA of 0x0e850000 (unmapped,
  * past the PDS vertex heap on the SGX530) to PA0 before its DOUTU, with
  * event data 0 = 2 for its two data rows. A task loading through PA0
- * faults there if it sees the value.
+ * faults there if it sees the value. Event data 1 at 6, as attempt 40 ran
+ * it (its DOUTU took a zero word, log 2026-11-12-0517), then at 8, the two
+ * rows' length in dwords if that's what 0x0a70 is.
  */
+#define DOUTA_PA0(d1)	{ .flags = PVRSGX_SWEEP_DOUTA_PA0, .doutu0 = 0x0e850000, \
+			  .data0 = 2 + 1, .data1 = (d1) + 1 }
+
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_DOUTA_PA0, .doutu0 = 0x0e850000, .data0 = 2 + 1 },
+	DOUTA_PA0(6), DOUTA_PA0(8),
 };
+
+#undef DOUTA_PA0
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
 static int alias_map(struct pvrsgx_device *sdev)
