@@ -73,7 +73,9 @@ static void prime_test_range_refuses(struct kunit *test)
 /* The array checks come before any copy from userspace or handle lookup. */
 static void prime_test_range_array(struct kunit *test)
 {
-	struct drm_powervr_sgx_obj_array arr = { .stride = sizeof(struct drm_powervr_sgx_cache_range) };
+	struct drm_powervr_sgx_obj_array arr = {
+		.stride = sizeof(struct drm_powervr_sgx_cache_range),
+	};
 	struct pvrsgx_job job = {};
 
 	KUNIT_EXPECT_EQ(test, pvrsgx_prime_ranges(NULL, &arr, &job), 0);
