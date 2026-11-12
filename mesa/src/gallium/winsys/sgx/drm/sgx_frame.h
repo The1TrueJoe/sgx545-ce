@@ -149,6 +149,7 @@ struct sgxws_rt {
 struct sgxws_eot {
    uint32_t va, stride, w, h;
    uint8_t pbe_format, t1_layout, samples;
+   bool raw; /* sgxws_target.raw: no dither */
    uint32_t code;
 };
 

@@ -20,6 +20,7 @@
 #include "util/u_transfer.h"
 
 #include "sgx_context.h"
+#include "sgx_csb.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
 #include "sgx_texture.h"
@@ -551,6 +552,26 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
       t->t1_format =
          0x0d; /* swaps R and B against 0x0c: the PBE's order back */
       break;
+   /* integer: the program packs the word (rt_packed, sgx_program.c
+    * pack_int_output), B, G, R, A bytes, which format 1 stores R, G, B, A;
+    * written unchanged (no dither) */
+   case PIPE_FORMAT_R8G8B8A8_UINT:
+   case PIPE_FORMAT_R8G8B8A8_SINT:
+   case PIPE_FORMAT_R8_UINT:
+   case PIPE_FORMAT_R8_SINT:
+   case PIPE_FORMAT_R8G8_UINT:
+   case PIPE_FORMAT_R8G8_SINT:
+      t->pbe_format = 1;
+      t->t1_format = 0x0d;
+      t->raw = true;
+      break;
+   /* R32: the program's word is the value, which format 0 stores as it is */
+   case PIPE_FORMAT_R32_UINT:
+   case PIPE_FORMAT_R32_SINT:
+      t->pbe_format = 0;
+      t->t1_format = SGX_TEXSTATE_FORMAT_F32;
+      t->raw = true;
+      break;
    default:
       return false;
    }
@@ -570,6 +591,12 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
       t->va = res->bo.va + sgx_tex_offset(&res->base, level, layer);
       t->stride = twiddled ? w : align(w, 8);
       t->t1_layout = twiddled ? 0 : 3;
+      /* F32 words (an R32 texture): rows of 32, strided, as it's sampled
+       * (sgx_tex_words) */
+      if (sgx_tex_word32(res->base.format)) {
+         t->stride = align(w, 32);
+         t->t1_layout = SGX_TEXSTATE_LAYOUT_STRIDED;
+      }
       sgxws_bo_prepare_target(screen->dev,
                               &res->bo); /* (the caller holds the lock) */
       res->rendered |= 1u << level;

@@ -1085,7 +1085,8 @@ eot_program(struct sgxws_ctx *c)
 
       if (e->va == t->va && e->stride == t->stride && e->w == s->w &&
           e->h == s->h && e->pbe_format == t->pbe_format &&
-          e->t1_layout == t->t1_layout && e->samples == MAX2(t->samples, 1)) {
+          e->t1_layout == t->t1_layout && e->samples == MAX2(t->samples, 1) &&
+          e->raw == t->raw) {
          pool->last_seq = sgxws_next_seq(c);
          return e->code;
       }
@@ -1141,7 +1142,7 @@ eot_program(struct sgxws_ctx *c)
    sgx_pack(&side, PBE_SIDEBAND, sb)
    {
       sb.format = t->pbe_format;
-      sb.dither = true;
+      sb.dither = !t->raw;
       sb.twiddled = t->t1_layout == SGX_TEXSTATE_LAYOUT_TWIDDLED;
    }
    p.p[0] = 0; /* phas.i #0, #0 [wait=7] */
@@ -1160,6 +1161,7 @@ eot_program(struct sgxws_ctx *c)
       .pbe_format = t->pbe_format,
       .t1_layout = t->t1_layout,
       .samples = MAX2(t->samples, 1),
+      .raw = t->raw,
       .code = p.va,
    };
    pool->last_seq = sgxws_next_seq(c);

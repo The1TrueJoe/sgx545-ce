@@ -140,6 +140,11 @@ match_fs(struct sgx_pipe_shader *so)
 
    if (!st)
       return;
+   /* (the fixed programs write a float colour: an integer one is compiled,
+    * packed for its target) */
+   nir_alu_type ot = nir_alu_type_get_base_type(nir_intrinsic_src_type(st));
+   if (ot == nir_type_int || ot == nir_type_uint)
+      return;
    loc = nir_intrinsic_io_semantics(st).location;
    if ((loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0) ||
        nir_intrinsic_write_mask(st) != 0xf ||
@@ -804,6 +809,48 @@ lower_shadow(nir_shader *nir, const uint8_t *compare, const uint16_t *swz)
 /* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
  * samplers whose texels a fragment shader decodes from sRGB, srgb_filter
  * those of them it filters itself (lower_srgb_filter) */
+/* An integer colour buffer's word, which the PBE stores unchanged
+ * (sgx_resource_target; the compiler's rt_packed): output 0's channels as
+ * the colour word's B, G, R, A bytes for a target of 8 bits a channel, their
+ * low bytes (PBE format 1 stores them R, G, B, A); for R32 the value
+ * itself.  data: the variant's rt_int. */
+static bool
+pack_int_output(nir_builder *b, nir_intrinsic_instr *st, void *data)
+{
+   unsigned kind = *(const unsigned *)data;
+
+   if (st->intrinsic != nir_intrinsic_store_output)
+      return false;
+   unsigned loc = nir_intrinsic_io_semantics(st).location;
+   if ((loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0) ||
+       nir_intrinsic_component(st) || st->src[0].ssa->bit_size != 32)
+      return false;
+   b->cursor = nir_before_instr(&st->instr);
+   nir_def *v = st->src[0].ssa, *word;
+   unsigned n = v->num_components, wm = nir_intrinsic_write_mask(st);
+
+   if (kind == 2) {
+      word = nir_channel(b, v, 0);
+   } else {
+      static const unsigned shift[4] = {16, 8, 0, 24}; /* r, g, b, a */
+
+      word = nir_imm_int(b, 0);
+      for (unsigned c = 0; c < n; c++) {
+         if (!(wm >> c & 1))
+            continue;
+         word = nir_ior(b, word,
+                        nir_ishl_imm(b, nir_iand_imm(b, nir_channel(b, v, c),
+                                                     0xff),
+                                     shift[c]));
+      }
+   }
+   nir_src_rewrite(&st->src[0], word);
+   st->num_components = 1;
+   nir_intrinsic_set_write_mask(st, 1);
+   nir_intrinsic_set_src_type(st, nir_type_uint32);
+   return true;
+}
+
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
@@ -968,6 +1015,14 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * alpha-tested ones: the test before the visibility feedback, the colour
     * after it for the pixels that pass (out.code1); the compiler decides */
    opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
+   /* an integer colour buffer: output 0 packed for it, as one word */
+   if (!vertex && so->rt_int) {
+      unsigned kind = so->rt_int;
+
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, pack_int_output,
+               nir_metadata_control_flow, &kind);
+      opts.rt_packed = 1;
+   }
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
               vertex ? "vertex" : "fragment", out.log ? out.log : "");
@@ -1515,9 +1570,14 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    uint32_t not_bgra = 0, depth = 0;
    uint8_t compare[PIPE_MAX_SAMPLERS] = {0};
    bool any_swz = false;
+   uint8_t rt_int = 0;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
       return fs;
+   /* an integer colour buffer takes its own packing (pack_int_output) */
+   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
+       util_format_is_pure_integer(ctx->framebuffer.cbufs[0].format))
+      rt_int = sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) ? 2 : 1;
    BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
       const struct pipe_sampler_view *v = ctx->views[unit];
 
@@ -1556,13 +1616,14 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          any_swz = true;
       }
    }
-   if (!srgb && !any_swz && !not_bgra)
+   if (!srgb && !any_swz && !not_bgra && !rt_int)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
           fs->variants_srgb[i]->srgb_filter == srgb_filter &&
           fs->variants_srgb[i]->not_bgra == not_bgra &&
           fs->variants_srgb[i]->depth == depth &&
+          fs->variants_srgb[i]->rt_int == rt_int &&
           !memcmp(fs->variants_srgb[i]->compare, compare, sizeof(compare)) &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
@@ -1580,6 +1641,7 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
    (*slot)->depth = depth;
+   (*slot)->rt_int = rt_int;
    memcpy((*slot)->compare, compare, sizeof(compare));
    if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
                        not_bgra, NULL, false, depth, compare) ||

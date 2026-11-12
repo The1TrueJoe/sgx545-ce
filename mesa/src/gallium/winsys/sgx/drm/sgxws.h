@@ -77,6 +77,8 @@ struct sgxws_target {
     * 3 linear with the pitch rounded up to 8 texels, 0 twiddled, which the
     * PBE then writes twiddled too) */
    uint8_t pbe_format, t1_format, t1_layout;
+   /* the program's word is stored unchanged: no dither (integer formats) */
+   bool raw;
    /* Depth and stencil kept across renders (ZLS, TEX.md section 7): a buffer
     * of float32 depth for every pixel of the render's tile-padded size, then
     * a stencil byte each: 5 bytes per sgxws_zls_pixels.  The render stores both

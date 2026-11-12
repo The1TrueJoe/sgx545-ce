@@ -271,7 +271,17 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           /* stored as RGBA8, drawn into with R (and G) written alone
            * (sgx_tex_bpp): GL_ARB_texture_rg, which X's glamor needs on GLES
            * for its 8-bit pixmaps (glyphs, masks) */
-          format != PIPE_FORMAT_R8_UNORM && format != PIPE_FORMAT_R8G8_UNORM)
+          format != PIPE_FORMAT_R8_UNORM && format != PIPE_FORMAT_R8G8_UNORM &&
+          /* integer, of 32 bits or less: the program packs the word
+           * (rt_packed); reachable once EXT_texture_integer is */
+          format != PIPE_FORMAT_R8G8B8A8_UINT &&
+          format != PIPE_FORMAT_R8G8B8A8_SINT &&
+          format != PIPE_FORMAT_R8_UINT && format != PIPE_FORMAT_R8_SINT &&
+          format != PIPE_FORMAT_R8G8_UINT && format != PIPE_FORMAT_R8G8_SINT &&
+          format != PIPE_FORMAT_R32_UINT && format != PIPE_FORMAT_R32_SINT)
+         return false;
+      /* integer render targets aren't multisampled */
+      if (sample_count > 1 && util_format_is_pure_integer(format))
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {

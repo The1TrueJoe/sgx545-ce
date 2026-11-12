@@ -297,6 +297,32 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
             rgba[1] = 0.0f;
          rgba[2] = 0.0f;
       }
+      /* an integer target: the word's bytes as k / 255, which the clear
+       * converts back to exactly k (the colour word is B, G, R, A bytes):
+       * each channel's low byte for an 8-bit format (1 for a missing
+       * alpha), an R32 value's four bytes */
+      if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
+          util_format_is_pure_integer(ctx->framebuffer.cbufs[0].format)) {
+         enum pipe_format f = ctx->framebuffer.cbufs[0].format;
+         uint32_t v = color->ui[0];
+
+         if (sgx_tex_raw32(f)) {
+            rgba[0] = (v >> 16 & 0xff) / 255.0f;
+            rgba[1] = (v >> 8 & 0xff) / 255.0f;
+            rgba[2] = (v & 0xff) / 255.0f;
+            rgba[3] = (v >> 24) / 255.0f;
+         } else {
+            for (unsigned c = 0; c < 4; c++)
+               rgba[c] = (color->ui[c] & 0xff) / 255.0f;
+            if (!util_format_has_alpha(f))
+               rgba[3] = 1.0f / 255.0f;
+            if (rg_whole) {
+               if (!(tm & PIPE_MASK_G))
+                  rgba[1] = 0.0f;
+               rgba[2] = 0.0f;
+            }
+         }
+      }
       unsigned n0 = sgxws_frame_objects(ctx->hw);
 
       sgxws_clear(ctx->hw, (buffers & PIPE_CLEAR_COLOR0) ? rgba : black,
@@ -316,8 +342,12 @@ target_mask(const struct sgx_context *ctx)
       return PIPE_MASK_RGBA;
    switch (ctx->framebuffer.cbufs[0].format) {
    case PIPE_FORMAT_R8_UNORM:
+   case PIPE_FORMAT_R8_UINT:
+   case PIPE_FORMAT_R8_SINT:
       return PIPE_MASK_R;
    case PIPE_FORMAT_R8G8_UNORM:
+   case PIPE_FORMAT_R8G8_UINT:
+   case PIPE_FORMAT_R8G8_SINT:
       return PIPE_MASK_R | PIPE_MASK_G;
    default:
       return PIPE_MASK_RGBA;
@@ -1557,14 +1587,23 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
          target_mask(ctx);
 
-      if (ctx->blend && ctx->blend->enable)
+      enum pipe_format cf = ctx->framebuffer.cbufs[0].format;
+      bool int_rt = util_format_is_pure_integer(cf);
+
+      /* an integer target isn't blended (GL); its packed word is masked by
+       * byte, an R32 word being all of R */
+      if (ctx->blend && ctx->blend->enable && !int_rt)
          epi = ctx->blend->hw[has_alpha];
-      if (!has_alpha)
+      if (int_rt && sgx_tex_raw32(cf))
+         mask = mask & PIPE_MASK_R ? PIPE_MASK_RGBA : 0;
+      else if (int_rt && !has_alpha)
+         mask &= ~PIPE_MASK_A; /* the 1 it was created and cleared with */
+      if (!has_alpha && !int_rt)
          mask |= PIPE_MASK_A;
       /* A window's X byte takes whatever alpha came out.  A texture's is read
        * as alpha where it's sampled, so it keeps the 1 it was created and
        * cleared with: the blend's alpha is the tile's (tile * 1 + colour * 0) */
-      if (!has_alpha &&
+      if (!has_alpha && !int_rt &&
           sgx_resource(ctx->framebuffer.cbufs[0].texture)->texture) {
          if (!epi.blend) {
             epi.blend = 1;
