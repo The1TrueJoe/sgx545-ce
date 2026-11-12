@@ -715,6 +715,38 @@ fault names that address. Attempt 16 has two programs, each with the data row an
   again.
 - If neither faults, the PDS doesn't execute our first code row at all.
 
+## After the sixteenth attempt: does the PDS fetch the program at all?
+
+Attempt 16 (log 2026-11-12-0116): neither F1 (a DOUTD from 0x0e840000) nor F2 (a BRA past the
+code arena) faulted, at 0xa70 = 6 or 16.
+- 0xa70 and 0xa6c read back as written.
+- The fault check worked as before.
+
+So our first code row doesn't execute as the SGX545's encoding. F2 has one loophole: a
+narrower BRA target field could wrap into mapped memory. F1 has none.
+
+That leaves two readings: the SGX530's PDS decodes these words differently, or it never
+fetches and executes them at all. A fault can tell them apart: point the fetch itself at
+an unmapped page.
+
+**Attempt 17**, each variant followed by the recovery reset:
+
+| Variant | Change | A BIF fault at … means |
+|---|---|---|
+| P3 | before the kick: `PDS_INV0`-`3` = 1 (DSC b0) and `PDS_INV_CSC` = 1 (KICK b0), all K-named on the SGX530; then the baseline, and F1 | no fault expected. If F1 now faults at 0x0e840000, a stale PDS cache hid our code |
+| P2 | 0xa6c = 0x1000 (the code start 64 KiB past PDS0; read it back, and use the widest value that sticks) | 0x0ec14000 (or wherever the start lands): the PDS fetches code from memory at its start row |
+| P1 | 0xa68 = 0x01040000, the offset of the empty 0x0e840000 from `PDS_EXEC_BASE` | 0x0e840000: the PDS fetches its program (data or code) from memory |
+
+Order: the baseline, P3, P2, P1, then the fault check.
+
+Reading:
+- **P1 doesn't fault:** the PDS never fetches the program. `PDS_PC_BASE` only latches the
+  start address, and the dispatch stalls before any fetch: a resource, a data-store
+  allocation or an event-side condition.
+- **P1 faults but P2 doesn't:** it fetches the data but not the code row.
+- **Both fault:** the PDS fetches our code and doesn't execute it as the SGX545's
+  encoding. The PDS ISA itself is then the question.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
