@@ -762,9 +762,11 @@ static bool timer_moved(struct pvrsgx_device *sdev)
 	return !read_poll_timeout(sgx_rd, t, t, 1000, 100000, false, sdev, SGX_CR_EVENT_TIMER);
 }
 
-static int start_sweep(struct pvrsgx_device *sdev, u32 *hc)
+static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
+	/* The clock status before the first kick, what a reset should return to. */
+	u32 idle = clk_idle, clk;
 	char when[64];
 	int err;
 
@@ -775,6 +777,15 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc)
 			sdev->sweep_variant = v;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
+			/*
+			 * The SGX530's SOFT_RESET has no PDS bit: a unit still busy
+			 * here makes this variant depend on the last one.
+			 */
+			clk = sgx_rd(sdev, cr->clkgatestatus);
+			if (clk != idle)
+				drm_warn(&sdev->base,
+					 "sweep variant %u: clock status 0x%08x after the reset, 0x%08x before the first kick: not independent of variant %u\n",
+					 v, clk, idle, v - 1);
 			*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
 			err = init_script_part2(sdev);
 			if (err)
@@ -805,6 +816,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
 	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
+	u32 clk_idle = 0;
 	int err;
 
 	WRITE_ONCE(sdev->powered, true);
@@ -876,15 +888,17 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		return err;
 
 	hc[HOSTCTL_INIT_STATUS] = 0;
-	if (sdev->family->event_pds_guessed)
+	if (sdev->family->event_pds_guessed) {
+		clk_idle = sgx_rd(sdev, cr->clkgatestatus);
 		bringup_diag(sdev, "before the kick");
+	}
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
 	init_kick(sdev);
 
 	err = 0;
 	if (first && stage1_sweep && sdev->family->event_pds_guessed)
-		err = start_sweep(sdev, hc);
+		err = start_sweep(sdev, hc, clk_idle);
 	if (!err)
 		err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (first && probes_wanted(sdev))
