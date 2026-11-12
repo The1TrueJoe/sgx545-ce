@@ -282,7 +282,7 @@ static const struct pvrsgx_usse_form pvrsgx_usse_forms[] = {
 	{ 0xf840000800000000ull, 0xe840000000000000ull, USSE_OK, 17 },	/* eld.d */
 	{ 0xf840000800000000ull, 0xe840000800000000ull, USSE_OK, 17 },	/* eld.q */
 	{ 0xf840000000000000ull, 0xe800000000000000ull, USSE_OK, 16 },	/* ld */
-	{ 0xf80000800fe00000ull, 0xf000000000000000ull, USSE_OK, 18 },	/* st */
+	{ 0xf80000800fe00000ull, 0xf000000000000000ull, USSE_STORE, 18 },	/* st */
 	{ 0xff30f00000000000ull, 0xf930000000000000ull, USSE_OK, 19 },	/* atst8 */
 	{ 0xf87fe1fffffc0000ull, 0xf800000000000000ull, USSE_REFUSE, 20 },	/* ba */
 	{ 0xff7fe3fffffc0000ull, 0xf800004000000000ull, USSE_BR, 20 },	/* br */
@@ -293,7 +293,7 @@ static const struct pvrsgx_usse_form pvrsgx_usse_forms[] = {
 	{ 0xff7fe3fffffc0000ull, 0xfd00004000000000ull, USSE_BR, 20 },	/* br */
 	{ 0xff7fe3fffffc0000ull, 0xfe00004000000000ull, USSE_BR, 20 },	/* br */
 	{ 0xff70f1cb0fe00000ull, 0xfb30000000000000ull, USSE_OK, 21 },	/* depthf */
-	{ 0xff30000000000000ull, 0xfb20000000000000ull, USSE_OK, 21 },	/* emit */
+	{ 0xff30000000000000ull, 0xfb20000000000000ull, USSE_EMIT, 21 },	/* emit */
 	{ 0xffffb7feffffffffull, 0xf820000000000000ull, USSE_OK, 20 },	/* idf */
 	{ 0xfffb000000000000ull, 0xfc10000000000000ull, USSE_REFUSE, 20 },	/* imo */
 	{ 0xf87fe7ffffffffffull, 0xf800008000000000ull, USSE_REFUSE, 20 },	/* lapc */

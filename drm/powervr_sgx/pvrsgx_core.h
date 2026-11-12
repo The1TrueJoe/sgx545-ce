@@ -30,6 +30,17 @@ struct pvrsgx_cmd_core;
 /* A BIF directory or table invalidate and a data invalidate never in one command. */
 #define PVRSGX_QUIRK_BRN_28889			BIT(0)
 
+/*
+ * What UPLOAD_CODE refuses on a core beyond the instruction table
+ * (pvrsgx_usse.c). On a single-context core the firmware's memory is in
+ * every client's directory, so a client task's write could reach it: no
+ * memory store, and no emit, whose PBE address the program sets, until the
+ * end-of-tile program's address is checked (gap 19, docs/porting/cores/
+ * sgx530.md).
+ */
+#define PVRSGX_USSE_NO_STORE	BIT(0)
+#define PVRSGX_USSE_NO_EMIT	BIT(1)
+
 /* The USSE instruction set, for the shader validator's tables. */
 enum pvrsgx_isa {
 	PVRSGX_ISA_SGX545,
@@ -128,6 +139,8 @@ struct pvrsgx_core_family {
 	u32 features;
 	/** @isa: Its USSE instruction set. */
 	enum pvrsgx_isa isa;
+	/** @usse_policy: PVRSGX_USSE_NO_*. */
+	u32 usse_policy;
 	/** @num_dir_lists: BIF directory lists (SGX_FEATURE_BIF_NUM_DIRLISTS). */
 	u32 num_dir_lists;
 	/** @va_bits: Device-virtual address bits (SGX_FEATURE_ADDRESS_SPACE_SIZE). */

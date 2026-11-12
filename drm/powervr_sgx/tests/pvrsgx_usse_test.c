@@ -113,6 +113,47 @@ static void usse_test_reasons(struct kunit *test)
 	}
 }
 
+/*
+ * A core's policy refuses each st and emit form that the table alone
+ * accepts, and nothing else: each form's own match value, all operands 0.
+ */
+static void usse_test_policy(struct kunit *test)
+{
+	const u32 all = PVRSGX_USSE_NO_STORE | PVRSGX_USSE_NO_EMIT;
+	unsigned int stores = 0, emits = 0;
+
+	for (int i = 0; i < ARRAY_SIZE(pvrsgx_usse_forms); i++) {
+		const struct pvrsgx_usse_form *f = &pvrsgx_usse_forms[i];
+		u32 own = f->kind == USSE_STORE ? PVRSGX_USSE_NO_STORE :
+			  f->kind == USSE_EMIT ? PVRSGX_USSE_NO_EMIT : 0;
+		enum pvrsgx_usse_refusal why0, why;
+		u64 w = f->match;
+		bool abs = false;
+		s64 bad0, bad;
+
+		bad0 = pvrsgx_usse_scan_policy(PVRSGX_ISA_SGX545, 0, &w, 1, 2, 512, 0x100,
+					       &abs, &why0);
+		bad = pvrsgx_usse_scan_policy(PVRSGX_ISA_SGX545, all, &w, 1, 2, 512, 0x100,
+					      &abs, &why);
+		KUNIT_EXPECT_NE(test, why0, PVRSGX_USSE_REFUSAL_POLICY);
+		if (!own || bad0 >= 0) {
+			/* Refused by the table anyway, or not a form the policy names. */
+			KUNIT_EXPECT_EQ(test, bad, bad0);
+			KUNIT_EXPECT_EQ(test, why, why0);
+			continue;
+		}
+		KUNIT_EXPECT_EQ(test, bad, 0);
+		KUNIT_EXPECT_EQ(test, why, PVRSGX_USSE_REFUSAL_POLICY);
+		/* The other flag alone leaves it alone. */
+		KUNIT_EXPECT_EQ(test, pvrsgx_usse_scan_policy(PVRSGX_ISA_SGX545, all & ~own, &w, 1,
+							      2, 512, 0x100, &abs, &why), -1);
+		stores += own == PVRSGX_USSE_NO_STORE;
+		emits += own == PVRSGX_USSE_NO_EMIT;
+	}
+	KUNIT_EXPECT_GT(test, stores, 0);
+	KUNIT_EXPECT_GT(test, emits, 0);
+}
+
 /* Every slot set holds slots the checker knows, with pieces that fit a word. */
 static void usse_test_table(struct kunit *test)
 {
@@ -134,6 +175,7 @@ static struct kunit_case pvrsgx_usse_test_cases[] = {
 	KUNIT_CASE(usse_test_phas_place),
 	KUNIT_CASE(usse_test_reasons),
 	KUNIT_CASE(usse_test_table),
+	KUNIT_CASE(usse_test_policy),
 	{}
 };
 

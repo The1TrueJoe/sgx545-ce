@@ -22,6 +22,8 @@ enum pvrsgx_usse_kind {
 	USSE_REFUSE,
 	USSE_BR,
 	USSE_PHAS,
+	USSE_STORE,	/* st: allowed unless PVRSGX_USSE_NO_STORE */
+	USSE_EMIT,	/* emit: allowed unless PVRSGX_USSE_NO_EMIT */
 };
 
 enum pvrsgx_usse_slot_kind {
@@ -155,8 +157,9 @@ static s64 refuse(enum pvrsgx_usse_refusal *why, enum pvrsgx_usse_refusal r, u32
 }
 
 /**
- * pvrsgx_usse_scan() - Check USSE code before it goes into a code object
+ * pvrsgx_usse_scan_policy() - Check USSE code before it goes into a code object
  * @isa: The core's instruction set.
+ * @policy: PVRSGX_USSE_NO_*: what the core refuses beyond the table.
  * @w: The instructions.
  * @n: Number of @w.
  * @first: Instruction index @w[0] will sit at in the object.
@@ -171,8 +174,8 @@ static s64 refuse(enum pvrsgx_usse_refusal *why, enum pvrsgx_usse_refusal r, u32
  *
  * Return: the index in @w of the first refused instruction, or -1.
  */
-s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 obj_insts,
-		     s64 place, bool *abs, enum pvrsgx_usse_refusal *why)
+s64 pvrsgx_usse_scan_policy(enum pvrsgx_isa isa, u32 policy, const u64 *w, u32 n, u32 first,
+			    u32 obj_insts, s64 place, bool *abs, enum pvrsgx_usse_refusal *why)
 {
 	const struct pvrsgx_usse_form *forms = isas[isa].forms;
 
@@ -199,6 +202,14 @@ s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 ob
 		switch (f->kind) {
 		case USSE_OK:
 			break;
+		case USSE_STORE:
+			if (policy & PVRSGX_USSE_NO_STORE)
+				return refuse(why, PVRSGX_USSE_REFUSAL_POLICY, i);
+			break;
+		case USSE_EMIT:
+			if (policy & PVRSGX_USSE_NO_EMIT)
+				return refuse(why, PVRSGX_USSE_REFUSAL_POLICY, i);
+			break;
 		case USSE_BR:
 			target = (s64)first + i + sign_extend64(w[i] & USSE_TARGET, 17);
 			if (target < 0 || target >= obj_insts)
@@ -222,6 +233,13 @@ s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 ob
 	return -1;
 }
 
+/* pvrsgx_usse_scan_policy() with nothing refused beyond the table. */
+s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 obj_insts,
+		     s64 place, bool *abs, enum pvrsgx_usse_refusal *why)
+{
+	return pvrsgx_usse_scan_policy(isa, 0, w, n, first, obj_insts, place, abs, why);
+}
+
 const char *pvrsgx_usse_refusal_name(enum pvrsgx_usse_refusal why)
 {
 	static const char *const names[] = {
@@ -231,6 +249,7 @@ const char *pvrsgx_usse_refusal_name(enum pvrsgx_usse_refusal why)
 		[PVRSGX_USSE_REFUSAL_KIND] = "refused instruction",
 		[PVRSGX_USSE_REFUSAL_BRANCH] = "branch target outside the object",
 		[PVRSGX_USSE_REFUSAL_PHAS] = "phase target outside the object",
+		[PVRSGX_USSE_REFUSAL_POLICY] = "refused on this core",
 	};
 
 	return why < ARRAY_SIZE(names) ? names[why] : "?";

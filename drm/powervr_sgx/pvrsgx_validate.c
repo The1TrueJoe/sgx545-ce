@@ -156,8 +156,9 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 		goto out_unlock;
 	}
 	place = code_place_mapped(obj);
-	bad = pvrsgx_usse_scan(sdev->family->isa, buf, args->size / 8, args->offset / 8,
-			       obj->size / 8, place, &abs, &why);
+	bad = pvrsgx_usse_scan_policy(sdev->family->isa, sdev->family->usse_policy, buf,
+				      args->size / 8, args->offset / 8, obj->size / 8, place,
+				      &abs, &why);
 	if (bad >= 0) {
 		args->bad_offset = args->offset + bad * 8;
 		drm_dbg_driver(drm, "UPLOAD_CODE: word at 0x%llx refused: %s\n",

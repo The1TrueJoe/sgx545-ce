@@ -42,6 +42,8 @@ REFUSE = (
 POLICY = dict({n: 'USSE_REFUSE' for n in REFUSE}, **{
     'br': 'USSE_BR',			# relative target: inside the object
     'phas.i': 'USSE_PHAS',		# absolute next phase: inside the object
+    'st': 'USSE_STORE',			# a memory store: per core (pvrsgx_core.h)
+    'emit': 'USSE_EMIT',		# an emit, the PBE's among them: per core
 })
 
 # Fields narrowed to the values the compilers emit (field: values).

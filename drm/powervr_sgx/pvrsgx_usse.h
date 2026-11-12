@@ -36,8 +36,12 @@ enum pvrsgx_usse_refusal {
 	 * crosses a code base window.
 	 */
 	PVRSGX_USSE_REFUSAL_PHAS,
+	/* Refused on this core (its &pvrsgx_core_family.usse_policy). */
+	PVRSGX_USSE_REFUSAL_POLICY,
 };
 
+s64 pvrsgx_usse_scan_policy(enum pvrsgx_isa isa, u32 policy, const u64 *w, u32 n, u32 first,
+			    u32 obj_insts, s64 place, bool *abs, enum pvrsgx_usse_refusal *why);
 s64 pvrsgx_usse_scan(enum pvrsgx_isa isa, const u64 *w, u32 n, u32 first, u32 obj_insts,
 		     s64 place, bool *abs, enum pvrsgx_usse_refusal *why);
 const char *pvrsgx_usse_refusal_name(enum pvrsgx_usse_refusal why);

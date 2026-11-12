@@ -176,6 +176,11 @@ static const struct pvrsgx_core_family families[] = {
 		.num_dir_lists = 1,
 		.va_bits = 28,
 		.heaps = &sgx530_heaps,
+		/*
+		 * NO_EMIT until the kernel validates the client's end-of-tile
+		 * program (the vc4 model; docs/porting/cores/sgx530.md, gap 19).
+		 */
+		.usse_policy = PVRSGX_USSE_NO_STORE | PVRSGX_USSE_NO_EMIT,
 		.quirks = PVRSGX_QUIRK_BRN_28889,
 		.event_pds_guessed = true,
 		/* Its task's stores to EDMPROTECT pages fault (stage 1, log 2026-11-12-0630). */
