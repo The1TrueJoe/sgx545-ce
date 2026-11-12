@@ -5,6 +5,10 @@
 
 #include <kunit/test.h>
 
+#include <linux/err.h>
+#include <linux/mman.h>
+#include <linux/uaccess.h>
+
 #define R(f, o, sz, st, n) ((struct drm_powervr_sgx_cache_range){ .handle = 1, .flags = (f), \
 	.offset = (o), .size = (sz), .stride = (st), .rows = (n) })
 #define RD DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ
@@ -82,8 +86,30 @@ static void prime_test_range_array(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, job.ranges);
 }
 
+/* An element longer than the kernel's with a non-zero tail: -E2BIG, before any lookup. */
+static void prime_test_range_tail(struct kunit *test)
+{
+	struct {
+		struct drm_powervr_sgx_cache_range r;
+		u64 tail;
+	} big = { .r = R(RD, 0, 64, 0, 1), .tail = 1 };
+	struct drm_powervr_sgx_obj_array arr = { .stride = sizeof(big), .count = 1 };
+	struct pvrsgx_job job = {};
+	unsigned long user;
+
+	user = kunit_vm_mmap(test, NULL, 0, PAGE_SIZE, PROT_READ | PROT_WRITE,
+			     MAP_ANONYMOUS | MAP_PRIVATE, 0);
+	KUNIT_ASSERT_FALSE(test, IS_ERR_VALUE(user));
+	KUNIT_ASSERT_NE(test, user, 0);
+	KUNIT_ASSERT_EQ(test, copy_to_user((void __user *)user, &big, sizeof(big)), 0);
+	arr.array = user;
+	KUNIT_EXPECT_EQ(test, pvrsgx_prime_ranges(NULL, &arr, &job), -E2BIG);
+	KUNIT_EXPECT_EQ(test, job.nranges, 0);
+}
+
 static struct kunit_case pvrsgx_prime_test_cases[] = {
 	KUNIT_CASE(prime_test_range_array),
+	KUNIT_CASE(prime_test_range_tail),
 	KUNIT_CASE(prime_test_range_accepts),
 	KUNIT_CASE(prime_test_range_refuses),
 	{}
