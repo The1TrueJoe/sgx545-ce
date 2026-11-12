@@ -12,7 +12,7 @@ what to read back, what each result means and when to stop. The facts behind it 
 
 - **The event-program registers.** powervr_sgx uses the SGX545's offsets (0xa58 enable,
   0xa68 program address, 0xa6c/0xa70 data). They are a guess (G): no GPL header names
-  them for any core. Joseph decides whether anything confirms them before stage 1, and
+  them for any core. The board owner decides whether anything confirms them before stage 1, and
   nothing here depends on that answer. Either way the driver's guard stays on: it reads the
   four before writing them, and it refuses to kick if the program address doesn't read
   back.
@@ -765,7 +765,7 @@ or attribute allocation, or some other resource the setup didn't give it.
 0xabc = 0xe. Those offsets sit in the same block as the event-PDS registers, which turned
 out to be at the SGX545's offsets on the SGX530. Our SGX530 init writes none of them.
 
-**Attempt 18, approved** (the coordinator, under Joseph's standing go and with the board on
+**Attempt 18, approved** (the coordinator, under the standing go and with the board on
 the smart plug). Seven offsets inside the SGX register block, each with its known SGX545
 value: no ranges, no sweeps, no other offsets.
 
@@ -1566,7 +1566,7 @@ fd6a024d…, dst3 854e77b8… (packaged 43860788…, abc1853a…, be8af3a4…, a
    is the most informative remaining probe; it's joint (driver `pds0` + a USSE-read image).
 2. **An AM335x vendor capture.** TI's DDK SGX530 microkernel works; a capture of how it sets
    up the EDM task (temps, phases, register file) would show the answer directly, the way the
-   SGX545 capture did. If Joseph can get a board, capture beats continued probing here.
+   SGX545 capture did. If a board can be obtained, capture beats continued probing here.
 
 ## After the fortieth attempt: probe (c) was malformed, not answered
 

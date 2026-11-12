@@ -114,4 +114,4 @@ Each core has an owner who tests it on real hardware and reviews changes to it.
 
 | Core | Owner |
 |---|---|
-| SGX545 | Joseph Telaak |
+| SGX545 | maintainer |

@@ -1,6 +1,6 @@
 # Single-context cores in powervr_sgx (the SGX530)
 
-The design for cores with one memory context, approved 2026-11-11 (with Joseph's D13,
+The design for cores with one memory context, approved 2026-11-11 (with decision D13,
 section 2) and implemented as section 8 lists. It covers how the core table expresses
 what the SGX530 lacks, and what the VM, the scheduler and the firmware loading do on a core
 with one memory context. The facts and their tags are in
@@ -114,7 +114,7 @@ last one: a slot names only a directory the kernel wrote, so a client can make a
 translate through another client's directory, but never through memory no directory
 maps.
 
-**Decision D13 (Joseph, 2026-11-11): opt-in.** A single-context core runs only with the
+**Decision D13 (2026-11-11): opt-in.** A single-context core runs only with the
 module parameter `powervr_sgx.allow_unisolated=1`.
 - Without it, the probe reads `CORE_ID` and `CORE_REVISION`, logs why it refuses the core,
   and stops before any write.
