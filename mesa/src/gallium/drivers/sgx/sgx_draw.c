@@ -166,6 +166,8 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
       return false;
    }
    t.scanout = res->wrapped;
+   /* a planar colour buffer: this pass's plane */
+   t.va += ctx->rt_plane * sgx_tex_plane_stride(&res->base);
    /* the render is the framebuffer's size: with attachments of different
     * sizes that is the smallest (st takes their intersection), which may be
     * less than the colour buffer's */
@@ -187,7 +189,8 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
    bool clears_only = sgx_recording(ctx) && ctx->frame_clears &&
                       sgxws_frame_objects(ctx->hw) == ctx->frame_clears;
 
-   if (sgx_recording(ctx) && ctx->recording != res) {
+   if (sgx_recording(ctx) &&
+       (ctx->recording != res || ctx->recording_plane != ctx->rt_plane)) {
       SGX_DBG(SYNC, "target switch: %s %ux%u -> %s %ux%u\n",
               util_format_short_name(ctx->recording->base.format),
               ctx->recording->base.width0, ctx->recording->base.height0,
@@ -214,6 +217,7 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
       return false;
    ctx->recording = res;
    ctx->recording_zs = zs;
+   ctx->recording_plane = ctx->rt_plane;
    /* its ZLS buffer is stored into by this render: freeing it flushes and
     * waits (sgx_resource_destroy).  After sgxws_begin, which may have
     * flushed another target's frame: the next kick is this render's. */
@@ -229,8 +233,72 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
 
 static unsigned target_mask(const struct sgx_context *ctx);
 
+/* GL's colour mask as bytes of the word a raw 32-bit colour buffer gets:
+ * an R32 word, or the plane of channel rt_plane of an RG32 / RGBA32 one, is
+ * that one channel, all four bytes or none */
+static unsigned
+word_mask(const struct sgx_context *ctx, unsigned mask)
+{
+   if (!ctx->framebuffer.nr_cbufs || !ctx->framebuffer.cbufs[0].texture ||
+       !sgx_tex_raw32(ctx->framebuffer.cbufs[0].format))
+      return mask;
+   return mask >> ctx->rt_plane & 1 ? PIPE_MASK_RGBA : 0;
+}
+
+/* the planes of a planar colour buffer (RG32 2, RGBA32 4), 0 for others */
+static unsigned
+planar_planes(const struct sgx_context *ctx)
+{
+   if (!ctx->framebuffer.nr_cbufs || !ctx->framebuffer.cbufs[0].texture)
+      return 0;
+   unsigned n = sgx_tex_raw32(ctx->framebuffer.cbufs[0].format);
+   return n > 1 ? n : 0;
+}
+
+/* the bound colour mask of render target 0 */
+static unsigned
+colour_mask(const struct sgx_context *ctx)
+{
+   return ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA;
+}
+
+static void clear_one(struct pipe_context *pctx, unsigned buffers,
+                      uint32_t color_clear_mask, uint8_t stencil_clear_mask,
+                      const struct pipe_scissor_state *scissor_state,
+                      const union pipe_color_union *color, double depth,
+                      unsigned stencil);
+
+/* A planar colour buffer is cleared a plane at a time (channel c's value
+ * into plane c), depth and stencil with the first */
 static void
 sgx_clear(struct pipe_context *pctx, unsigned buffers,
+          uint32_t color_clear_mask, uint8_t stencil_clear_mask,
+          const struct pipe_scissor_state *scissor_state,
+          const union pipe_color_union *color, double depth, unsigned stencil)
+{
+   struct sgx_context *ctx = sgx_context(pctx);
+   unsigned planes = planar_planes(ctx);
+
+   if (!planes) {
+      clear_one(pctx, buffers, color_clear_mask, stencil_clear_mask,
+                scissor_state, color, depth, stencil);
+      return;
+   }
+   for (unsigned c = 0; c < planes; c++) {
+      union pipe_color_union v = {.ui = {color->ui[c]}};
+      unsigned b = c ? buffers & PIPE_CLEAR_COLOR0 : buffers;
+
+      if (!(buffers & PIPE_CLEAR_COLOR0) && c)
+         break;
+      ctx->rt_plane = c;
+      clear_one(pctx, b, color_clear_mask >> c & 1 ? PIPE_MASK_R : 0,
+                stencil_clear_mask, scissor_state, &v, depth, stencil);
+   }
+   ctx->rt_plane = 0;
+}
+
+static void
+clear_one(struct pipe_context *pctx, unsigned buffers,
           uint32_t color_clear_mask, uint8_t stencil_clear_mask,
           const struct pipe_scissor_state *scissor_state,
           const union pipe_color_union *color, double depth, unsigned stencil)
@@ -263,6 +331,10 @@ sgx_clear(struct pipe_context *pctx, unsigned buffers,
    bool rg_whole = tm != PIPE_MASK_RGBA && (cm & tm) == tm;
 
    cm = rg_whole ? PIPE_MASK_RGBA : cm & tm;
+   /* an R32 word, or a plane, is one channel: its four bytes or none */
+   if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
+       sgx_tex_raw32(ctx->framebuffer.cbufs[0].format))
+      cm = cm & PIPE_MASK_R ? PIPE_MASK_RGBA : 0;
    wmask = (cm & PIPE_MASK_B ? 1 : 0) | (cm & PIPE_MASK_G ? 2 : 0) |
            (cm & PIPE_MASK_R ? 4 : 0) | (cm & PIPE_MASK_A ? 8 : 0);
    /* a depth-only clear writes no colour (mask 0) */
@@ -427,9 +499,9 @@ build_state(struct sgx_context *ctx, struct sgxws_state *st)
 {
    const struct pipe_rasterizer_state *rs =
       ctx->rasterizer ? &ctx->rasterizer->base : NULL;
-   unsigned mask =
-      (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
-      target_mask(ctx);
+   unsigned mask = word_mask(
+      ctx, (ctx->blend ? ctx->blend->base.rt[0].colormask : PIPE_MASK_RGBA) &
+              target_mask(ctx));
 
    memset(st, 0, sizeof(*st));
    st->depth_func = depth_func(ctx);
@@ -447,6 +519,16 @@ build_state(struct sgx_context *ctx, struct sgxws_state *st)
    memcpy(st->vp_translate, ctx->viewport.translate, sizeof(st->vp_translate));
    st->line_width = rs ? rs->line_width : 1.0f;
    build_stencil(ctx, st);
+   /* a later pass of a planar colour buffer: the fragments the first pass
+    * kept, near enough (depth EQUAL; stencil off, a fragment that failed it
+    * there passes here when its depth is equal: docs/GL3.md), writing
+    * neither */
+   if (ctx->rt_later_pass) {
+      if (st->depth_func)
+         st->depth_func = SGXWS_NEVER + PIPE_FUNC_EQUAL;
+      st->depth_write = false;
+      st->stencil = false;
+   }
 }
 
 /* The pixels a draw reaches, in the target's memory order: the viewport's
@@ -1595,7 +1677,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
       if (ctx->blend && ctx->blend->enable && !int_rt)
          epi = ctx->blend->hw[has_alpha];
       if (int_rt && sgx_tex_raw32(cf))
-         mask = mask & PIPE_MASK_R ? PIPE_MASK_RGBA : 0;
+         mask = word_mask(ctx, mask);
       else if (int_rt && !has_alpha)
          mask &= ~PIPE_MASK_A; /* the 1 it was created and cleared with */
       if (!has_alpha && !int_rt)
@@ -2083,10 +2165,26 @@ sgx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    if (ctx->stats.on)
       t = os_time_get_nano();
    ctx->base_instance = info->start_instance;
-   for (unsigned i = 0; i < info->instance_count; i++) {
-      ctx->instance = i;
-      sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws, num_draws);
+   /* a planar colour buffer (RG32, RGBA32): the draw once a channel, into
+    * its plane; the first pass the colour mask lets through tests and writes
+    * depth and stencil, the later ones only test depth (build_state) */
+   unsigned planes = planar_planes(ctx), cm = planes ? colour_mask(ctx) : 1;
+   bool drawn = false;
+
+   for (unsigned c = 0; c < MAX2(planes, 1); c++) {
+      if (planes && !(cm >> c & 1) && (drawn || c + 1 < planes))
+         continue;
+      ctx->rt_plane = c;
+      ctx->rt_later_pass = drawn;
+      for (unsigned i = 0; i < info->instance_count; i++) {
+         ctx->instance = i;
+         sgx_draw_vbo_impl(pctx, info, drawid_offset, indirect, draws,
+                           num_draws);
+      }
+      drawn = true;
    }
+   ctx->rt_plane = 0;
+   ctx->rt_later_pass = false;
    ctx->instance = ctx->base_instance = 0;
    if (!ctx->stats.on)
       return;

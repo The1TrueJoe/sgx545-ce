@@ -833,7 +833,8 @@ lower_shadow(nir_shader *nir, const uint8_t *compare, const uint16_t *swz)
  * (sgx_resource_target; the compiler's rt_packed): output 0's channels as
  * the colour word's B, G, R, A bytes for a target of 8 bits a channel, their
  * low bytes (PBE format 1 stores them R, G, B, A); for R32 the value
- * itself.  data: the variant's rt_int. */
+ * itself; for plane c of an RG32 or RGBA32 one, channel c.  data: the
+ * variant's rt_int. */
 static bool
 pack_int_output(nir_builder *b, nir_intrinsic_instr *st, void *data)
 {
@@ -849,8 +850,10 @@ pack_int_output(nir_builder *b, nir_intrinsic_instr *st, void *data)
    nir_def *v = st->src[0].ssa, *word;
    unsigned n = v->num_components, wm = nir_intrinsic_write_mask(st);
 
-   if (kind == 2) {
-      word = nir_channel(b, v, 0);
+   if (kind >= 2) {
+      /* R32: the value; a plane of RG32 / RGBA32 (kind 3 + c): channel c */
+      unsigned c = kind == 2 ? 0 : kind - 3;
+      word = c < n ? nir_channel(b, v, c) : nir_imm_int(b, 0);
    } else {
       static const unsigned shift[4] = {16, 8, 0, 24}; /* r, g, b, a */
 
@@ -1602,7 +1605,10 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    /* an integer colour buffer takes its own packing (pack_int_output) */
    if (ctx->framebuffer.nr_cbufs && ctx->framebuffer.cbufs[0].texture &&
        util_format_is_pure_integer(ctx->framebuffer.cbufs[0].format))
-      rt_int = sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) ? 2 : 1;
+      rt_int = sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) > 1
+                  ? 3 + ctx->rt_plane /* a plane: channel rt_plane */
+               : sgx_tex_raw32(ctx->framebuffer.cbufs[0].format) ? 2
+                                                                 : 1;
    BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
       const struct pipe_sampler_view *v = ctx->views[unit];
 

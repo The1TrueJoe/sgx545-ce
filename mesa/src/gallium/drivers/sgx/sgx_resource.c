@@ -565,9 +565,14 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
       t->t1_format = 0x0d;
       t->raw = true;
       break;
-   /* R32: the program's word is the value, which format 0 stores as it is */
+   /* R32: the program's word is the value, which format 0 stores as it is;
+    * RG32 and RGBA32 a plane a pass (the draw's rt_plane, begin_frame) */
    case PIPE_FORMAT_R32_UINT:
    case PIPE_FORMAT_R32_SINT:
+   case PIPE_FORMAT_R32G32_UINT:
+   case PIPE_FORMAT_R32G32_SINT:
+   case PIPE_FORMAT_R32G32B32A32_UINT:
+   case PIPE_FORMAT_R32G32B32A32_SINT:
       t->pbe_format = 0;
       t->t1_format = SGX_TEXSTATE_FORMAT_F32;
       t->raw = true;

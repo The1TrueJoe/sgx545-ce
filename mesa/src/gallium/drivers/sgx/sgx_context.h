@@ -134,7 +134,7 @@ struct sgx_pipe_shader {
                          ordered (sgx_tex_bgra) */
    uint32_t depth;    /* units bound to a depth texture (sgx_tex_depth) */
    /* colour buffer 0 is an integer format (pack_int_output): 0 not, 1 one of
-    * 8 bits a channel, 2 R32 */
+    * 8 bits a channel, 2 R32, 3 + c channel c's plane of RG32 / RGBA32 */
    uint8_t rt_int;
    /* units bound to an RGBA32 / RG32 texture, read word by word (the
     * compiler's tex_r32x4 / tex_r32x2), and those whose s clamps */
@@ -196,6 +196,12 @@ struct sgx_context {
    unsigned num_rts;
    struct sgx_resource *recording; /* the target of the frame being recorded */
    struct sgx_resource *recording_zs; /* and its depth/stencil buffer */
+   /* An RG32 or RGBA32 colour buffer is rendered a pass a channel into its
+    * planes (sgx_tex_plane_stride): the plane the draw or clear is on, the
+    * frame's plane, and whether an earlier pass of this draw already wrote
+    * depth and stencil (a later one tests depth EQUAL, writes neither) */
+   unsigned rt_plane, recording_plane;
+   bool rt_later_pass;
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_viewport_state viewport;

@@ -286,13 +286,13 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           format != PIPE_FORMAT_R8_UINT && format != PIPE_FORMAT_R8_SINT &&
           format != PIPE_FORMAT_R8G8_UINT && format != PIPE_FORMAT_R8G8_SINT &&
           format != PIPE_FORMAT_R32_UINT && format != PIPE_FORMAT_R32_SINT &&
-          /* not a render target the PBE can write (128 bits a pixel), but
-           * st asks for it before it exposes EXT_texture_integer: claimed
-           * under SGX_DEBUG=glsl130 alone, so the other integer formats can
-           * be tested (a draw into one is wrong) */
+          /* RG32 and RGBA32: a pass a channel into their planes; under
+           * SGX_DEBUG=glsl130 until that passes on a board */
           !((sgx_drv_debug & SGX_DEBUG_GLSL130) &&
             (format == PIPE_FORMAT_R32G32B32A32_UINT ||
-             format == PIPE_FORMAT_R32G32B32A32_SINT)))
+             format == PIPE_FORMAT_R32G32B32A32_SINT ||
+             format == PIPE_FORMAT_R32G32_UINT ||
+             format == PIPE_FORMAT_R32G32_SINT)))
          return false;
       /* integer render targets aren't multisampled */
       if (sample_count > 1 && util_format_is_pure_integer(format))
