@@ -1006,6 +1006,57 @@ TEST_F(sgx_compile_test, fragment_dependent_sample)
       EXPECT_FALSE(out.iters[i].sample) << "a PDS sample";
 }
 
+/* a 16-tap filter on one texture and 4 taps on another: every sample is
+ * dependent, and the samples of one sampler share a texture state block */
+TEST_F(sgx_compile_test, fragment_dependent_samples_share_texture_state)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp[2];
+   for (unsigned t = 0; t < 2; t++) {
+      smp[t] = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+         t ? "t1" : "t0", -1);
+      smp[t]->data.binding = t;
+   }
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *c = nir_load_var(&b, uv);
+   nir_def *sum = NULL;
+   for (unsigned k = 0; k < 20; k++) {
+      nir_deref_instr *sd = nir_build_deref_var(&b, smp[k >= 16]);
+      struct nir_tex_builder tb = {};
+      tb.coord = nir_fadd(
+         &b, c, nir_imm_vec2(&b, (k % 4 + 1) * 0.25f, (k / 4) * 0.25f));
+      tb.texture_deref = sd;
+      tb.sampler_deref = sd;
+      tb.dim = GLSL_SAMPLER_DIM_2D;
+      tb.dest_type = nir_type_float32;
+      nir_def *texel = nir_build_tex_struct(&b, nir_texop_tex, tb);
+      sum = sum ? nir_fadd(&b, sum, texel) : texel;
+   }
+   nir_store_var(&b, col, sum, 0xf);
+
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 20u);
+   EXPECT_EQ(out.n_dep_states, 2u);
+   for (unsigned i = 0; i < out.n_samples; i++) {
+      const struct sgx_sample_info *x = &out.samples[i];
+      EXPECT_TRUE(x->dependent) << i;
+      EXPECT_LT(x->state, out.n_dep_states) << i;
+      EXPECT_EQ(
+         x->state,
+         out.samples[x->sampler == out.samples[0].sampler ? 0
+                                                          : out.n_samples - 1]
+            .state)
+         << i;
+   }
+   EXPECT_NE(out.samples[0].state, out.samples[out.n_samples - 1].state);
+}
+
 /* a discard without split_phases: one program, the test into the keep
  * predicate and the feedback nop, no phase 1 */
 TEST_F(sgx_compile_test, fragment_discard_one_phase)

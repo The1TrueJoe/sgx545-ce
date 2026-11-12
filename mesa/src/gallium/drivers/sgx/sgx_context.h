@@ -46,8 +46,6 @@ struct sgx_const {
 #define SGX_K_TEXSIZE       1000
 #define SGX_K_TEXSIZE_UNITS 8
 
-#define SGX_MAX_DEP_SAMPLES 8
-
 /* the fragment driver block's register that sets gl_FrontFacing's sense:
  * bit 0 clear when gallium's front_ccw is set (A/B against the DDK) */
 #define SGX_SA_FRONT 5
@@ -76,12 +74,12 @@ struct sgx_pipe_shader {
    uint64_t *code1;
    unsigned n_code1;
    int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
-   /* dependent samples: the SA register of each one's 4 texture state words,
-    * and its sampler */
-   unsigned dep_sa[SGX_MAX_DEP_SAMPLES], dep_sampler[SGX_MAX_DEP_SAMPLES],
-      n_deps;
+   /* dependent samples' texture states (one per sampler and texel format):
+    * the SA register of each one's 4 words, and its sampler */
+   unsigned dep_sa[SGX_MAX_DEP_STATES], dep_sampler[SGX_MAX_DEP_STATES],
+      n_dep_states;
    /* the texel comes back F16 into two registers (T3 01028800) */
-   bool dep_f16[SGX_MAX_DEP_SAMPLES];
+   bool dep_f16[SGX_MAX_DEP_STATES];
    struct {
       struct sgxws_blend key;
       uint32_t code;

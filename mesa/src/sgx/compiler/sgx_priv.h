@@ -216,7 +216,7 @@ struct sgx_ctx {
    int face_f32;  /* ... as 1.0 / 0.0 (face_int: made when a select needs it) */
    struct sgx_ins *face_and; /* the and that makes face_int */
    unsigned colour_pa;
-   struct sgx_sample *samples[16];
+   struct sgx_sample *samples[SGX_MAX_SAMPLES];
    unsigned n_samples;
 
    struct set *skip;        /* NIR instructions the backend doesn't emit */

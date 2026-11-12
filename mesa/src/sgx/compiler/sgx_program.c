@@ -152,6 +152,21 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          o->reg = s->dependent ? phys(c, &s->ins->op[0]) : s->pa;
          if (s->dependent && smp_template(c, s, &o->smp))
             goto fail;
+         if (s->dependent) {
+            unsigned k = 0;
+            while (k < out->n_samples &&
+                   !(out->samples[k].dependent &&
+                     out->samples[k].sampler == o->sampler &&
+                     out->samples[k].f16 == o->f16))
+               k++;
+            if (k == out->n_samples &&
+                out->n_dep_states == SGX_MAX_DEP_STATES) {
+               sgx_fail(c, "too many texture states");
+               goto fail;
+            }
+            o->state =
+               k < out->n_samples ? out->samples[k].state : out->n_dep_states++;
+         }
          block(&blocks, SGX_BLOCK_SAMPLE, 0, out->n_samples++, 0);
          out->n_tex++;
          break;

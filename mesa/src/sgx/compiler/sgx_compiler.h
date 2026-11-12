@@ -202,6 +202,9 @@ struct sgx_sample_info {
     * tex_bgra unit too (the TAG converts by channel) */
    uint8_t f16;
    uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
+   /* dependent: its texture state block (n_dep_states), shared by the
+    * dependent samples of one sampler and texel format */
+   uint8_t state;
 };
 
 /* The program's structure, in order: runs of code, labels, branches, the
@@ -222,7 +225,9 @@ struct sgx_block {
    unsigned at, n;
 };
 
-#define SGX_MAX_SAMPLES 16
+#define SGX_MAX_SAMPLES 64
+/* 8 samplers, each with an RGBA8 and an F16 texel */
+#define SGX_MAX_DEP_STATES 16
 
 struct sgx_shader {
    unsigned stage; /* MESA_SHADER_VERTEX / _FRAGMENT */
@@ -252,9 +257,9 @@ struct sgx_shader {
    unsigned n_clip, clip_o;
    /* SA registers used from sa_base on (constants and the compiler's own) */
    unsigned sa_slots;
-   /* Constants past sa127 (counting 4 per dependent sample of a fragment
-    * program after sa_slots): the most-used stay in SA, every constant gets
-    * a word of a memory block the driver fills per draw like the SA ones,
+   /* Constants past sa127 (counting a fragment program's dependent texture
+    * state blocks after sa_slots): the most-used stay in SA, every constant
+    * gets a word of a memory block the driver fills per draw like the SA ones,
     * and the program loads the others from it (ld.a.d). Word 0 is unused.
     * The driver loads SA slot mem_base_slot[j] with the block's address +
     * 512 * j. 0: no block */
@@ -267,6 +272,9 @@ struct sgx_shader {
    unsigned n_code;
    unsigned n_samples;
    struct sgx_sample_info samples[SGX_MAX_SAMPLES];
+   /* fragment: the dependent samples' texture state blocks, 4 SA words each
+    * after sa_slots */
+   unsigned n_dep_states;
    struct sgx_block *blocks;
    unsigned n_blocks;
    /* split_phases: phase 1's program and its blocks (0: one block) */

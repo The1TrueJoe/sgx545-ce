@@ -1573,7 +1573,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          fsk[4] = 0xee00;
       }
       /* a dependent sample's texture state: the DOUTT words, in SA */
-      for (unsigned j = 0; j < fs->n_deps; j++) {
+      for (unsigned j = 0; j < fs->n_dep_states; j++) {
          unsigned unit = fs->dep_sampler[j];
          struct pipe_sampler_view *view =
             unit < PIPE_MAX_SAMPLERS ? ctx->views[unit] : NULL;
@@ -1592,7 +1592,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
          sampled |= 1u << unit;
          SGX_DBG(
             DRAW,
-            "  dependent sample %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
+            "  dependent texture state %u: unit %u %s %ux%u target %u levels %u, state sa%u %08x %08x %08x %08x\n",
             j, unit, util_format_short_name(view->format),
             view->texture->width0, view->texture->height0,
             view->texture->target, view->texture->last_level + 1, fs->dep_sa[j],
