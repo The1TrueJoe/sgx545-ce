@@ -684,6 +684,37 @@ The list covers dwords and rows.
   question, with a test of whether row 1's content changes the trace at all: zeros, HALTs,
   or the self-loop at row 1.
 
+## After the fifteenth attempt: detect execution by a fault
+
+Attempt 15 (log 2026-11-12-0054) ran programs A, C and D under eleven 0xa70 values. The PC
+only ever showed the start row, 0 and an unexplained value: 0xf7dc this time, from the same
+image that gave 0xf33c before. The run didn't read 0xa70 back, so whether each value latched
+is U.
+
+**`PDS_PC_BASE` may not be a running PC.** Its name, and every value so far being a
+program's start row, fit "the start address of the program last dispatched" (G). Then
+attempts 14 and 15 couldn't have seen a branch target even if the branch ran, and the PC
+trace can't detect execution.
+
+**A detector that doesn't need it: a fault at an address we choose.** The SGX530 reports BIF
+faults (attempt 10). An instruction that reads an unmapped address proves it executed if the
+fault names that address. Attempt 16 has two programs, each with the data row and 0xa6c = 1:
+
+| Program | Row 1 | Proves, by a fault at |
+|---|---|---|
+| F1 | MOVS dest 3 (DOUTD) from a layout-independent data row `[0x0e840000, 0, 0, 0]`: word 0 is the source address, word 1 the control (0 = 1 dword), then HALT | 0x0e840000: the PDS executes a MOVS and its DOUTD |
+| F2 | `bra #0x4000`, then three HALTs | the first code word + 0x10000, past the code arena and the PD table: the PDS executes a BRA and fetches its target |
+
+- 0x0e840000 is in the TI layout's reserved code heap, which is empty, and differs from
+  the kicker check's 0x0e800000, so the two can't be confused.
+- Run each with 0xa70 = 6, then with 0xa70 = 16, read back after the write. Run the
+  recovery reset between variants, as the fault check does.
+- If F2 faults where predicted, the PDS runs the SGX545's BRA, and the earlier "loop didn't
+  hold" readings were the PC register's meaning, not the PDS.
+- If F1 faults, MOVS and DOUT work too, and the DOUTU's own contents are the question
+  again.
+- If neither faults, the PDS doesn't execute our first code row at all.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
