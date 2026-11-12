@@ -641,8 +641,8 @@ diff -ruN a/drm/powervr_sgx/pvrsgx_vm.c b/drm/powervr_sgx/pvrsgx_vm.c
 diff -ruN a/drm/powervr_sgx/pvrsgx_vm.h b/drm/powervr_sgx/pvrsgx_vm.h
 --- a/drm/powervr_sgx/pvrsgx_vm.h	2026-11-12 13:59:23
 +++ b/drm/powervr_sgx/pvrsgx_vm.h	2026-11-12 13:59:23
-@@ -60,6 +60,7 @@
- struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
+@@ -59,6 +59,7 @@
+ struct pvrsgx_vm *pvrsgx_vm_lookup_user(struct pvrsgx_file *sfile, u32 handle);
  void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
  int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size);
 +bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev);
