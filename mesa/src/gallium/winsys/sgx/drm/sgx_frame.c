@@ -1335,8 +1335,15 @@ int
 sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
             const struct sgxws_target *t)
 {
-   if (c->rt == rt && c->target.va == t->va)
+   /* the same memory: the frame goes on.  The caller's buffer is the one
+    * the frame now renders for (sgxws_target_bo): another resource of the
+    * same memory may have begun it, and a readback of this one must find
+    * its render here and end it (fixed-clip-enables under
+    * ARB_framebuffer_object read the frame before, with this left stale) */
+   if (c->rt == rt && c->target.va == t->va) {
+      c->target.bo = t->bo;
       return 0;
+   }
    if (c->rt) {
       int e = sgxws_flush(c, 0);
 
