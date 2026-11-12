@@ -462,6 +462,18 @@ def build(a):
         # SGX530 needs it before any work (no USE_UNLIMITED_PHASES).
         if USSE_PHAS:
             a.phas()
+        if USSE_LIMMTEST is not None:
+            # does limm write its destination on the 530? limm rK, #0xa5a then
+            # str rK to EVENT_TIMER (str reads the register). EVENT_TIMER = 0xa5a =>
+            # limm wrote rK; rK's stable leftover (r5 0x0c004000, r17 0x0fd79000) =>
+            # limm did not write it. No ld before it, so nothing faults first.
+            k = USSE_LIMMTEST
+            a.i(f"limm r{k}, #{DIAG_TIMER}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r{k}")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         a.patch(17, "ctlblk")
         if USSE_LDGATE:
             # isolate one ld.a.d: load from base at USSE_LDOFF, then signal with str
