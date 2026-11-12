@@ -49,6 +49,24 @@ ALLOW = {
     'br': {'PRED': range(7), 'LINK': [0]},	# no pn; no link (lapc is refused)
     'phas.i': {'WAIT': [0, 1, 2, 7], 'RATE': [0, 1, 2]},
     'op0xd6': {'N': [0], 'F3_6': [0]},		# as the state-emit programs
+    # Only the program-start state (efo's F16 off, C10 on), which no compiler
+    # changes: format control is then known everywhere without following it.
+    'setfc': {'A0': [0], 'A1': [1]},
+}
+
+# How an operand's number bit 6 reads, by the expression of its MODE
+# parameter: a flag under format select (a bit of the word), a flag under C10
+# format control (on, as at program start, since setfc is pinned) for
+# r/o/pa/sa/i only, or part of the number. efo's F16 format control is off at
+# program start, so its numbers are whole.
+MODE_EXPRS = {
+    None: ('USSE_NUM', None),
+    '#zero': ('USSE_NUM', None),
+    '#float-smode': ('USSE_SEL', 'FMT'),
+    '#test-mode': ('USSE_SEL', 'FMT'),
+    '#fc-c10': ('USSE_C10', None),
+    '#fc-f16': ('USSE_NUM', None),
+    '#efo-mode': ('USSE_NUM', None),
 }
 
 # Fields the description leaves free but only one value of which is ever
@@ -141,7 +159,10 @@ def leaf_forms(root):
         if n in children or anc[-1].get('name') != '#instruction':
             continue	# inner nodes, operand hierarchies
         mask = match = 0
-        fields, slots = {}, {}
+        fields, slots, derived = {}, {}, {}
+        for bs in anc:
+            for d in bs.findall('derived'):
+                derived.setdefault(d.get('name'), d.get('expr'))
         for bs in anc:
             m, v = patterns(bs)
             if mask & m:
@@ -153,15 +174,24 @@ def leaf_forms(root):
             for d in bs.findall('derived'):
                 if d.get('type') in SLOT_KINDS:
                     e = d.find('expr')
-                    mode = any(p.get('as') == 'MODE' for p in d.findall('param'))
-                    slots.setdefault(d.get('name'), (d.get('type'), mode,
+                    mp = [p.get('name') for p in d.findall('param') if p.get('as') == 'MODE']
+                    mexpr = derived.get(mp[0]) if mp else None
+                    if mexpr not in MODE_EXPRS:
+                        raise SystemExit('%s: MODE expression %r' % (n, mexpr))
+                    slots.setdefault(d.get('name'), (d.get('type'), MODE_EXPRS[mexpr],
                                      e.text if e is not None else d.get('expr')))
         out = []
         when = SLOT_WHEN.get(n, {})
         for sname in when:
             if sname not in slots or when[sname] not in fields:
                 raise SystemExit('%s: SLOT_WHEN %s' % (n, sname))
-        for sname, (kind, mode, expr) in sorted(slots.items()):
+        for sname, (kind, (mode, sel), expr) in sorted(slots.items()):
+            if sel is not None:
+                if sel not in fields:
+                    raise SystemExit('%s: no format select field %s' % (n, sel))
+                mode = (mode, fields[sel][0])
+            else:
+                mode = (mode, 0xff)
             p = slot_pieces(expr, fields, n)
             lo, w, _ = p[0]
             if mask & width_mask(lo, lo + w - 1) == width_mask(lo, lo + w - 1):
@@ -208,7 +238,7 @@ def main():
     slotsets = []
     rows = []
     for n, mask, match, fields, slots in leaves:
-        key = tuple((SLOT_KINDS[k], int(mode), cond, tuple(p)) for _, k, mode, cond, p in slots)
+        key = tuple((SLOT_KINDS[k], mode, cond, tuple(p)) for _, k, mode, cond, p in slots)
         if key not in slotsets:
             slotsets.append(key)
         for m, v in entries(n, mask, match, fields):
@@ -219,7 +249,8 @@ def main():
             raise SystemExit('a form has more slots or pieces than the kernel holds')
     if as_json:
         json.dump([{'name': n, 'mask': m, 'match': v, 'kind': k,
-                    'slots': [{'name': s, 'type': t, 'mode': m, 'when': c, 'pieces': p}
+                    'slots': [{'name': s, 'type': t, 'mode': m[0], 'sel': m[1], 'when': c,
+                               'pieces': p}
                               for s, t, m, c, p in sl]}
                    for n, m, v, k, _, sl in rows], sys.stdout, indent=1)
         return
@@ -238,10 +269,14 @@ def main():
             continue
         out.write('\t[%d] = {\n' % i)
         for kind, mode, cond, pieces in key:
-            out.write('\t\t{ %s, %s, %s, {%s } },\n' % (
-                kind, 'true' if mode else 'false',
-                'USSE_ALWAYS' if cond == 0xff else str(cond),
-                ','.join(' { %d, %d, %d }' % p for p in pieces)))
+            fmt = mode[0] if mode[1] == 0xff else 'USSE_SEL(%d)' % mode[1]
+            head = '\t\t{ %s, %s, %s,' % (kind, fmt, 'USSE_ALWAYS' if cond == 0xff else str(cond))
+            tail = '{%s } },\n' % ','.join(' { %d, %d, %d }' % p for p in pieces)
+            # One line if it fits in 100 columns, tabs as 8.
+            if len(head.expandtabs(8)) + 1 + len(tail) - 1 <= 100:
+                out.write(head + ' ' + tail)
+            else:
+                out.write(head + '\n\t\t  ' + tail)
         out.write('\t},\n')
     out.write('};\n\n')
     out.write('/* %d forms, %d entries */\n' % (len(leaves), len(rows)))

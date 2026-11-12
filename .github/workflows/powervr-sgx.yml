@@ -27,6 +27,7 @@ on:
       - tools/gen/sgxgen.*
       - tools/tex/sgxtex.*
       - mesa/src/sgx/isa/sgx.xml
+      - tools/isa/hw.py
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
@@ -181,3 +182,13 @@ jobs:
           path: out/
           retention-days: 14
 
+  # The validator's instruction check on the host: the kernel's own
+  # pvrsgx_usse.c against random, mutated and per-form words, every accepted
+  # one decoded by tools/isa/hw.py (drm/tests/usse_fuzz).
+  usse-fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fuzz the USSE check
+        run: python3 -I drm/tests/usse_fuzz/usse_fuzz.py --seed 1 -n 200000 --per-form 2000

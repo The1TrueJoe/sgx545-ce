@@ -165,7 +165,6 @@ static const struct { uint32_t lo, hi; const char *text; } usse_corpus[] = {
 	{ 0x01010101, 0xfa100000, "smlsi #1, #1, #1, #1" },
 	{ 0x0101c601, 0xfa100002, "smlsi #1, #1, #0.zyxw, #1" },
 	{ 0x0004ffe4, 0xfa100001, "smlsi #0, #4, #-1, #0.xyzw" },
-	{ 0x00000101, 0xfd100000, "setfc #1, #1" },
 	{ 0x00000100, 0xfd100000, "setfc #0, #1" },
 	{ 0x00000000, 0xf9200000, "wdf" },
 	{ 0x00000000, 0xf9200001, "wdf [drc=1]" },
@@ -200,7 +199,6 @@ static const struct { uint32_t lo, hi; const char *text; } usse_corpus[] = {
 	{ 0x00004103, 0xc8000000, "fpma r0, r1, r2, r3 [c0=s0 c1=s1 c2=s2 a0=s0a]" },
 	{ 0x00004103, 0xc9300fd8, "fpma r0, -r1, r2, r3 [c0=1-s1a c1=1-s1 c2=s2a a0=1-s1a a1c a2c sat]" },
 	{ 0x00004103, 0x98102220, "ima8 r0, r1, r2, r3 [rpt=3 c0=s1 c1=s1a c2=s2 a0=s1a]" },
-	{ 0x00000000, 0xfd100000, "setfc #0, #0" },
 	{ 0x080020e4, 0x81000004, "sop2 r64, r65, r100 [c1=one c2=zero a1=zero a2=one]" },
 	{ 0x08c023c8, 0x9110fa00, "sopwm r70, r71, r72 [c1=one c2=one cop=sub aop=sub]" },
 	{ 0x00000100, 0xfd100000, "setfc #0, #1" },
@@ -212,7 +210,6 @@ static const struct { uint32_t lo, hi; const char *text; } usse_corpus[] = {
 	{ 0x30004100, 0x382038c4, "efo r0, sa1, r2, i0 [nosched rpt=4 d=a0]" },
 	{ 0x3fbf3e83, 0x38100080, "efo r125, r124, r125, i3 [d=i1]" },
 	{ 0x00004103, 0x3aa00000, "(p1) efo r0, r1, r2, r3 [skipinv d=a0]" },
-	{ 0x00000101, 0xfd100000, "setfc #1, #1" },
 	{ 0x107040b4, 0x38230080, "efo r3, r0.f16.hi, r1, c52 [d=a0 a=s0+s2/s1+s2]" },
 	{ 0x007021c4, 0x38230000, "efo r3, r0.f16.lo, r1.f16.hi, r2.f16.lo [d=a0 a=s0+s2/s1+s2]" },
 	{ 0x00000100, 0xfd100000, "setfc #0, #1" },
@@ -233,4 +230,4 @@ static const struct { uint32_t lo, hi; const char *text; } usse_corpus[] = {
 	{ 0xc0010283, 0xb0300200, "ssum16 r0, sa4, sa5, r3 [fmt=o8]" },
 	{ 0x00004103, 0xb93045a8, "firv r0, r1, r2, r3 [fmt=s8 a5=2 coef=5 shift=21 a8=3]" },
 };
-/* 229 instructions */
+/* 226 instructions */

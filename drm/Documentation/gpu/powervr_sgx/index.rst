@@ -102,13 +102,24 @@ description of the instruction set that Mesa's compiler uses
   (``fdual``), whose second operation's operands aren't checked; and forms
   this core doesn't have or whose meaning is not known.
 - ``br``: the target must be inside the object.
-- ``phas.i``: a target other than 0 counts from the USSE heap's base and must
-  be inside the object where it is mapped. The object must be mapped when such
-  code is uploaded, at one place only, and can't be mapped anywhere else
-  afterwards.
+- ``phas.i``: a target other than 0 counts from the code base the task's PDS
+  program names. Measured: base 0 with offset 0x88380 runs code in window 1,
+  and its targets still count from base 0. The check takes the base a compiler
+  names, the 512 KiB window of the USSE heap the task's first instruction is
+  in, and the target must be inside the object where it is mapped. Such an
+  object must lie in one window, so that base is the same for every entry in
+  it, be mapped when its code is uploaded, at one place in its window only,
+  and can't be mapped at another place afterwards. A PDS program that names
+  another base only moves the target within the reach described above.
+- ``setfc``: only ``setfc #0, #1``, the format control a program starts
+  with, so the check knows the format control of every instruction without
+  following the program.
 - Each operand: no writes to constants or globals; no reads of the globals
   past ``g45``, which are not documented; internal registers ``i0``-``i3``
-  and index registers ``idx1``-``idx2`` only.
+  and index registers ``idx1``-``idx2`` only. Bit 6 of an operand number is
+  a format flag only under format select (the instruction's ``fmt`` bit) or,
+  for the color classes' ``r``, ``o``, ``pa``, ``sa`` and ``i`` operands, C10
+  format control; everywhere else it is part of the number.
 
 **What is not checked, and why.** Memory accesses (``ld``, ``st``, texture
 samples, the pixel back end's tile writes through ``emit``, PDS DMA) go

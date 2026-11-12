@@ -1053,6 +1053,30 @@ static void t_upload_code_phas(int fd)
 	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, 2 * PAGE), -EINVAL);	/* moved */
 	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
 	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
+	/* Targets count from the code base window: the same place one window on is fine. */
+	assert_eq(vm_map(fd, vm, bo, at + 0x80000, 0, 2 * PAGE), 0);
+	assert_eq(vm_unmap(fd, vm, at + 0x80000, 2 * PAGE), 0);
+}
+
+/* In window 1, a phas.i target counts from the window, not the heap; no straddling. */
+static void t_upload_code_phas_window(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint32_t bo2 = create_bo(fd, 2 * PAGE, DRM_POWERVR_SGX_BO_CODE);
+	const uint64_t at = 0x37090000, first = (at - 0x37080000) / 8;
+	uint64_t w, bad;
+
+	assert_eq(vm_map(fd, vm, bo, at, 0, 2 * PAGE), 0);
+	w = 0xfa440000ull << 32 | ((at - 0x37000000) / 8 + 4);
+	assert_eq(upload(fd, bo, 0, &w, 8, &bad), -EINVAL);	/* counted from the heap */
+	w = 0xfa440000ull << 32 | (first + 4);
+	assert_eq(upload(fd, bo, 0, &w, 8, NULL), 0);
+	assert_eq(vm_unmap(fd, vm, at, 2 * PAGE), 0);
+	/* Across the window boundary at 0x37080000: no absolute targets. */
+	assert_eq(vm_map(fd, vm, bo2, 0x37080000 - PAGE, 0, 2 * PAGE), 0);
+	w = 0xfa440000ull << 32 | ((0x80000 - PAGE) / 8 + 4);
+	assert_eq(upload(fd, bo2, 0, &w, 8, &bad), -EINVAL);
+	assert_eq(vm_unmap(fd, vm, 0x37080000 - PAGE, 2 * PAGE), 0);
 }
 
 /* RT datasets */
@@ -1462,6 +1486,7 @@ static const struct {
 	{ "upload-code-corpus", t_upload_code_corpus },
 	{ "upload-code-reject", t_upload_code_reject },
 	{ "upload-code-phas", t_upload_code_phas },
+	{ "upload-code-phas-window", t_upload_code_phas_window },
 	{ "upload-code-invalid", t_upload_code_invalid },
 	{ "upload-code-mapped", t_upload_code_mapped },
 	{ "submit-other-vm", t_submit_other_vm },
