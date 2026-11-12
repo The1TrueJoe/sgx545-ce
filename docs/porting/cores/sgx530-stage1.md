@@ -1268,7 +1268,7 @@ for operand rK. Run these first:
 
 Then document the `ld.a.d` operand decode C in ISA.md and hand it to cleanroom-isa.
 
-## After the thirty-first attempt: limm doesn't write its register
+## After the thirty-first attempt: limm doesn't write its register (and str is suspect)
 
 Attempt 31 (log 2026-11-12-0350): the register-number sweep has **no pattern** — r0 →
 0x0055d000, r1 → 0x0722a000, r2 → 0x003e1000, r4 → 0x09e06000, r6 → 0x0503f000, r8 →
@@ -1281,9 +1281,21 @@ So **`limm` never wrote its destination** — that is why the `limm` value was i
 (attempt 30) and the leftovers are stable. `ld.a.d`'s operand decode is fine; the question is
 `limm`'s destination encoding, or whether `limm` executes at all on the SGX530.
 
-**Attempt 32: does `limm` write?** (`cores/sgx530_limmwr_r{5,17,0}.py`). `phas.i`, then
+(Numbering: the `sgx530_ldpre_*` preload probes ran as attempt 32; the `limmwr` test below is
+attempt 33, `aluwr` attempt 34.)
+
+**ld0nb already proved `limm` doesn't write (C).** Attempt 29's `ld.a.d r3, r5, #0` after
+`limm r5, #0x0f004000` faulted at r5's leftover 0x0c004000, not the limm value — so the load
+read r5's unwritten leftover. The fault page, not `str`, is the readout, and it already
+settles that `limm` does not write its destination.
+
+**Attempt 33: `limm` write via `str`** (`cores/sgx530_limmwr_r{5,17,0}.py`). `phas.i`, then
 `limm rK, #0xa5a`, then `str rK` to `EVENT_TIMER` (`str` reads the register back). No load
-before it, so nothing faults first.
+before it, so nothing faults first. **Result (log 2026-11-12-...):** no fault, the task
+self-loops, and `EVENT_TIMER` stays 0 — so `limm`, `str` and `ba` all execute without
+faulting, but `str` to `EVENT_TIMER` reads back 0 (its write doesn't take, or isn't
+visible). So attempt 33 can't separate `limm` from `str`, and `str` is suspect too. The
+fault-page readout (below) sidesteps both.
 
 | Probe | reg | img sha256 (16) | packaged (16) |
 |---|---|---|---|
@@ -1304,10 +1316,11 @@ The which-register probes (`sgx530_ldpre_r*`) confirmed it (C): each faulted at 
 register's unwritten leftover, never at a preloaded `(N+1)<<16` value, so preloading with
 `limm` reached no register.
 
-**Pair it with a non-`limm` write** (`cores/sgx530_aluwr.py`): `or r5, r5, r17` (r5's
-leftover 0x0c004000 | r17's 0x0fd79000 = 0x0fd7d000), then `ld.a.d r3, r5, #0`. A fault at
-**0x0fd7d000** means the ALU wrote r5; at **0x0c004000** means it did not. Image 0x48 (sha256
-81dd5785…, same through asm.py and `sgx-asm`; crc 0x1dd7e9fa, packaged 18ce50ba…).
+**Attempt 34: does a non-`limm` write land?** (`cores/sgx530_aluwr.py`) — the clean test,
+with the fault page as readout (no `str`). `or r5, r5, r17` (r5's leftover 0x0c004000 |
+r17's 0x0fd79000 = 0x0fd7d000), then `ld.a.d r3, r5, #0`. A fault at **0x0fd7d000** means the
+ALU wrote r5; at **0x0c004000** means it did not. Image 0x48 (sha256 81dd5785…, same through
+asm.py and `sgx-asm`; crc 0x1dd7e9fa, packaged 18ce50ba…).
 - `limmwr` leftover + `aluwr` 0x0fd7d000 → the register file writes, but `limm` specifically
   does not. The fix is a SGX530 `limm` decode (destination field or opcode), handed to
   cleanroom-isa.
