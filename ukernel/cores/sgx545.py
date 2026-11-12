@@ -346,6 +346,7 @@ USSE_LIMMTEST = None         # limm rK then str rK to EVENT_TIMER: does limm wri
 USSE_ALUWRITE = False        # or r5,r5,r17 then ld r5: does a non-limm ALU write land? (cores/sgx530_aluwr.py)
 USSE_PHAS_TEMPS4 = 0         # phas.i temps4 field (temporaries/4); 0 = the normal phas.i #0,#0
 USSE_ALU_NOPS = 0            # aluwr: nops between the or and the ld (pairing/latency test)
+USSE_ALU_DST = 5             # aluwr: the register the or writes and the ld reads back
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
