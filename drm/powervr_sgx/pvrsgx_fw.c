@@ -414,6 +414,15 @@ void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
 	ida_free(&sdev->fw.pd_slots, slot);
 }
 
+/*
+ * Bring-up only: map the kernel data arena without EDMPROTECT on a core whose
+ * event registers are a guess. On the SGX530 the task's stores to that arena
+ * fault (stage 1, log 2026-11-12-0620).
+ */
+static bool stage1_no_edmprotect;
+module_param(stage1_no_edmprotect, bool, 0444);
+MODULE_PARM_DESC(stage1_no_edmprotect, "Map the kernel data arena without EDMPROTECT on a guessed core");
+
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
@@ -438,8 +447,9 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 
 	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, pvrsgx_heaps(sdev)->kernel_data.base,
-				DATA_ARENA_SIZE,
-				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
+				DATA_ARENA_SIZE, SGX_MMU_PTE_CACHECONSISTENT |
+				(stage1_no_edmprotect && sdev->family->event_pds_guessed ?
+				 0 : SGX_MMU_PTE_EDMPROTECT));
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, pvrsgx_heaps(sdev)->kernel_code.base,
@@ -669,6 +679,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 		data1 = sdev->sweep_data1 - 1;
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DM2)
 		uk_dm = 2;
+	if (sdev->sweep_cb15_dm)
+		uk_dm = sdev->sweep_cb15_dm - 1;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -895,22 +907,22 @@ MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unname
 struct sweep_variant {
 	u32 flags, enable, doutu0, cb15;
 	u16 regset;
+	u8 cb15_dm;
 	bool doutu_set;
 	u16 data0;
 	u8 dest, cc, data1, prog, a68_low, vendor, doutu_bit;
 };
 
 /*
- * Does st take an output as its data source? With no temporary that holds a
- * written address (stage 1, logs 2026-11-12-0350 to -0536), set PA0 instead:
- * PA0 keeps what a DOUTA writes across loads. The baseline; then the one-row
- * DOUTA program writing the address of the control block's version word to
- * PA0. A following load without the sweep then runs the store test, and the
- * status words show what it stored.
+ * A task store to the kernel data arena faults on the SGX530 (stage 1, log
+ * 2026-11-12-0620), which is mapped EDMPROTECT. Does code base 15's data
+ * master decide it? The baseline (3, the SGX545's EDM), then 0, 1 and 2. PA0
+ * already holds the control block's version word's address from the store
+ * test's DOUTA; a store that lands shows in that word, logged per variant.
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_DOUTA_1ROW | PVRSGX_SWEEP_DOUTA_CTLBLK },
+	{ .cb15_dm = 0 + 1 }, { .cb15_dm = 1 + 1 }, { .cb15_dm = 2 + 1 },
 };
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
@@ -1010,7 +1022,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2", "HALT" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
 			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ||
-			  sv->doutu_bit || sv->doutu_set || sv->regset ? "" : "baseline");
+			  sv->doutu_bit || sv->doutu_set || sv->regset ||
+			  sv->cb15_dm ? "" : "baseline");
 
 	if (sv->prog)
 		n += scnprintf(buf + n, len - n, " program %s",
@@ -1061,6 +1074,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 			       sv->flags & PVRSGX_SWEEP_DOUTA_X2 ? ".x2" : "", sv->doutu0);
 	if (sv->regset)
 		n += scnprintf(buf + n, len - n, " part-2 set 0x%x", sv->regset);
+	if (sv->cb15_dm)
+		n += scnprintf(buf + n, len - n, " code base 15 DM %u", sv->cb15_dm - 1);
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
@@ -1124,9 +1139,10 @@ static int ladder_ran(struct pvrsgx_device *sdev, const char *name, u32 *held)
 		seen = ladder_seen(sdev);
 	}
 	drm_info(&sdev->base,
-		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x\n",
+		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x, ctl 0x18 0x%x\n",
 		 name, pc[0], pc[1], pc[2], pc[3], pc[4], pc[5], pc[6], pc[7], pc[8], pc[9],
-		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+		 sgx_rd(sdev, SGX_CR_EVENT_TIMER),
+		 READ_ONCE(fw_words(sdev, PVRSGX_FW_TA3DCTL)[0x18]));
 	if (seen)
 		return 1;
 	if (!cr->pds_pc_base || !pds_held(sdev, pc, i))
@@ -1184,6 +1200,7 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_doutu_bit = 0;
 	sdev->sweep_doutu_set = false;
 	sdev->sweep_regset = 0;
+	sdev->sweep_cb15_dm = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -1281,6 +1298,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_doutu_set = sv->doutu_set;
 			sdev->sweep_cb15 = sv->cb15;
 			sdev->sweep_regset = sv->regset;
+			sdev->sweep_cb15_dm = sv->cb15_dm;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			err = exec0_fill(sdev);
 			if (err)
@@ -1301,6 +1319,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 					 "sweep variant %u: clock status 0x%08x after the reset, 0x%08x before the first kick: not independent of variant %u\n",
 					 v, clk, clk_idle, v - 1);
 			*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
+			/* The store test's word, so each variant shows its own store. */
+			WRITE_ONCE(fw_words(sdev, PVRSGX_FW_TA3DCTL)[0x18], 0);
 			err = init_script_part2(sdev);
 			if (err)
 				return err;
