@@ -2279,3 +2279,32 @@ retire, `str`/`limm` work**; no committing `st.a.d` needed (host owns memory, fe
 from the IRQ). sgx530-kernel is folding the §9 launch into the real SGX530 init
 ([sgx530-edm-path.md](sgx530-edm-path.md) §6). stor_sa is deferred (off the critical
 path; its DOUTD is built once, for real, as init's control-block DMA).
+
+## INIT TEST PASSED (§6 step 2), and a reconciliation: stores COMMIT (non-EDMPROTECT)
+
+The open microkernel reached steady-state on an OMAP3630 board under §9 real-init
+(sgx530_edm, edm_init=1): "microkernel started", ui32InitStatus=1 (host-set), event
+PDS base 0xa68 = 0x014042c0 with data 0x3/0x13d01, the keep-alive timer advancing, no
+BIF fault, no -110. **§6 step 2 is proven on hardware.**
+
+**Reconciliation — st.a.d COMMITS to non-EDMPROTECT pages under §9.** The status dump
+showed the microkernel's own heartbeat (ctlblk word 0x2a) at 135 after ~137 ms (one
+`ld+add+st.a.d` per 1 kHz tick) and the version word (0x18) written — neither written
+by the driver. So the microkernel's `st.a.d` to ctlblk COMMITS. This does **not**
+contradict stor5: EDM_PROTECT is the store gate (attempt 45, C — "the fix is to map the
+microkernel's writable structures without EDM_PROTECT"), and every §9 store probe,
+stor5 included, ran with **EDMPROTECT ON** (the vendor-requestor test, §9 step 4), so it
+dropped. The real control block is the sgx530 default **non-EDMPROTECT**, so the
+heartbeat commits. **Under §9: st.a.d commits to non-EDMPROTECT, drops to EDMPROTECT.**
+
+**Design impact (pending the kick test).** The "st.a.d drops → stateless, host-owned
+memory, pixel_done/free_done reduction (sgx530_edm)" design came from the EDMPROTECT-ON
+probes — it does **not** apply to the open microkernel's non-EDMPROTECT mappings. If all
+the microkernel-written structures (control block, CCB control, sync heap, render
+details/RT/PB) are mapped non-EDMPROTECT, the **DDK-style microkernel should work on the
+530 as-is**: the WAIT_3D/WAIT_FREE rendezvous commits (no double/no-complete), kick_adv
+advances the CCB read offset itself, and render_complete's sync writes + SW_EVENT raise
+complete the DDK way. Then **sgx530_edm and the host-owned-memory layer are unnecessary**.
+Decisive test: a single-render KICK with the **plain sgx530 image** and non-EDMPROTECT
+structures. sgx530_edm is held as the fallback (needed only if some structure must stay
+EDMPROTECT).
