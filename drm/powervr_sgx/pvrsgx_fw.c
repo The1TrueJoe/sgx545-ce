@@ -23,6 +23,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/seq_buf.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -371,7 +372,9 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 #define PDTABLE_OFFSET	0xf000
 #define PDTABLE_SLOTS	(PAGE_SIZE / sizeof(u32))
 
-static_assert(CODE_ARENA_SIZE <= PDTABLE_OFFSET && PDTABLE_OFFSET + PAGE_SIZE <= 0x10000);
+/* The PD table sits past the code arena, inside the kernel code heap's first 64 KiB. */
+static_assert(PDTABLE_OFFSET >= CODE_ARENA_SIZE);
+static_assert(SZ_64K - PAGE_SIZE >= PDTABLE_OFFSET);
 
 static int pdtable_init(struct pvrsgx_device *sdev)
 {
@@ -406,6 +409,7 @@ int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd)
 void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
 {
 	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	/* The slot names the firmware's directory before another VM can take it. */
 	wmb();
 	ida_free(&sdev->fw.pd_slots, slot);
 }

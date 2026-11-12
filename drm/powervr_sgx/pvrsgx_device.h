@@ -121,9 +121,6 @@ struct pvrsgx_fw {
 	u32 event_entry;
 };
 
-/**
- * struct pvrsgx_device - The SGX545
- */
 /* The bring-up start sweep's changes (pvrsgx_fw.c, pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_DATA0_2		BIT(0)	/* event data 0 (0xa6c) = 2 */
 #define PVRSGX_SWEEP_DOUTU_W1_0		BIT(1)	/* the event DOUTU's word 1 = 0 */
@@ -132,6 +129,9 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_TEMPS4		BIT(4)	/* the event DOUTU asks for 4 temporaries */
 #define PVRSGX_SWEEP_TEMPS0		BIT(5)	/* ... or none */
 
+/**
+ * struct pvrsgx_device - The SGX545
+ */
 struct pvrsgx_device {
 	/** @base: The DRM device. */
 	struct drm_device base;
