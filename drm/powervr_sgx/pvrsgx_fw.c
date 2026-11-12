@@ -552,7 +552,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       use_code_base_val(sdev, h->kernel_code.base, USE_CODE_BASE_DM_UKERNEL));
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
-	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);	/* unnamed; its start value */
+	sgx_wr_opt(sdev, cr->cr_b30, 0x100);	/* unnamed; its start value */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
 	sgx_wr(sdev, cr->event_pds_data0, 1);
