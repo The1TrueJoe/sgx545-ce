@@ -1126,7 +1126,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       so->prog.pa_dwords = out.n_pa;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
       /* One DOUTI per iteration, in PA order (docs/PDS.md "DOUTI"): a
-       * varying's iterator is its set + 1.  The DDK's driver also iterates a
+       * varying's iterator is its set + 1, or, with the vertex colour in set
+       * 0, the set itself (the PDS numbers the sets after the colour from 1:
+       * seen for a sample, an iteration assumed alike).
+       * The DDK's driver also iterates a
        * placeholder colour (source 0x20) in a shader without varyings; that
        * hangs the GPU when the vertex program outputs no colour, and ours
        * never do, so there is none. */
@@ -1135,6 +1138,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti);
            i++) {
          unsigned it = out.iters[i].set + 1;
+         unsigned tc = out.iters[i].set + (vary.colour ? 0 : 1);
 
          if (out.iters[i].sample) {
             /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
@@ -1154,9 +1158,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
 
             if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
                 !d->proj && d->iterate && !d->w1 && d->b25_26 == 3 &&
-                (d->src == it ||
+                (d->src == tc ||
                  (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
-               d->sample_set = it;
+               d->sample_set = tc;
                d->dim2 = !proj;
                d->proj = proj;
                so->prog.douti_tex[prev] = out.iters[i].sampler + 1;
@@ -1165,7 +1169,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                last_sample = so->prog.n_douti;
                so->prog.douti_tex[so->prog.n_douti] = out.iters[i].sampler + 1;
                so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
-                  .sample_set = it,
+                  .sample_set = tc,
                   .dim2 = !proj,
                   .proj = proj,
                   .src = 0x24,
@@ -1183,14 +1187,15 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          /* gl_FragCoord (the compiler's set 13) is source 0: x and y at pixel
           * centres in the target's memory order, z, 1/w (docs/PDS.md "DOUTI") */
          if (it == SGX_FRAGCOORD_ITER)
-            it = 0;
+            tc = 0;
          /* set 0 as the vertex colour: source 0x20, four components into
           * one register as BGRA8 */
-         bool colour = vary.colour && it == 1 && !out.iters[i].pointcoord;
+         bool colour =
+            vary.colour && out.iters[i].set == 0 && !out.iters[i].pointcoord;
 
          last_plain = so->prog.n_douti;
          so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
-            .src = colour ? 0x20 : it,
+            .src = colour ? 0x20 : tc,
             .comps = colour ? 4 : out.iters[i].comps,
             .iterate = true,
             /* 2: the provoking (last) vertex's value, 3 interpolated; only
