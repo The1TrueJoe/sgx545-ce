@@ -52,30 +52,37 @@ outputs, stores read from outputs. This is the part that makes the microkernel a
 computed state at all — the heartbeat `ld; imae; st`, dispatch `ld; test; (p0) ba`, address
 arithmetic.
 
-## 3. Rough size
+## 3. Size, from the measured register pressure
 
-**Not a mechanical rename, because of register pressure.** The microkernel writes ~20 distinct
-temporaries (r0-r17, r22, r23; the hot ones are r5, r4, r17, r2, r3, r6), across ~8 paths. The
-output bank's architectural ceiling is **~11** (the SGX530's VS-output count, **U**,
-unconfirmed), and only `o0` is tested usable. So the mapping is bounded by **peak register
-pressure** (how many temporaries are simultaneously live at the busiest instruction), not by
-the count of distinct names:
+**Not a mechanical rename, because of register pressure.** The microkernel writes 17 distinct
+temporaries across the paths, but what bounds the restructure is **peak pressure** — how many
+are simultaneously live at the busiest instruction — not the count of names.
 
-- If peak live ≤ usable outputs → a per-core register **reallocation**: a 530 renaming applied
-  in `ukernel.py`'s emit layer, plus the §2(A) attribute change in the driver. Contained — it
-  changes the register convention, not each path's logic by hand. Estimate: the emit-layer
-  remap + the PDS/attribute change + per-core gating. Moderate.
-- If peak live > usable outputs → add **memory spill** (store/reload the overflow to a scratch
-  BO). Larger and slower: each high-pressure region gets load/store scaffolding, and the
-  heartbeat/dispatch hot paths want to stay in registers. This turns a convention change into
-  a register-allocation pass.
+**Measured (offline CFG liveness pass, `ukernel/pressure.py`): peak = 12 live temporaries.** The
+pass builds the control-flow graph from the assembled SGX530 stream (2136 instructions, 133
+labels), runs backward dataflow, and takes the maximum live set. The peak sits in one hot region
+(the TA/transfer path, insns ~1120-1138); only 8 instructions reach ≥11 live, and most of the
+program runs at ≤8 (histogram: 102 insns at 8, 43 at 9, 14 at 10, 4 at 11, 4 at 12). The peak-12
+set is `{2,3,4,5,6,7,9,10,12,13,14,17}`.
 
-Two measurements decide which, both cheap:
-1. **Usable output count** — one board slot: a probe that writes `o0..o10` and reads each back
-   (same shape as the o0 probe). Tells us the real ceiling, not the doc's unconfirmed 11.
-2. **Peak register pressure** — offline, no board: a liveness pass over the assembled
-   microkernel paths. If it comes in under the ceiling from (1), the restructure is the
-   contained reallocation.
+**Two of those twelve are the loader-set bases the restructure moves to attributes.** `r17` is
+the control-block base and `r14` the PD table — §2(A) puts both in primary attributes (PA0, PA1),
+read directly as `pa0`/`pa1` (an attribute works as an `ld`/`st` base; `ld.a.d r3, pa0` is
+confirmed). They leave the scratch budget entirely. So **peak OUTPUT pressure = 12 − 2 = 10.**
+
+Against the usable-output count from attempt 42 (architectural ceiling ~11, **U**; `o0`
+confirmed):
+
+- **≥10 usable outputs → a per-core reallocation, no spill.** A 530 register remap in
+  `ukernel.py`'s emit layer (scratch → `o0..o9`), plus the §2(A) attribute change for the two
+  bases, plus per-core gating. Contained: it changes the register convention, not each path's
+  logic. This is the likely case if the bank is ~11.
+- **<10 usable outputs → reallocation + a little spill**, only in the one hot region that
+  exceeds the count (store/reload the overflow to a scratch word). Not a full spilling allocator
+  — most of the program fits, so only the ~8-instruction peak needs it. Bigger than the clean
+  case but still bounded.
+
+So the one number still pending is attempt 42's usable-output count; the pressure side is done.
 
 ## 4. Which microkernel paths change
 
