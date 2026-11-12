@@ -2261,3 +2261,21 @@ constant 0x5c3 (b24 clear). A fresh value cannot be residual, so EVENT_TIMER = *
 nails str+limm; 0xa5a or a leftover would reopen it. img
 `c72392bfcb3f71af94b6e3af699ecf361cc28e1b280b2b5f06f202d1baedc46b`, pkg
 `03e1cbd8b814da86bb13d8b1290d70e3e4653d9b514c5392aa7607fe7c4a80f9` (crc 0x6d713278).
+
+## Both EDM-path confirmations PASSED on hardware (C) — the path is GREEN
+
+Run on the OMAP3630 board (SGX530 1.2.5, core 0x01120000 rev 0x00010205), full §9,
+both images bit-identical to the artifacts:
+
+- **`sgx530_limmwr_r5_5c3` → EVENT_TIMER = 0x000005c3** (crc 0x6d713278). "before the
+  kick" read 0, so init clears EVENT_TIMER and 0x5c3 is the task's own `str`+`limm` of
+  a FRESH constant. The 0xa5a residual doubt is gone: **`str` and `limm` commit (C)**.
+- **`sgx530_ldret` → BIF_FAULT = 0x0dddd000** (crc 0x558044f1). The task loaded the
+  driver-placed sentinel from ctlblk+0x200 into r5 and fault-read r5 at exactly the
+  sentinel ⇒ the loaded value landed in the temp ⇒ **loads retire (C)**.
+
+So the EDM-with-host-memory path is fully de-risked on hardware: **temps retire, loads
+retire, `str`/`limm` work**; no committing `st.a.d` needed (host owns memory, fences
+from the IRQ). sgx530-kernel is folding the §9 launch into the real SGX530 init
+([sgx530-edm-path.md](sgx530-edm-path.md) §6). stor_sa is deferred (off the critical
+path; its DOUTD is built once, for real, as init's control-block DMA).
