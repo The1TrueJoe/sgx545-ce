@@ -103,7 +103,8 @@ The numbers are dense from 0x00. A new ioctl takes the next number.
 
 The DRM driver's version is the uAPI's: 1.0 from revision 4, the first upstream one. A
 change that only adds (an ioctl, a query, a flag, an extension) raises the minor version,
-and the new thing is used only where the minor version says it is there. Mesa refuses a
+and the new thing is used only where the minor version says it is there. Nothing is
+removed or renumbered. Mesa refuses a
 kernel whose major version isn't 1.
 
 | revision | DRM version | what changed |
@@ -131,7 +132,7 @@ the two sizes. A NULL pointer returns the size.
 |---|---|---|
 | `GPU_INFO_GET` | `core_id` and `core_revision`, raw from `EUR_CR_CORE_ID` and `EUR_CR_CORE_REVISION`; `fw_interface_version` | capture: rev `0x1000e` on the CE5300 (SRVINIT.md). gap: Cedarview's value (G25) |
 | `LIMITS_GET` | RT size and samples limits, PB min/default/max in pages, largest TA kick count | capture: default PB of 0x400 pages (STATE.md 6). gap: RT limits (G14) |
-| `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr. A quirk, once listed for a GPU, is never removed for it: userspace may rely on the kernel reporting it | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25) |
+| `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr. A quirk, once reported for a GPU, is never removed for it: userspace may rely on it being reported | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25) |
 | `HEAP_INFO_GET` | array of `drm_powervr_sgx_heap`, see section 5 | capture, section 5 |
 
 ### CREATE_BO, GET_BO_MMAP_OFFSET
