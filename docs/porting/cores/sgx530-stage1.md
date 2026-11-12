@@ -1543,6 +1543,14 @@ Ruled out: the DOUTU word-0 temp field (35), `phas.i` temps4 (36), host init-reg
 several unimplemented), and instruction pairing (38). This is a register-file / write-back
 difference, and the cheap single-variable hypotheses are exhausted.
 
+**Attempt 39 result (cheap, low registers) — flat.** `aluwr_dst0-3` all faulted at the
+destination's own leftover (r0 0x0055d000, r1 0x0722a000, r2 0x003e1000, r3 0x08439000),
+never the `or` result. So no low range of registers is writable either; the cheap register
+probes are closed. The `pa0` primary-attribute probe below (the USSE reader `sgx530_pa0.py`,
+image d69730f4…, packaged f59ce697…, built and verified; `ld.a.d r3, pa0, #0`) pairs with the
+driver's `pds0` DOUTA of 0x0e850000 into PA0: a fault at 0x0e850000 = PDS-set attributes are
+visible where temporaries aren't. The probes:
+
 **Attempt 39 (cheap, the kernel session's angle): low registers.** `cores/sgx530_aluwr_dst{0,1,2,3}.py`:
 `or rD, rD, r17` then `ld rD` for D = 0-3, to check whether a low register is a writable
 temporary where r5 isn't. Expected `or` result (fault page) if it writes: r0 0x0fd7d000, r1
