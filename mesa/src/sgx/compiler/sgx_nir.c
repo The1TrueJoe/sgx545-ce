@@ -1924,13 +1924,18 @@ assign_io(struct sgx_ctx *c)
             continue;
          struct sgx_iter *it = &c->iters[c->n_iters++];
          it->set = set;
-         it->comps = MIN2(comps, 4);
+         /* (the colour source: four components packed BGRA8 in one
+          * register) */
+         it->colour = c->vary->colour && set == 0;
+         it->comps = it->colour ? 4 : MIN2(comps, 4);
          it->pa = pa;
-         it->f16 = set16[set];
+         it->f16 = set16[set] && !it->colour;
          it->flat = flat[set] && !smooth[set];
          /* F16: in_reg holds SGX_IN_HALF | the half index */
-         pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
-         pa += it->f16 ? (it->comps + 1) / 2 : it->comps;
+         pbase[set] = it->colour ? (int)(SGX_IN_U8 | 4 * pa)
+                      : it->f16  ? (int)(SGX_IN_HALF | 2 * pa)
+                                 : (int)pa;
+         pa += it->colour ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps;
       }
       c->n_pa_inputs = pa;
       nir_foreach_shader_in_variable (var, s)

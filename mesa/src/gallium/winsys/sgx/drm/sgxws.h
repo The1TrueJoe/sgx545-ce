@@ -126,6 +126,7 @@ struct sgxws_prog {
    uint32_t tsp_prec;    /* TA state: sets with precision value <= 2 */
    bool point_size;      /* vertex: the last output dword is the point size */
    uint32_t clip_planes; /* vertex: user clip planes, output select b0-5 */
+   bool colour; /* vertex: set 0 is the vertex colour (output select b11) */
    /* fragment: */
    uint32_t sec_dwords; /* constant dwords DMA'd for the secondary program */
    struct sgx_pds_douti douti[10]; /* DOUTIs, one per iterated input or sample */

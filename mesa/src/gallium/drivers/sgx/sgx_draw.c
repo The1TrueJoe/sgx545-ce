@@ -821,6 +821,12 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
        * from 0x20 on are not varyings (0x22: the depth plane of a discard) */
       if (d->iterate && d->src > 0 && d->src < 0x20)
          need[n][0] = d->src - 1, need[n++][1] = d->comps;
+      /* the vertex colour (set 0, output select b11) */
+      if (d->iterate && d->src == 0x20) {
+         if (!vs->colour)
+            return false;
+         need[n][0] = 0, need[n++][1] = 4;
+      }
       if (d->dim2 ||
           d->proj) /* sample half: coordinate set + 1, 2-D or projected */
          need[n][0] = d->sample_set - 1, need[n++][1] = d->proj ? 3 : 2;

@@ -148,6 +148,9 @@ field of unknown width runs up to the next known field.
     <!-- 0 for a VIEWPORT_GENERATE object -->
     <field name="unknown_11_13" start="11" end="13" type="uint">
       <define name="DRAW" value="6"/>   <!-- 0x3000 -->
+      <!-- 0x3800: the first set after the position is the vertex colour,
+           the PDS's colour source (0x20) -->
+      <define name="DRAW_COLOUR" value="7"/>
       <define name="CLEAR" value="3"/>  <!-- 0x1800 -->
     </field>
     <field name="point_size" start="8" end="8" type="bool"/>   <!-- the last output is the size -->

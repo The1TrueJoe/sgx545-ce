@@ -255,9 +255,10 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->set = it->set;
       o->comps = it->comps;
       o->pa = it->pa;
-      o->regs = it->sample ? (it->f16 ? 2 : 1)
-                : it->f16  ? (it->comps + 1) / 2
-                           : it->comps;
+      o->regs = it->sample   ? (it->f16 ? 2 : 1)
+                : it->colour ? 1
+                : it->f16    ? (it->comps + 1) / 2
+                             : it->comps;
       o->f16 = it->f16;
       o->sample = it->sample;
       o->proj = it->proj;

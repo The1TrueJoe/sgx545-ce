@@ -2002,7 +2002,9 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    sgx_pack(&blk[n++], TA_STATE_OUTSELECT, os)
    {
       os.out_dwords = vs->out_dwords;
-      os.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
+      os.unknown_11_13 = vs->colour
+                            ? SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW_COLOUR
+                            : SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
       os.point_size = vs->point_size;
       os.clip_planes = vs->clip_planes;
    }
