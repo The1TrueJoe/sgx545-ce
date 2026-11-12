@@ -2089,8 +2089,16 @@ TEST_F(sgx_compile_test, fragment_packed_render_target)
    nir_variable *u = var(nir_var_uniform, glsl_uint_type(), "u_v", -1);
    nir_variable *col = var(nir_var_shader_out, glsl_uint_type(), "color",
                            FRAG_RESULT_DATA0);
-   nir_def *tile = nir_load_output(&b, 1, 32, nir_imm_int(&b, 0),
-                                   .io_semantics.location = FRAG_RESULT_DATA0);
+   nir_intrinsic_instr *lo =
+      nir_intrinsic_instr_create(b.shader, nir_intrinsic_load_output);
+   lo->num_components = 1;
+   lo->src[0] = nir_src_for_ssa(nir_imm_int(&b, 0));
+   nir_io_semantics sem = {};
+   sem.location = FRAG_RESULT_DATA0;
+   nir_intrinsic_set_io_semantics(lo, sem);
+   nir_def_init(&lo->instr, &lo->def, 1, 32);
+   nir_builder_instr_insert(&b, &lo->instr);
+   nir_def *tile = &lo->def;
    nir_store_var(&b, col,
                  nir_ior(&b, nir_iand_imm(&b, tile, 0xff000000),
                          nir_load_var(&b, u)),
