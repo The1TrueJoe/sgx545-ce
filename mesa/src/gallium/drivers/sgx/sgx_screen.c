@@ -52,6 +52,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "a sample is merged only into the previous iteration of its own set, not of another"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
+   {"glsl130", SGX_DEBUG_GLSL130,
+    "GLSL 1.30 and native integers, and so EXT_texture_integer (RG32 and RGBA32 sample wrong until the compiler fetches them word by word): for the GL 3.0 work's tests"},
    {"zlsdump", SGX_DEBUG_ZLS_DUMP,
     "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -142,6 +144,9 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
        * (without it GLSL selects over the whole array, a load per element) */
       caps->indirect_const_addr = true;
       caps->max_temps = f->gl_max_temps;
+      /* GLSL 1.30's integers (the compiler's native_integers): only with
+       * SGX_DEBUG=glsl130 until the GL 3.0 work passes on a board */
+      caps->integers = !!(sgx_drv_debug & SGX_DEBUG_GLSL130);
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = f->samplers;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
@@ -187,8 +192,10 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    caps->max_texture_cube_levels = f->max_cube_levels;
    caps->max_texture_3d_levels = 0;
    caps->max_render_targets = 1;
-   caps->glsl_feature_level = 120;
-   caps->glsl_feature_level_compatibility = 120;
+   /* 1.30 with SGX_DEBUG=glsl130 (native integers, EXT_texture_integer),
+    * for the GL 3.0 work's tests on a board */
+   caps->glsl_feature_level = caps->glsl_feature_level_compatibility =
+      sgx_drv_debug & SGX_DEBUG_GLSL130 ? 130 : 120;
    caps->essl_feature_level = 100;
    caps->max_viewports = 1;
    caps->vendor_id = screen->info->pci_vendor;
@@ -313,7 +320,8 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
       return false;
    /* RG32 and RGBA32 are stored for the compiler's word-by-word fetches
     * (sgx_tex_raw32), which it doesn't do yet: not sampled until it does */
-   if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) > 1)
+   if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) > 1 &&
+       !(sgx_drv_debug & SGX_DEBUG_GLSL130))
       return false;
    /* a raw 32-bit format is sampled NEAREST only, the one level */
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) &&
