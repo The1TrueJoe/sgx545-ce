@@ -1,0 +1,21 @@
+drm/powervr_sgx: Add the client command checks
+
+Userspace describes a job's work as plain structs, never as a firmware
+structure: a render command, one TA-kick command per kick, or a
+transfer command. Each starts with its size and a chain of extensions
+for the fields only one core has.
+
+The kernel copies each struct as copy_struct_from_user() does: a
+shorter struct reads as zeros, and non-zero bytes past what the kernel
+knows are -E2BIG. It walks the extension chain (at most 16, each name
+once; one this core doesn't accept is -EOPNOTSUPP) and checks what it
+copied, so a racing writer can't change a checked value. Every field is
+checked against the core's table: ranges, masks, alignment, and for an
+address the heap it must lie in and an extent mapped in the job's VM.
+Then the cross-field rules (depth and stencil with ZLS, tile
+rectangles), and only then does it build the firmware command from the
+checked values.
+
+The structs, their extensions and the per-core check tables come from
+one XML description. The generated tables are committed, so the build
+needs no generator.

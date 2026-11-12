@@ -110,8 +110,8 @@ archive refuse automated reads; not bypassed).
   maintainers since June (Alessio Belle, Luigi Santivetti; Matt Coster left).
   The Rogue driver shares nothing with ours. Imagination does maintain the
   Series5 SGX binding, so placement next to it is a fair question for them
-  (question 1). Our synchronous VM_MAP will be compared with their VM_BIND
-  (question 3).
+  (question 1). Our synchronous-only VM_BIND will be compared with their
+  async one (question 3).
 - **Series5 SGX device-tree work** (Andrew Davis, 2023-24; binding comments
   from H. Nikolaus Schaller, Tony Lindgren and Krzysztof Kozlowski, some
   still active in October 2026) added `img,powervr-sgx.yaml` for TI and

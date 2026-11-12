@@ -28,15 +28,21 @@ Design
   features, firmware name. Unknown cores are refused before any
   register write. The SGX535 and other Series5 cores would be new
   entries, not a new driver.
-- The GPU runs a microkernel on its shader unit. We wrote our own
+- The GPU runs a microkernel on its shader unit. I wrote my own
   (MIT, source public, linux-firmware submission to follow). The driver
   only loads an image that declares secure mode: no client page
   directory maps the firmware's memory.
-- Command streams are validated in the kernel, and shader code is
-  uploaded through an ioctl that checks every instruction.
+- Client commands are plain structs with per-core extensions, which
+  the kernel copies, checks field by field and builds the firmware
+  commands from; shader code is uploaded through an ioctl that checks
+  every instruction.
+- The GPU doesn't snoop the CPU's caches, so a job lists the byte
+  ranges of imported buffers it touches, and the kernel flushes those
+  around the job. Sync with other drivers is explicit, through the
+  dma-buf sync-file ioctls.
 - One parameter buffer (the tiler's output) for the device, shared by
   every client, as Imagination's own driver does by default: the
-  hardware keeps one free-list state, and our microkernel doesn't yet
+  hardware keeps one free-list state, and the microkernel doesn't yet
   switch it between buffers. So one client's GPU work can address
   another client's binned geometry; userspace can't map that range.
   Imagination's driver can also give each context its own buffer, so
@@ -46,7 +52,7 @@ Design
 
 Userspace
 - A Gallium driver with a NIR compiler, in a Mesa fork for now
-  (https://github.com/The1TrueJoe/sgx545-ce/tree/main/mesa); a Mesa
+  (https://github.com/The1TrueJoe/powervr_sgx/tree/main/mesa); a Mesa
   merge request will follow review of this uAPI. On the CE5300 it passes
   16,587 of 17,165 dEQP-GLES2 tests with no resets, using no vendor
   code at all.
@@ -61,12 +67,29 @@ Questions for reviewers
    renders. Is that
    the right split between the display and render drivers? The SGX535
    render work in "[RFC] drm/gma500: SGX535 render ownership, MMU and
-   failure handling" could use it too. We would rather work together
+   failure handling" could use it too. I would rather work together
    than add a second SGX stack.
-3. The uAPI (patch 1): VM_MAP is synchronous and there is no VM_BIND
+3. The uAPI (patch 1): VM_BIND is synchronous only, with no bind
    queue. Is that acceptable for hardware this old?
 4. The shared parameter buffer above: acceptable for a first version,
    or a blocker until the per-client buffer exists?
+5. Cache maintenance for imports is in SUBMIT_JOBS, as per-job byte
+   ranges, rather than a separate BO_SYNC-style ioctl. Is cache work in
+   the submit path acceptable?
+6. Write-combined shmem objects on x86. The GPU doesn't snoop, so
+   objects are map_wc, and on x86 the shmem helper changes the pages'
+   memory type for that: drm_gem_shmem_get_pages_locked() calls
+   set_pages_array_wc() and drm_gem_shmem_put_pages_locked() calls
+   set_pages_array_wb() (drm_gem_shmem_helper.c:254 and :279 in
+   v7.3.3). Each object's lifetime then costs two change_page_attr
+   runs: vm_unmap_aliases(), a TLB flush on every CPU, a clflush per
+   page, and a split of the direct map that isn't collapsed later. In
+   a window-drag profile under X it was 10.6% of the server's CPU time,
+   before Mesa cached its objects. The ARM users of the helper never
+   take this path. Is a WC page pool in the helper for x86, like the
+   one ttm_pool keeps, something the helper would take? Or is the
+   expected answer CPU-cached objects with explicit cache maintenance,
+   as panfrost offers with SYNC_BO, or TTM?
 
 Testing: CE5300 on 7.1.8 and 7.3.3 RAM-booted test kernels, the uAPI
 and frame tests under lockdep, KASAN, UBSAN and DMA-API debug. The
@@ -82,7 +105,7 @@ Joseph Telaak (8):
   drm/powervr_sgx: Load and start the microkernel
   drm/powervr_sgx: Add GEM objects, VMs and dma-buf import
   drm/powervr_sgx: Add contexts, the scheduler, fences and SUBMIT_JOBS
-  drm/powervr_sgx: Add render jobs and command stream validation
+  drm/powervr_sgx: Add render jobs and command validation
   drm/powervr_sgx: Add hang recovery
 
 To follow, each a short series of its own: transfer jobs, runtime PM,

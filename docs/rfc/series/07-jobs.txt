@@ -2,8 +2,10 @@ drm/powervr_sgx: Add contexts, the scheduler and SUBMIT_JOBS
 
 - Render and transfer contexts, each a drm_sched entity with its
   priority, on one scheduler that runs one job at a time.
-- SUBMIT_JOBS with syncobj waits and signals (binary and timeline), and
-  implicit sync on the buffers a job lists.
+- SUBMIT_JOBS with syncobj waits and signals (binary and timeline).
+  Sync is explicit: the out-fence goes on the VM's reservation as
+  bookkeeping only, and other drivers sync through the dma-buf
+  sync-file ioctls.
 - Hardware fences signaled in order from the microkernel's interrupt and
   a poll while jobs are out.
 - A job that runs past its timeout resets the GPU. Its context is
