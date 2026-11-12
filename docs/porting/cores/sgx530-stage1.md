@@ -286,6 +286,66 @@ Reading the combined run:
 A BIF fault now says the same as before; the probe pages make no new fault
 possible.
 
+## After the fourth attempt
+
+Attempt 4 (log 2026-11-11-2112) ran the probe image with `code_base_probes=1` and the
+24-temporary DOUTU. `EVENT_TIMER` stayed 0, so neither the ladder nor any probe ran.
+- The temporary count alone wasn't the block.
+- The probes fire only if some USSE task starts, so they don't decide the code-base unit.
+  They show that no task starts at an address any probe covers. The unit stays U (gap 9),
+  but it is no longer a lead.
+
+**What the SGX530's own DDK does differently: the heap layout (K).** The GPL
+`sgxconfig.h` of the SGX530 DDK 1.4 kernel places, in its 28-bit space:
+
+| Heap | Base | Size |
+|---|---|---|
+| PDS pixel | 0x0D800000 | 8 MiB |
+| PDS vertex | 0x0E000000 | 8 MiB |
+| reserved code | 0x0E800000 | 512 KiB |
+| kernel code | 0x0EC00000 | 512 KiB |
+| kernel data | 0x0F000000 | 4 MiB |
+| pixel shader | 0x0F400000 | 5 MiB |
+| vertex shader | 0x0FC00000 | 2 MiB |
+
+The general, 3D parameter, TA data and sync heaps sit below 0x0D800000.
+
+Both DDKs put the kernel code heap, which holds the event PDS program, above the PDS pixel
+heap that `PDS_EXEC_BASE` names: on the SGX545 directly above it, on the SGX530 above both
+PDS heaps, all within 24 MiB of the exec base. Ours, single-context.md section 5, is the
+only layout that puts kernel code below `PDS_EXEC_BASE` (0x02000000 against 0x02c00000).
+- If the SGX530's PDS reaches only addresses above its exec base, or within a window from
+  it, the event program is out of its reach on our layout.
+- That predicts a misdirected fetch. A fault is expected but not certain: a PDS fetch
+  outside its window may wrap or be dropped rather than translated.
+
+**Attempt 5, one variable:**
+- Move the PDS, kernel and shader heaps to the DDK's bases above. `PDS_EXEC_BASE` becomes
+  0x0D800000 (its K field is b20-27), and the kernel code heap 0x0EC00000.
+- `USE_CODE_BASE_15` = 0x0EC00000 >> 7 = 0x1d8000, inside its 24-bit field.
+- The image needs no change. It holds no heap address: its only addresses are the two
+  loader patches, `ctlblk` (r17) and `pdtable` (r14). Everything else comes through the
+  control block the host fills: host control, CCB control, the kernel CCB, and command
+  data. Branch targets count from code base 15, whatever it points at.
+  - Every other immediate is a register mask or an event bit: `EVENT_STATUS`/`HOST_CLEAR`
+    masks such as 0x20842000, `EVENT_TIMER`'s enable, the MADD invalidate 0x10000000, the
+    field-keep masks 0xf83fffff and 0x07ffffff, and the bounded waits' bits.
+  - The manifest holds only offsets.
+  - Only the probe table is layout-specific. It maps at the code-base field << k, so with
+    kernel code at 0x0EC00000 (field 0x1d8000) its addresses change, and k ≥ 8 would
+    start past 28 bits.
+- Run it with the `sgx530_diag` image and the 24-temporary DOUTU.
+
+**Free reads to add**, named in the SGX530's K header, at every sample:
+- `PDS_PC_BASE` (0x0b2c, a 30-bit address; only the SGX530 has it);
+- `PDS` (0x0abc, `DOUT_TIMEOUT_DISABLE` b6).
+
+The SGX545's vendor init script writes 0xe to 0x0abc. Our SGX530 init doesn't write it.
+Their values before and after the kick are new facts whatever attempt 5 shows.
+
+If attempt 5 is still all zero, 0xa6c/0xa70 is next, then DOUTU word 1, then the MOVS
+selects.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
