@@ -28,8 +28,8 @@ Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 | `tests/` | `sgx_eglinfo`, `sgx_es2gears` (es2gears' shaders), `sgx_cpugears` (fixed programs only); `sgx_texab.sh` and `sgx_blendab.sh`, A/B against the DDK on the EA3 |
 
 `build.sh` also links `kernel/src` into the tree as `include/sgx-kernel` (the
-bridge structures) and generates the fixed USSE programs from
-`tools/gen/mkusse.py`.
+bridge structures). The fixed USSE programs are assembly text in
+`src/sgx/compiler/sgx_fixed.c`, assembled when a context is created.
 
 ## Licensing boundary (AGENTS.md section 3.5)
 
@@ -86,11 +86,11 @@ the default path depends on the environment.
 | `SGX_DEBUG=stats` | where the time goes, every 2 s: FPS, flushes by cause, vertex cache, the winsys's waits and render latency |
 | `SGX_DEBUG=serial` | wait for every render after submitting it (GPU time per render in `stats`) |
 | `SGX_DEBUG=hangabort,flushall,flushrt` | abort at a render that does not finish; no deferred flushes; SGX_FLUSH_HW_RENDER_TARGET at a target's destruction |
-| `SGX_DEBUG=novcache,nof16,nodrvconsts` | turn off the vertex cache, F16/C10 fragment arithmetic, the driver constant formats |
-| `SGX_DEBUG=novs,nofs` | the fixed programs (gl_Position = attribute 0; gl_FragColor = a uniform or constant) for that stage |
-| `SGX_DEBUG=fsconst,attrs,blits` | measuring and tracing aids: constant-colour fragment programs; the first draws' vertex inputs; every 255th blit and its caller |
+| `SGX_DEBUG=novcache,nof16,noffmediump,nof16samples,nophasesplit` | turn off the vertex cache, F16/C10 fragment arithmetic, mediump fixed-function programs, F16 texel returns, the split of discarding programs |
+| `SGX_DEBUG=nozerocopy,nozls,nolazyscanout,nopdsmerge` | gather vertex inputs instead of DMAing them in place; no depth/stencil across renders; scanout buffers on the display device from the start; samples merged only into their own set's iteration |
 | `SGX_DUMP_CODE=dir` | write each compiled program as `vs-N.code` / `fs-N.code`, one "hi lo" hex pair per instruction (`tools/isa/dis.py -x` reads the pairs). The compiler no longer writes USPs; sgxc does, for the DDK A/B harness |
 | `SGX_TRACE=path`, `SGX_TRACE_KICKS=n` | a pvrtrace log of the client (every bridge call, memory before each kick, for the first n kicks); `tools/decode`, `tools/state` and `tools/pds` read it like a DDK capture |
+| `SGX_SLOTS=n` | frames in flight, 2 to 4 (default 4); fewer lower other clients' latency behind a game |
 | `SGX_DRY_RUN=n`, `SGX_FRAME_GAP_US=us` | frames from the n-th on built but never sent; idle time after each render (hang bisecting) |
 | `FRAMEBUFFER=/dev/fbN` | the fbdev platform's framebuffer (default /dev/fb0) |
 

@@ -2,9 +2,11 @@
 # zig cc / zig c++ as meson's cross compiler: zigcc <cc|c++> <target> args...
 # zig's linker driver wants "-Wl,--version-script=FILE" in one argument;
 # meson passes it as two, and passes -Wl,-O1, which zig rejects.
+# A shared library gets dso_fini.c (crtbeginS.o's __cxa_finalize call).
 mode=$1; target=$2; shift 2
-n=$#; prev=
+n=$#; prev=; fini=
 for a in "$@"; do
+	[ "$a" = -shared ] && fini="-x c -fno-sanitize=all $(dirname "$0")/dso_fini.c -x none"
 	if [ -n "$prev" ]; then set -- "$@" "$prev=$a"; prev=; continue; fi
 	case "$a" in
 	-Wl,--version-script|-Wl,--dynamic-list) prev=$a ;;
@@ -13,4 +15,4 @@ for a in "$@"; do
 	esac
 done
 shift $n
-exec zig "$mode" -target "$target" -g0 "$@"
+exec zig "$mode" -target "$target" -g0 "$@" $fini

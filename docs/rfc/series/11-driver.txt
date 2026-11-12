@@ -1,0 +1,12 @@
+drm/powervr_sgx: Add the DRM driver, power management and debugging
+
+Tie the parts together and build them.
+
+- The DRM driver: the ioctls of the uAPI patch, render node only, on the
+  SGX545 of the Intel Atom CE5300 (a PCI function, 8086:089b) and of
+  Cedarview (GMA3600/3650, the auxiliary device gma500 publishes).
+- Runtime PM: the microkernel powers off when the GPU is idle. System
+  sleep drains the GPU, powers the microkernel off and starts it again
+  after resume.
+- debugfs status and control blocks, and a devcoredump when a job hangs.
+- The Kconfig entry, which builds the driver.

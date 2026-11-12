@@ -20,7 +20,7 @@
 #   debian  a native build on Debian (mesa/debian: CI) for /opt/sgx, for users.
 # Installs into $SGX_MESA_BUILD/<arch>/install (lib/libEGL.so.1,
 # lib/libGLESv2.so.2, lib/libgallium-<ver>.so, ...), and copies the winsys
-# test (sgx_frame_test) next to it.
+# tests (sgx_frame_test, sgx_hwt) next to it.
 #
 # Needs: zig (0.14+), meson, ninja, python3 with mako and pyyaml, bison 3,
 # flex, network for the tarball and the libdrm wrap.
@@ -55,12 +55,13 @@ fi
 (cd "$HERE/src" && tar cf - .) | (cd "$TREE/src" && tar xf -)
 ln -sfn "$REPO/kernel/src" "$TREE/include/sgx-kernel"
 ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx/drm/libpvr"
-python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx/drm/sgx_usse_progs.h"
-# the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
-# packers for its command streams, from their one definition
+# the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi), and its
+# command streams' XML with the generator meson runs on it (src/sgx/kmd_stream),
+# from their one definition
 cp "$REPO/drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h" "$TREE/include/drm-uapi/"
-python3 "$REPO/docs/uapi/gen_stream.py" user "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" \
-	> "$TREE/src/gallium/winsys/sgx/drm/powervr_sgx_kmd_stream.h"
+cp "$REPO/docs/uapi/powervr_sgx_kmd_stream.xml" "$REPO/docs/uapi/gen_stream.py" \
+	"$TREE/src/sgx/kmd_stream/"
+rm -f "$TREE/src/gallium/winsys/sgx/drm/powervr_sgx_kmd_stream.h"
 
 for arch in $ARCHES; do
 	case $arch in
@@ -81,10 +82,10 @@ for arch in $ARCHES; do
 				-Dgallium-drivers=sgx,llvmpipe -Dvulkan-drivers= -Dopengl=true \
 				-Dgles1=enabled -Dgles2=enabled -Degl=enabled -Dgbm=enabled -Dllvm=enabled \
 				-Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled
-		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
+		ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test src/gallium/winsys/sgx/drm/sgx_hwt
 		rm -rf "$O/install"
 		DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
-		cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/install/opt/sgx/lib/"
+		cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/build/src/gallium/winsys/sgx/drm/sgx_hwt" "$O/install/opt/sgx/lib/"
 		echo "build.sh: debian -> $O/install/opt/sgx"
 		continue
 	fi
@@ -128,9 +129,9 @@ for arch in $ARCHES; do
 			-Dlibunwind=disabled -Dlmsensors=disabled \
 			-Dallow-fallback-for=libdrm -Dlibdrm:tests=false
 	fi
-	ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test
+	ninja -C "$O/build" all src/gallium/winsys/sgx/drm/sgx_frame_test src/gallium/winsys/sgx/drm/sgx_hwt
 	rm -rf "$O/install"
 	DESTDIR="$O/install" meson install -C "$O/build" --no-rebuild --quiet
-	cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/install/usr/lib/"
+	cp "$O/build/src/gallium/winsys/sgx/drm/sgx_frame_test" "$O/build/src/gallium/winsys/sgx/drm/sgx_hwt" "$O/install/usr/lib/"
 	echo "build.sh: $arch -> $O/install/usr/lib"
 done

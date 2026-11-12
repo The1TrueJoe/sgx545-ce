@@ -36,12 +36,12 @@ struct pvrsgx_fw_ta3d_ctl {
 	u32 ccb;
 	/** @kernel_pd: Physical address of the firmware's page directory. */
 	u32 kernel_pd;
-	/* private: */
-	u32 pad_60[35];
+	/* private: the microkernel's own state, to the block's end (word 0x3f) */
+	u32 uk_60[40];
 };
 
 static_assert(offsetof(struct pvrsgx_fw_ta3d_ctl, ccb) == 0x58);
-static_assert(sizeof(struct pvrsgx_fw_ta3d_ctl) == 0xec);
+static_assert(sizeof(struct pvrsgx_fw_ta3d_ctl) == 0x100);
 
 /* struct pvrsgx_fw_ta_cmd.ta_flags */
 #define PVRSGX_TA_FIRST_KICK		BIT(0)

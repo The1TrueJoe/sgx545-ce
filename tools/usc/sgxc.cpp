@@ -28,7 +28,9 @@
 
 /* -u / -a / -s pins: glslcompiler's constant numbers, attribute slots and
  * sampler units (calib.py measures them), handed to the compiler as its
- * layout (struct sgx_layout); names not pinned are the compiler's */
+ * layout (struct sgx_layout); names not pinned are the compiler's, except
+ * samplers: glslcompiler numbers those in order of use (corpus c3
+ * tx_nd_s1: s1 alone is sampler 0; tx_nd_two: s, s1 = 0, 1) */
 #define MAX_NAMED 256
 
 struct named {
@@ -39,6 +41,8 @@ struct named {
 struct pins {
    unsigned n[3];                       /* by enum sgx_layout_kind */
    struct named t[3][MAX_NAMED];
+   struct named used[16];               /* unpinned samplers, in order of use */
+   unsigned n_used;
 };
 
 static void
@@ -55,16 +59,6 @@ named(struct pins *p, enum sgx_layout_kind k, const char *arg)
    e->value = atoi(eq + 1);
 }
 
-static int
-pins_place(void *data, enum sgx_layout_kind k, const char *name)
-{
-   const struct pins *p = (const struct pins *)data;
-   for (unsigned i = 0; i < p->n[k]; i++)
-      if (!strcmp(p->t[k][i].name, name))
-         return p->t[k][i].value;
-   return -1;
-}
-
 /* past every pin: a uniform pin takes a vec4 (rows and elements are pinned one by one) */
 static unsigned
 pins_first_free(void *data, enum sgx_layout_kind k)
@@ -74,6 +68,26 @@ pins_first_free(void *data, enum sgx_layout_kind k)
    for (unsigned i = 0; i < p->n[k]; i++)
       next = MAX2(next, (unsigned)p->t[k][i].value + (k == SGX_LAYOUT_UNIFORM ? 4 : 1));
    return next;
+}
+
+static int
+pins_place(void *data, enum sgx_layout_kind k, const char *name)
+{
+   struct pins *p = (struct pins *)data;
+   for (unsigned i = 0; i < p->n[k]; i++)
+      if (!strcmp(p->t[k][i].name, name))
+         return p->t[k][i].value;
+   if (k != SGX_LAYOUT_SAMPLER)
+      return -1;
+   for (unsigned i = 0; i < p->n_used; i++)
+      if (!strcmp(p->used[i].name, name))
+         return p->used[i].value;
+   if (p->n_used == 16 || strlen(name) >= sizeof(p->used[0].name))
+      return -1;
+   struct named *e = &p->used[p->n_used];
+   strcpy(e->name, name);
+   e->value = pins_first_free(p, k) + p->n_used++;
+   return e->value;
 }
 
 static void
@@ -126,12 +140,16 @@ main(int argc, char **argv)
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
    unsigned glsl_version = 100;
-   while ((c = getopt(argc, argv, "vpFLDMG:u:a:s:o:V:")) != -1) {
+   while ((c = getopt(argc, argv, "vpFLDMHPJG:B:u:a:s:o:V:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
-      case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
+      case 'D': opts.driver_consts = opts.pds_samples_alone = true; break; /* our driver: its constant formats, PDS samples without the plain iteration */
       case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
+      case 'B': opts.tex_bgra = strtoul(optarg, NULL, 0); break; /* units whose texels arrive BGRA-ordered */
+      case 'H': opts.f16_samples = true; break;  /* mediump texels returned as F16 */
+      case 'P': opts.split_phases = true; break; /* discard test and colour in two phases */
+      case 'J': opts.dep_f16_samples = true; break; /* dependent mediump texels returned F16 too */
       case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
       case 'V': {                                   /* -V slot=fmt: attribute slot's raw format (sgx_vtx_fmt) */
          unsigned slot, fmt;
@@ -146,7 +164,7 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-B unitmask] [-H] [-P] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
@@ -210,6 +228,8 @@ main(int argc, char **argv)
          continue;
       }
       nir_shader *nir = sep->_LinkedShaders[st]->Program->nir;
+      /* the standalone frontend builds NIR with its own options */
+      nir->options = sgx_nir_options();
       const char *sname = st == MESA_SHADER_VERTEX ? "vert" : "frag";
       /* this stage's pins: unprefixed ones, and "vert:" / "frag:" ones */
       struct sgx_compile_options so2 = opts;
@@ -286,6 +306,17 @@ main(int argc, char **argv)
       snprintf(suffix, sizeof suffix, "%s.code", sname);
       write_file(prefix, suffix, hex, k);
       free(hex);
+      if (out.n_code1) {
+         /* -P: phase 1 of a split program */
+         hex = (char *)malloc(out.n_code1 * 20 + 1);
+         k = 0;
+         for (unsigned i = 0; i < out.n_code1; i++)
+            k += snprintf(hex + k, 20, "%08x %08x\n", (unsigned)(out.code1[i] >> 32), (unsigned)out.code1[i]);
+         snprintf(suffix, sizeof suffix, "%s.code1", sname);
+         write_file(prefix, suffix, hex, k);
+         free(hex);
+         printf("%s phase 1: %u instructions\n", sname, out.n_code1);
+      }
       printf("%s: %u instructions (%u alu, %u tex, %u flow), %u temps, %u pa\n", sname,
              out.n_code, out.n_alu, out.n_tex, out.n_flow, out.n_temps, out.n_pa);
       sgx_shader_free(&out);

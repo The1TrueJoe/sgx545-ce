@@ -6,7 +6,7 @@
 /*
  * What a compiler needs to pair operations with efo and fdual: which
  * internal registers and slots each half reads and writes, and the same-word
- * hazards (ISA.md "fdual for a compiler", "efo").
+ * hazards.
  */
 
 #include "sgx_isa.h"
@@ -36,7 +36,7 @@ read_sel(struct sgx_isa_fdual_use *u, unsigned sel, unsigned slot)
 
 bool
 sgx_isa_fdual_use(const struct sgx_isa_instr *instr,
-                     struct sgx_isa_fdual_use *u)
+                  struct sgx_isa_fdual_use *u)
 {
    unsigned sd = instr->sd & 3;
 
@@ -137,10 +137,10 @@ sgx_isa_coissue_hazard(const struct sgx_isa_instr *instr)
       return NULL;
    }
    if (instr->opc == SGX_ISA_OPC_EFO) {
-      /* d naming an internal register the word writes is a race */
-      if ((instr->efo_d == 0 && instr->wi0) ||
-          (instr->efo_d == 1 && instr->wi1))
-         return "efo's d names an internal register the same word writes";
+      /* d=i0 while the word writes I0 is a race; d=i1 with wi1 reads the
+       * old I1 (a mat4 * v chain stores the previous chain's result so) */
+      if (instr->efo_d == 0 && instr->wi0)
+         return "efo's d names I0 while the same word writes it";
       return NULL;
    }
    return NULL;

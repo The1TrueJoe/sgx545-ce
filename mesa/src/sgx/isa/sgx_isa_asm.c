@@ -4,7 +4,8 @@
  */
 
 /*
- * A small assembler for ISA.md's text notation, into struct sgx_isa_instr:
+ * A small assembler for the USSE text notation (README.md), into struct
+ * sgx_isa_instr:
  *
  *    [(pred)] mnemonic[.suffix...] operand, operand, ... [item item=value ...]
  *
@@ -635,9 +636,8 @@ split_operands(char *s, char **ops, unsigned max)
    return n;
 }
 
-bool
-sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
-                    size_t errsize)
+static bool
+parse_line(const char *line, struct sgx_isa_instr *I, char *err, size_t errsize)
 {
    struct asm_ctx c = {err, errsize};
    char buf[512], *s, *items = NULL;
@@ -822,8 +822,8 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
 
    if (!parse_operands(&c, I, pat, ops, nops))
       return false;
-   /* any format suffix sets format select (ISA.md "Text notation and
-    * defaults"; classes without the field ignore it) */
+   /* any format suffix sets format select (classes without the field
+    * ignore it) */
    for (unsigned k = 0; k < 3; k++)
       I->fmt |= I->src[k].fmt != SGX_ISA_FMT_NONE;
    I->fmt |= I->dst.fmt != SGX_ISA_FMT_NONE;
@@ -844,9 +844,9 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
    } else if (I->rcnt) {
       return fail(&c, "'%s' has no rcnt", mnem);
    }
-   /* a source immediate is 7 bits, unsigned or (in the forms ISA.md says)
-    * two's complement: -64..127; the bitwise classes' src2 takes 16 bits,
-    * ldr/str's address 14 (ISA.md "MOE control", op 6) */
+   /* a source immediate is 7 bits, unsigned or (in the integer forms with
+    * signed immediates) two's complement: -64..127; the bitwise classes'
+    * src2 takes 16 bits, ldr/str's address 14 */
    for (unsigned k = 0; k < 3; k++) {
       bool wide =
          k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||
@@ -864,4 +864,82 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
       }
    }
    return true;
+}
+
+/*
+ * A flag the form has no field for would be dropped by the encoder, so the
+ * text would claim what the word doesn't do. Each bare item must show in the
+ * word's disassembly, or (another spelling, or implied by an operand) change
+ * the word: the line without it encodes differently.
+ */
+static bool
+has_item(const char *dis, const char *item)
+{
+   const char *lb = strrchr(dis, '[');
+   size_t n = strlen(item);
+
+   if (!lb)
+      return false;
+   for (const char *p = lb + 1; (p = strstr(p, item)); p += n) {
+      if ((p[-1] == '[' || p[-1] == ' ') && (p[n] == ' ' || p[n] == ']'))
+         return true;
+   }
+   return false;
+}
+
+static bool
+check_flags(const char *line, const struct sgx_isa_instr *I, char *err,
+            size_t errsize)
+{
+   struct asm_ctx c = {err, errsize};
+   char buf[512], *s;
+
+   snprintf(buf, sizeof(buf), "%s", line);
+   if ((s = strchr(buf, ';')))
+      *s = '\0';
+   s = trim(buf);
+   char *lb = strrchr(s, '[');
+   if (!lb || lb == s || lb[-1] != ' ' || s[strlen(s) - 1] != ']')
+      return true;
+   *lb = '\0';
+   char *items = lb + 1;
+   items[strlen(items) - 1] = '\0';
+
+   char *tok[32];
+   unsigned n = 0;
+   for (char *t = strtok(items, " \t"); t && n < ARRAY_LEN(tok);
+        t = strtok(NULL, " \t"))
+      tok[n++] = t;
+
+   uint64_t w = sgx_isa_encode(I, NULL);
+   char dis[512];
+   if (!sgx_disasm_one(w, NULL, dis, sizeof(dis)))
+      dis[0] = '\0';
+   for (unsigned i = 0; i < n; i++) {
+      if (strchr(tok[i], '=') || has_item(dis, tok[i]))
+         continue;
+      char without[512], e[128];
+      size_t len = snprintf(without, sizeof(without), "%s [", s);
+      for (unsigned j = 0; j < n && len < sizeof(without); j++) {
+         if (strcmp(tok[j], tok[i]))
+            len +=
+               snprintf(without + len, sizeof(without) - len, "%s ", tok[j]);
+      }
+      if (len < sizeof(without))
+         snprintf(without + len, sizeof(without) - len, "]");
+
+      struct sgx_isa_instr J;
+      if (parse_line(without, &J, e, sizeof(e)) &&
+          sgx_isa_encode(&J, NULL) == w)
+         return fail(&c, "'%s' isn't encoded by this form", tok[i]);
+   }
+   return true;
+}
+
+bool
+sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
+                 size_t errsize)
+{
+   return parse_line(line, I, err, errsize) &&
+          check_flags(line, I, err, errsize);
 }

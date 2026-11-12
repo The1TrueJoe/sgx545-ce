@@ -129,6 +129,9 @@ struct sgxws_prog {
    uint32_t sec_dwords; /* constant dwords DMA'd for the secondary program */
    struct sgx_pds_douti douti[10]; /* DOUTIs, one per iterated input or sample */
    uint8_t douti_tex[10]; /* 0, or the sampler unit + 1 whose DOUTT follows it */
+   /* that DOUTT's T3 for this sample: the unit's word with these bits
+    * cleared, then these set (an F16 return, sgx_program.c) */
+   uint32_t douti_t3_clr[10], douti_t3_set[10];
    uint32_t n_douti;
    uint32_t pds_middle; /* TA state PDS middle word (0: the default) */
    uint32_t
@@ -142,8 +145,8 @@ struct sgxws_prog {
  *    sop2 o0, pa<c>, o0 [skipinv end c1 c2 cop a1 a2 aop]
  * dst.rgb = (s1 * c1) cop (s2 * c2), dst.a = (s1.a * a1) aop (s2.a * a2),
  * s1 the shader's colour, s2 the tile's; with swap the sources trade places
- * (sop2 o0, o0, pa<c>), for a reverse subtract.  The DDK's SRC_ALPHA,
- * ONE_MINUS_SRC_ALPHA draw is c1=a1=s1a, c2=a2=1-s1a, add. */
+ * (sop2 o0, o0, pa<c>), for a reverse subtract.  SRC_ALPHA,
+ * ONE_MINUS_SRC_ALPHA is c1=a1=s1a, c2=a2=1-s1a, add. */
 enum sgxws_bsel {
    SGXWS_BS_ZERO,
    SGXWS_BS_S1,
@@ -158,7 +161,7 @@ enum sgxws_bop { SGXWS_BOP_ADD, SGXWS_BOP_SUB, SGXWS_BOP_MIN, SGXWS_BOP_MAX };
 /* The colour epilogue: blend (sop2), then the colour mask.  A colour mask is
  *    sopwm o0, pa<c>, pa<c> [skipinv end mask=wmask c1=zero c2=zero cop=max
  * aop=max] after the colour, a bit per byte of the packed BGRA8 (B b0, G b1, R
- * b2, A b3), as the DDK's glColorMask draws; with a blend before it, the
+ * b2, A b3); with a blend before it, the
  * sop2 writes pa<c> back and doesn't end the program. */
 struct sgxws_blend {
    uint8_t blend;          /* the sop2 below */
@@ -235,7 +238,7 @@ struct sgxws_state {
 
 #define SGXWS_MAX_INDICES 0xffff
 
-/* One vertex DMA (PDS DOUTD, PDS.md "What the DDK generates"): dwords (1-16)
+/* One vertex DMA (PDS DOUTD, PDS.md, program forms): dwords (1-16)
  * of a vertex from va + index * stride into attribute register reg; with
  * defaults, the components past dwords up to 4 read 0, 0, 0, 1.  block > 0:
  * va is an offset into the draw's copy block block - 1. */
@@ -256,6 +259,9 @@ struct sgxws_block {
 
 struct sgxws_draw {
    uint32_t prim;         /* SGXWS_* */
+   /* TSP word 1 bits besides the vertex program's: the sets the fragment
+    * program iterates as F16 and doesn't sample from (SGX_DEBUG=tspf16) */
+   uint32_t tsp_f16;
    uint32_t count;        /* vertices */
    const uint32_t *verts; /* count x vs->attr_dwords dwords */
    /* NULL: the vertices in order; else n_indices 16-bit indices into them
@@ -266,7 +272,8 @@ struct sgxws_draw {
     * addresses, nothing copied (verts_va 16-byte aligned, idx_va even) */
    uint32_t verts_va, idx_va;
    /* or n_fetch DMAs (the vertex buffers where they are, or copies of client
-    * arrays): no vertices copied, verts and verts_va unused */
+    * arrays): no vertices copied, verts and verts_va unused; the indices
+    * copied from indices, or where they are at idx_va (even) */
    const struct sgxws_fetch *fetch;
    unsigned n_fetch;
    const struct sgxws_block *blocks;
@@ -300,20 +307,26 @@ struct sgxws_stats {
    unsigned room_flushes; /* frames submitted early because a ring filled */
    uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the
                                        vertices they index */
+   unsigned state_sent, state_skipped; /* draws' TA state blocks */
 };
 
 /* debugging aids the driver passes on (its SGX_DEBUG options) */
 struct sgxws_dev_options {
    bool verbose;      /* print every frame submitted */
    bool flush_rt;     /* SGX_FLUSH_HW_RENDER_TARGET at a target's destruction */
-   const char *trace; /* a pvrtrace log of this client, as tools/decode reads a
-                         DDK capture */
+   const char *trace; /* a pvrtrace log of this client (services only) */
    unsigned
       trace_kicks; /* and memory copies for its first n kicks only (0: all) */
    int dry_run;    /* frames from the n-th on are built (and traced) but never
                       sent; -1: off */
    unsigned frame_gap_us; /* idle time after each render */
-   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 3) */
+   unsigned slots;        /* frames in flight, 2 to SGXWS_MAX_SLOTS (0: 4) */
+   unsigned ta_split;     /* a TA kick every n objects of a frame, the scene's
+                             render at its end (0: one kick a frame) */
+   bool state_always;     /* every draw its own programs and TA state */
+   unsigned pb_pages;     /* the parameter buffer's size; the device's first
+                             render context sizes it for everyone (0: the
+                             kernel's default) */
 };
 
 /* fd: the GPU's kernel driver; opts may be NULL */
@@ -327,6 +340,11 @@ struct sgxws_device_info {
    uint32_t core_revision; /* EUR_CR_CORE_REVISION */
    uint32_t rt_max_width, rt_max_height, rt_max_samples;
    uint16_t pci_vendor, pci_device; /* 0 when the GPU is not a PCI function */
+   /* zero-copy draws (vertex buffers DMAed where they are) by default:
+    * powervr_sgx's; services' only on request (SGX_DEBUG=zerocopy) */
+   bool zero_copy;
+   /* contexts can be created at low, normal or high priority */
+   bool priorities;
 };
 
 const struct sgxws_device_info *sgxws_dev_info(const struct sgxws_dev *d);
@@ -365,7 +383,9 @@ void sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo);
 const struct sgxws_bo *sgxws_target_bo(const struct sgxws_ctx *c);
 int sgxws_bo_wait(const struct sgxws_bo *bo, unsigned timeout_ms);
 
-struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d);
+/* priority: -1 low, 0 normal, 1 high (the backend's scheduler; high may
+ * need privileges and falls back to normal) */
+struct sgxws_ctx *sgxws_ctx_create(struct sgxws_dev *d, int priority);
 void sgxws_ctx_destroy(struct sgxws_ctx *c);
 
 enum sgxws_reset sgxws_reset_status(struct sgxws_ctx *c);
@@ -374,9 +394,9 @@ void sgxws_rt_destroy(struct sgxws_ctx *c, struct sgxws_rt *rt);
 
 /*
  * Compiled programs (mesa/src/sgx/compiler: flat USSE words, low word
- * first), finalised the way the DDK's GL driver finalises a USP (docs/ISA.md
- * "Phases, visibility feedback and discard") and uploaded:
- *  - vertex: phase 0 = the DDK's prologue; phase 1 = the shader (temps
+ * first), finalised into phases (docs/ISA.md "Phases, visibility feedback
+ * and discard") and uploaded:
+ *  - vertex: phase 0 = the prologue; phase 1 = the shader (temps
  *    temporaries), then emit the vertex; then the epilogue phase every
  *    vertex program needs (docs/GEN.md);
  *  - fragment: phas, the shader, then `mov o0, pa<color_pa> [end]` (output
@@ -389,12 +409,25 @@ uint32_t sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
 uint32_t sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                          unsigned color_pa, const struct sgxws_blend *blend,
                          int discard_pa, unsigned temps);
+/* a program split around its discard: code (phase 0) ends at the feedback
+ * nop, code1 (phase 1, only for the pixels that pass) leaves the colour in
+ * pa<color_pa1> */
+uint32_t sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code,
+                               unsigned n, const uint64_t *code1, unsigned n1,
+                               unsigned color_pa1,
+                               const struct sgxws_blend *blend, int discard_pa,
+                               unsigned temps);
 void sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
                        uint32_t w[2]);
 uint32_t sgxws_upload_fs_secondary(struct sgxws_ctx *c, const uint64_t *code,
                                    unsigned n);
 
-/* built-in shaders (tools/gen/mkusse.py) */
+/* a program uploaded above (any of them, each blend variant on its own) is
+ * no longer drawn with: its code goes once the renders that may run it are
+ * done */
+void sgxws_code_free(struct sgxws_ctx *c, uint32_t va);
+
+/* built-in shaders (src/sgx/compiler/sgx_fixed.c) */
 enum sgxws_builtin {
    SGXWS_VS_XY,      /* gl_Position = vec4(a0.xy, 0, 1) */
    SGXWS_VS_XYZ,     /* gl_Position = vec4(a0.xyz, 1) */
@@ -415,6 +448,11 @@ bool sgxws_recording(struct sgxws_ctx *c);
 
 /* a shared buffer the frame being recorded reads (a texture) or writes */
 void sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write);
+/* whether the frame's list has room for these buffers as well (every shared
+ * buffer a render touches must be listed: the kernel keeps only those
+ * coherent); if not, the caller submits the frame first */
+bool sgxws_use_bo_room(const struct sgxws_ctx *c,
+                       const struct sgxws_bo *const *bos, unsigned n);
 
 /* glClear(COLOR) of the whole target: a screen-covering object (NOTES.md
  * "Clear") */

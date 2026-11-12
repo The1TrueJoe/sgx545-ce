@@ -5,7 +5,7 @@
 
 /*
  * The disassembler: isaspec's generated decoder, data-store word numbers
- * printed as in docs/PDS.md (ds0[2], ds1[0x30]), and the program layout.
+ * printed as ds0[2] / ds1[0x30], and the program layout.
  */
 
 #include <inttypes.h>
@@ -25,7 +25,7 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
       else
          return;
    }
-   /* numbers below 10 in decimal, the rest in hex (PDS.md "Text notation") */
+   /* numbers below 10 in decimal, the rest in hex */
    if (v < 10)
       isa_print(print, "%" PRIu64, v);
    else
@@ -57,10 +57,10 @@ sgx_pds_disasm_one(uint32_t word, char *buf, size_t size)
    if (!out)
       return false;
    sgxpds_isa_disasm(&word, sizeof(word), out,
-                        &(struct isa_decode_options){
-                           .show_errors = true,
-                           .field_print_cb = print_custom,
-                        });
+                     &(struct isa_decode_options){
+                        .show_errors = true,
+                        .field_print_cb = print_custom,
+                     });
    fclose(out);
    tidy(text);
    bool ok = !strstr(text, "no match") && !strstr(text, "unexpected bits");
@@ -82,7 +82,7 @@ sgx_pds_disasm(const uint32_t *code, unsigned n, FILE *out)
 
 void
 sgx_pds_disasm_program(const uint32_t *words, unsigned rows, unsigned n_code,
-                          FILE *out)
+                       FILE *out)
 {
    for (unsigned n = 0; n < 2 * rows; n++) {
       fprintf(out, "ds0[%2u] = %08x   ds1[%2u] = %08x\n", n,

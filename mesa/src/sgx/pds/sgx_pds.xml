@@ -5,13 +5,13 @@ SPDX-License-Identifier: MIT
 -->
 
 <!--
-SGX545 PDS (programmable data sequencer) programs, from docs/PDS.md.
+SGX545 PDS (programmable data sequencer) programs.
 
 The code: 32-bit instructions (#instruction). The data words the DOUT
 instructions send (DOUTU, DOUTD, DOUTI, DOUTA) have encode-only roots of
 their own: they sit in the data segment, which the decoder doesn't see.
 
-Register operands come in three numberings (PDS.md "Instruction encoding"):
+Register operands come in three numberings:
 U (8-bit words: ds0, ds1, inputs), S1 (16-bit halves of ds0 and the inputs)
 and S2 (16-bit halves of ds1).
 -->
@@ -284,17 +284,17 @@ and S2 (16-bit halves of ds1).
 	<pattern low="28" high="31">1101</pattern>
 </bitset>
 <bitset name="op0x4.s1" extends="#alu">
-	<doc>Not seen (PDS.md).</doc>
+	<doc>Not seen in use.</doc>
 	<pattern pos="27">1</pattern>
 	<pattern low="28" high="31">0100</pattern>
 </bitset>
 <bitset name="op0x6.s1" extends="#alu">
-	<doc>Not seen (PDS.md).</doc>
+	<doc>Not seen in use.</doc>
 	<pattern pos="27">1</pattern>
 	<pattern low="28" high="31">0110</pattern>
 </bitset>
 <bitset name="op0xd.s1" extends="#alu">
-	<doc>Opcode d with s = 1: XOR-like where it is seen (PDS.md).</doc>
+	<doc>Opcode d with s = 1: XOR-like where it is seen.</doc>
 	<pattern pos="27">1</pattern>
 	<pattern low="28" high="31">1101</pattern>
 </bitset>
@@ -390,7 +390,7 @@ and S2 (16-bit halves of ds1).
 		DOUTU word 1: b1 on microkernel tasks, b2 on pixel tasks, b24 =
 		the pixel program has plain iterations, b25 = it has samples;
 		b22/b23 as the pixel-event program's tasks set them. The rest
-		is reserved (PDS.md "Bits no field names").
+		is reserved: a bit no field names is 0.
 	</doc>
 	<encode type="struct sgx_pds_doutu *">
 		<map name="B1">src->b1</map>

@@ -1,0 +1,107 @@
+# A release: on a pushed tag v*, build the packages from that tag and attach
+# them to a DRAFT pre-release. A person reviews and publishes it; publishing
+# runs apt-repo.yml. docs/RELEASING.md.
+#
+#   kernel:  linux-image/linux-headers, the Cedarview kernel in its release
+#            flavor (no test-kit patches)           powervr-sgx-deb.yml
+#   mesa:    mesa-sgx and sgx545-firmware           mesa-debian.yml
+#   release: SHA256SUMS over all of them, and the draft
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          # v0.1.0 -> 0.1.0; a pre-release suffix sorts before its release:
+          # v0.2.0-rc1 -> 0.2.0~rc1 (git tags can't hold a ~)
+          v=$(printf '%s' "${TAG#v}" | tr '-' '~')
+          case $v in *[!0-9A-Za-z.+~]* | "" | [!0-9]* ) echo "tag $TAG is not a version"; exit 1 ;; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  kernel:
+    needs: version
+    uses: ./.github/workflows/powervr-sgx-deb.yml
+    with:
+      flavor: release
+      pkg_version: 7.3.3-sgx${{ needs.version.outputs.version }}
+
+  mesa:
+    needs: version
+    uses: ./.github/workflows/mesa-debian.yml
+    with:
+      release_version: ${{ needs.version.outputs.version }}
+
+  release:
+    needs: [version, kernel, mesa]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: powervr-sgx-deb-cedarview-release
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.mesa.outputs.artifact }}
+          path: assets
+
+      - name: Checksums
+        run: |
+          set -eux
+          cd assets
+          rm -f SHA256SUMS
+          # GitHub serves a ~ in an asset name as a dot; name the files that
+          # way first so SHA256SUMS checks against a plain download
+          for f in *.deb; do
+            case $f in *'~'*) mv -- "$f" "$(printf '%s' "$f" | tr '~' '.')" ;; esac
+          done
+          sha256sum -- *.deb > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Draft pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eux
+          cat > notes.md <<EOF
+          Debian 13 (trixie, amd64) packages for the PowerVR SGX545 of Intel Cedarview
+          (Atom N2600/N2800/D2500/D2550/D2700), built from $TAG.
+
+          - \`linux-image-*-sgx\` (and its headers): Linux with the powervr_sgx driver,
+            installed next to Debian's kernel.
+          - \`sgx545-firmware\`: the open microkernel the driver loads.
+          - \`mesa-sgx\`: Mesa with the sgx driver, in /opt/sgx, used ahead of Debian's Mesa.
+
+          Install and removal: docs/INSTALL.md. Check the downloads with
+          \`sha256sum -c SHA256SUMS\`.
+          EOF
+          sed -i 's/^          //' notes.md
+          gh release create "$TAG" assets/*.deb assets/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
+            --title "powervr_sgx $VERSION" --notes-file notes.md
+          # every name in SHA256SUMS is a file the draft serves
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -vx SHA256SUMS | sort > served.txt
+          awk '{print $2}' assets/SHA256SUMS | sort > listed.txt
+          diff listed.txt served.txt

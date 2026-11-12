@@ -87,7 +87,7 @@ struct pvrsgx_job {
 	u32 *bo_flags;
 	/** @nbos: Number of @bos. */
 	u32 nbos;
-	/** @imports: Imported objects mapped in the VM at submit, flushed around the job. */
+	/** @imports: The imported objects in @bos, flushed around the job. */
 	struct drm_gem_object **imports;
 	/** @nimports: Number of @imports. */
 	u32 nimports;
@@ -100,6 +100,8 @@ struct pvrsgx_job {
 int pvrsgx_job_init(struct pvrsgx_device *sdev);
 void pvrsgx_job_fini(struct pvrsgx_device *sdev);
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev);
+int pvrsgx_job_quiesce(struct pvrsgx_device *sdev);
+void pvrsgx_job_unquiesce(struct pvrsgx_device *sdev);
 bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev);
 void pvrsgx_context_destroy_all(struct pvrsgx_file *sfile);
 struct pvrsgx_context *pvrsgx_context_lookup(struct pvrsgx_file *sfile, u32 handle);

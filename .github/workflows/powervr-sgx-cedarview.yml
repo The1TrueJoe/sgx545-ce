@@ -61,12 +61,12 @@ jobs:
       - name: The gma500 patches through checkpatch --strict
         run: |
           set -eux
-          for p in drm/gma500/*.patch; do
+          for p in drm/gma500/*.patch drm/sysfb/*.patch; do
             # On stdin, as a mailed patch; the author signs it when sending.
             perl linux-$LINUX_VERSION/scripts/checkpatch.pl --strict --no-tree --terse \
               --ignore FILE_PATH_CHANGES,MISSING_SIGN_OFF - < "$p" | tee -a gma-checkpatch.log
           done
-          ! grep -E ': (ERROR|WARNING|CHECK):' gma-checkpatch.log
+          if grep -E ': (ERROR|WARNING|CHECK):' gma-checkpatch.log; then exit 1; fi
 
       - name: Build the kernel and modules
         run: |
@@ -82,7 +82,7 @@ jobs:
           L=linux-$LINUX_VERSION
           touch $L/drivers/gpu/drm/gma500/*.c $L/drivers/gpu/drm/powervr_sgx/*.c
           make -C $L ARCH=x86_64 W=1 C=1 drivers/gpu/drm/gma500/ drivers/gpu/drm/powervr_sgx/ 2>&1 | tee w1.log
-          ! grep -E '(gma500|powervr_sgx)/.*(warning|error):' w1.log
+          if grep -E '(gma500|powervr_sgx)/.*(warning|error):' w1.log; then exit 1; fi
 
       - name: Collect the Cedarview set
         run: |

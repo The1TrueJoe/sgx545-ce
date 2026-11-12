@@ -469,6 +469,46 @@ static void t_context_create_destroy(int fd)
 	create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 }
 
+/* Shmem in kB, from /proc/meminfo: where the driver's BOs live. */
+static long shmem_kb(void)
+{
+	char line[128];
+	long kb = -1;
+	FILE *f = fopen("/proc/meminfo", "r");
+
+	assert_true(f);
+	while (fgets(line, sizeof(line), f))
+		if (sscanf(line, "Shmem: %ld kB", &kb) == 1)
+			break;
+	fclose(f);
+	return kb;
+}
+
+/*
+ * A file that mapped a BO into a VM with a render context and then closes,
+ * having rendered nothing, gives the BO's memory back at once. The VM itself
+ * outlives the file (the context's kernel objects hold it until a later
+ * render), but not the client's memory.
+ */
+static void t_vm_release_frees(int fd)
+{
+	const uint64_t size = 32ull << 20;
+	int fd2 = open_dev();
+	uint32_t vm = create_vm(fd2), bo = create_bo(fd2, size, 0);
+	struct drm_gem_close c = { .handle = bo };
+	long mapped, closed;
+
+	(void)fd;
+	assert_eq(vm_map(fd2, vm, bo, 0x3e000000, 0, size), 0);
+	create_ctx(fd2, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	do_ioctl(fd2, DRM_IOCTL_GEM_CLOSE, &c);
+	mapped = shmem_kb();
+	close(fd2);
+	closed = shmem_kb();
+	/* 32 MiB mapped; allow other activity on the box some slack. */
+	assert_true(mapped - closed > 24 * 1024);
+}
+
 static void t_context_invalid(int fd)
 {
 	uint32_t vm = create_vm(fd);
@@ -1286,6 +1326,7 @@ static const struct {
 	{ "vm-map-invalid", t_vm_map_invalid },
 	{ "vm-handles-per-file", t_vm_handles_per_file },
 	{ "context-create-destroy", t_context_create_destroy },
+	{ "vm-release-frees", t_vm_release_frees },
 	{ "context-invalid", t_context_invalid },
 	{ "submit-null-job", t_null_job },
 	{ "submit-null-job-timeline", t_null_job_timeline },

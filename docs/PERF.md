@@ -128,6 +128,281 @@ is higher on ours too.
    in single runs: take medians first.
 4. Ring depth (`SGX_SLOTS`), once the SLOTS=6 hang is understood.
 
+### Measured 2026-11-09: the colour fast paths
+
+usse-compiler's speed pass (9ce70e2: items 1 and 2's interim form, a
+uniform colour as one mov from a 0x12 slot and a texel as colour by two
+`pck.u8.u8`, plus 82f3f5c, 1ead616, 64d06e4, 729718d, 60eea0e). Measured on
+the EA3 under the DDK microkernel, with `-c`, 3 s a test, in frames a second.
+The baseline is dev without those commits. Its 1440x960 numbers match the
+EA1 table above (fill 187 against 189), so the boards compare.
+
+| test | baseline | the pass | DDK (table above) | ours/DDK now |
+|---|---|---|---|---|
+| 720x480 fill | 476 | 790 | 1524 | 0.52 |
+| 720x480 fill-blend | 132 | 187 | | |
+| 720x480 tex | 317 | 840 | | |
+| 1440x960 fill | 187 | 235 | 354 | 0.66 |
+| 1440x960 fill-blend | 34.6 | 52.1 | 60.1 | 0.87 |
+| 1440x960 tex | 104 | 237 | 421.6 | 0.56 |
+| 1440x960 verts | 110 | 112 | 245 | 0.46 |
+
+- Full dEQP-GLES2 on the pass: 0 unexpected results, 0 recoveries.
+- **Tex** is still 0.56: the DDK's one `mov o0, pa0` (T1 0x0d and a BGRA
+  sampler mask) against our two lane picks. The rest of item 2 does that.
+- **Fill at 720x480** (0.52) is the per-frame fixed cost, item 3.
+- **PDS sizeinfo b25-28.** The DDK's rule (12 / units, capped at 0xb only
+  with secondaries: its textured draw 0x18030001) against ours (always
+  capped) changed nothing: tex 316.4 against 316.9 fps. Not adopted.
+
+**The rest of item 2** (13eefef, 89fab5d, with usse-compiler's tex_bgra and
+pds_samples_alone): perfmicro's tex is now the DDK's shape, one pure-sample
+DOUTI and no instruction before the driver's `mov o0, pa0`. On the EA3 it
+changed nothing: 1440x960 tex 237 → 239 fps, 720x480 836 → 835. So the
+shader is not what limits the micro tests. Over both sizes ours costs
+2.9 ms a megapixel for fill and tex alike (8 layers, hidden surface removal
+on) plus ~0.2 ms a frame. The DDK costs ~2.1 ms a megapixel for fill, and its
+tex is faster than its fill. What is left is per pixel and outside the USSE
+(ISP, the tile loop, PBE), to be compared with the DDK's 3D state for the same
+draws.
+
+### Where a Minecraft frame goes (EA1, 2026-11-09)
+
+uapi-stream's profile of the bench world (720x480, render distance 4,
+standing, 60 s after joining), raw files in
+`sgx545-work/perf-mc-2026-11-09/`. Ours is the x64 JVM on our desktop GL under
+Xorg (dev 708a02e, powervr_sgx 535b5dc, open microkernel a57d578): 10.6 fps,
+94.4 ms a frame. The DDK is the i386 JVM through gl4es on Xvfb: 12.8 fps,
+78 ms.
+
+From 5 s of powervr_sgx tracepoints (kick, IRQ, job_done, flush_imports),
+a frame is four renders:
+
+| render | GPU (kick or previous IRQ → IRQ) |
+|---|---|
+| Minecraft's world | 64.0 ms |
+| Minecraft's two small 720x480 renders | 2 × 2.2 ms |
+| X's present (client 41) | 1.1 ms |
+| **GPU busy** | **69.5 ms (74%)** |
+| **GPU idle** | **24.8 ms** |
+
+The idle is two things:
+
+1. **The kernel's dma-buf flushes, ~12 ms a frame.** Every job clflushes its
+   1 or 2 imported buffers (1,413,120 bytes each) before the kick and after
+   the IRQ, 1.2-1.4 ms each: 424 flushes, 688 ms in 4.9 s. Between two jobs
+   the GPU waits IRQ → job_done 1.34 ms (flush), job_done → scheduler 0.16 ms,
+   scheduler → kick 1.44 ms (flush), medians. The kernel runs one job at a
+   time (credit limit 1), so nothing hides them. Sent to m2: skip the flush
+   for buffers no CPU wrote through a cached mapping, and allow more than one
+   job on the hardware.
+2. **The GPU waiting on the CPU, ~13 ms a frame.** A frame is Minecraft's
+   world render into its FBO, then a 2-object and a 1-object render into the
+   back buffer (`SGX_DEBUG=frame`, 749a8e4). With 3 ring slots the third
+   kick's end-of-frame wait lands on the world render kicked just before:
+   the thread sleeps ~20-50 ms, then records the next world while the GPU has
+   only the two small renders. With `SGX_SLOTS=4` the slots cycle 0-3 and the
+   waits move to the previous frame's small renders, which queue behind the
+   64 ms world render. So the frame is GPU-bound and a deeper ring only moves
+   the wait: 8-10 fps with the logging on. Both 4-slot runs also stalled the
+   session after the measured window (and one met 5 recovered GPU timeouts
+   over 4 h). Not adopted.
+
+The import flushes, after m2's "flush only listed imports" (m2-drm 30919fc):
+Minecraft 10.7 → 11.2 fps, flushes 424 → 318 per 5 s. What is left is
+Minecraft's own back buffers. The DRI3 loader asks for every back buffer
+with `__DRI_IMAGE_USE_SCANOUT`, so kmsro makes each a cached simpledrm dumb
+buffer, imported and flushed around both small renders (~5 ms a frame). Only
+X's screen pixmap is scanned out (X copies the window: its 1.1 ms job a
+frame). Nothing tells the pipe driver that an image is a back buffer (dri2.c
+maps `__DRI_IMAGE_USE_BACKBUFFER` to no bind flag). So on such a display a
+scanout render target now starts as the SGX's own buffer and becomes a dumb
+buffer, with its contents, only when a KMS handle is asked for: X's root
+pixmap does that, client back buffers never do. With m2's listed-import
+flushes, Minecraft's import flushes went 318 → 102 per 5 s (553 → 132 ms),
+one 1.4 MB import a frame (X's); the desktop smoke stayed clean, es2gears
+135 → 160 fps, glmark2 67 → 83.
+
+With both gone the frame is the GPU's 69.5 ms: 14.4 fps, past the DDK.
+
+CPU (perf, 20 s, the whole JVM): JIT 42%, libjvm 32%, libgallium 11%,
+kernel 10%. The client thread is 39% of samples (DDK 43%), the C2 compilers
+31% (still compiling at 60 s on the x64 JVM). Box idle 33% (DDK 40%). Mesa's
+CPU is not the bottleneck: the stats give the client thread 1.0-1.2 s of
+CPU in 2 s, draws 180-250 ms of it.
+
+**TA against 3D** (open-ukernel's frame-profile microkernel 775b19a,
+`UK_FRAMEPROF=1`: running totals of TA and 3D busy ticks and their counts in
+the control block, the EDM's ~1 kHz tick; same scene with 31f9341's vertex
+change, ~9 fps in the window): over 5 s the TA is busy 37.6% (320 kicks, 2 a
+render) and the 3D 23.4% (160 renders). That is ~42 ms of TA and ~26 ms of 3D
+a frame, almost all of it the world render. The vertex path is the larger GPU
+bucket, and perfmicro verts is 0.46 of the DDK.
+
+### The vertex path against the DDK (perfmicro verts, 2026-11-09)
+
+ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
+(the same binary; captures kept outside the repos).
+- **The point size.** st gives every vertex program a point size and we output
+  it on triangles: 5 dwords a vertex into the parameter buffer, which the VDM
+  rounds up to an 8-dword output area. The DDK's position-only vertex is 4.
+  Fixed in 31f9341 (only points draws keep it). On the EA1 tex went up 11-13%
+  (1440x960 265 → 300 fps), and verts (120 → 121), fill and Minecraft (10.3/10.8
+  → 10.6/10.6) didn't move. Full dEQP-GLES2 unchanged.
+- **Matches:** ISPA, region clip, MTE control, W clamp, viewport, TE/tiling
+  words, batch 16, vertices per task 16, 16-bit indices. The DDK's index-list
+  count is wider than 16 bits (one list of 96,774 indices; we split at
+  65,535: negligible).
+- **The vertex DMA** is 2 dwords on the DDK (the VBO as it is) and 4 on ours
+  (gathered and widened to f32 x 4). `SGX_DEBUG=zerocopy` (2 dwords) changes
+  nothing: 110.6 → 108.7 fps on the EA3.
+- **Our frame** on the EA3 (`SGX_DEBUG=stats`, 110 fps, 9 ms): ~2.6 ms of CPU
+  in the draw (every index read, rebased to 16 bits and copied; the vertices
+  gathered), then ~6 ms kick to done. The DDK's whole frame is 4.1 ms. So the
+  GPU's vertex work is ~2x the DDK's, with the TA state matching; next are the
+  two vertex programs and their DOUTU words (the DDK sets 0x10000 on every
+  DOUTU, we never do).
+
+### TA kicks within a frame, and the vertex gap on the EA3 (2026-11-09)
+
+`SGX_TA_SPLIT=n` (0bf22f3, services backend, off by default) kicks the TA
+every n objects. The DDK does the same (ta3d-state: TA flags 0x71/0x60/0x62;
+3D flags, TA flags 2 and the 3D sync on the last kick only; the target's sync
+on every kick), so the GPU tiles while the CPU records the rest.
+- Correct: dEQP fragment_ops/draw/fbo/depth_stencil_clear/texture.units/
+  builtin_variable/rasterization unchanged with n = 2 (2,818 tests),
+  0 recoveries.
+- perfmicro's new `rows` test (the verts mesh as 127 draws, a colour each):
+  1440x960 58.4 → 63.3 fps, 720x480 80.4 → 86 fps with n = 16-32. verts and
+  fill are unchanged (one or eight draws).
+- A scene left open, with a first kick and no last one (a client killed
+  mid-frame), put services into a microkernel-init recovery loop until a
+  reboot. Every scene a flush opens must be closed. powervr_sgx needs a
+  uAPI for it (uapi-stream: a RENDER flag that leaves the scene open on its
+  rt_dataset, and a PB gate for other contexts).
+
+The DDK on the same box, same binary (i386 perfmicro):
+
+| test | DDK 720x480 | ours | DDK 1440x960 | ours |
+|---|---|---|---|---|
+| fill | 1432 | 791 | 392 | 233 |
+| verts | 537 | 146 | 329 | 110 |
+| rows | 238 | 80 | 205 | 58 |
+
+The vertex-heavy gap (3.4x) is twice the fill gap (1.7x). Our 720x480 verts
+frame (6.85 ms) is ~2.6 ms of CPU in the draw (every index read, rebased and
+copied; the DDK draws from the buffers as they are) and ~4.1 ms kick to done;
+the DDK's whole frame is 1.86 ms. With the vertex programs, TA state and
+vertex DMA width ruled out, the parameter buffer size (4 → 16 MB: no change)
+too, the next suspects are the memory the vertex path reads (our rings'
+allocation flags against the DDK's VBO/IBO) and the CPU index path
+(GPU-resident index buffers with the VDM's index base, instead of rebasing).
+
+### perfmicro against the DDK, rendered frames (2026-11-09) — supersedes the ratios above
+
+**Every earlier perfmicro comparison with the DDK in this file compared
+TA-only frames with rendered ones.** perfmicro ended each frame with a
+glFinish. On the DDK's pbuffer that only kicks the TA and keeps the scene
+open: ta3d-state's captures show its 3D renders once every 44 to 566
+"frames" (1,215 kicks, 13 scenes). Ours renders every frame. perfmicro now
+ends each frame with a 1-pixel glReadPixels (7884888), which renders on
+both.
+
+EA3, normal boot, the same binary (frames a second; ours/DDK):
+
+| test | DDK 720x480 | ours | ours, zerocopy | DDK 1440x960 | ours | ours, zerocopy |
+|---|---|---|---|---|---|---|
+| fill | 812 | 777 (0.96) | 748 | 237 | 230 (0.97) | 233 |
+| fill-blend | 200 | 186 (0.93) | 186 | 53.6 | 51.9 (0.97) | 51.8 |
+| tex | 1067 | 818 (0.77) | 804 | 335 | 238 (0.71) | 238 |
+| verts | 358 | 137 (0.38) | 322 (0.90) | 199 | 107 (0.54) | 190 (0.95) |
+| rows | 99 | 81 (0.82) | 85 | 70 | 59 (0.85) | 62 |
+
+- Fill and blend are at the DDK's speed: the per-pixel gaps of the 0.5x
+  tables above were the DDK not rendering.
+- **Texturing** was 0.71-0.77 of the DDK, and the GPU wasn't the cause.
+  ta3d-state's captures of perfmicro tex matched word for word (TA, ISP,
+  PDS, texture words, render details, per-tile programs, the texture's
+  memory), and the A/Bs of the two near-differences (PDS middle word b25-28
+  12, render target in the general heap) changed nothing. The services
+  backend polled a render's completion at 50 us steps doubling to 1 ms, so
+  a 3 ms render was seen done at 3.55 ms. Now a render's wait sleeps to
+  3/4 of its target's last render times, then polls every 50 us, tex is
+  237 -> 302 fps at 1440x960 (0.90) and 810 -> 880 at 720x480 (0.83); fill
+  and blend are at or above the DDK's, verts +8%. (powervr_sgx waits with
+  poll() on its fd, event-driven: no such rounding.)
+- **Vertices:** 0.38-0.54 by default and 0.90-0.95 with
+  `SGX_DEBUG=zerocopy` since 72b75fb: an indexed draw from buffers takes its
+  indices as they are, from the index buffer's device copy, with no CPU work
+  a draw. Zero-copy is the default on powervr_sgx since dEQP-GLES2 mustpass
+  (16,637 pass, 0 new fails, 0 timeouts) and piglit (no new fails) ran clean on
+  the EA1 (7bca567); services keeps it opt-in, `SGX_DEBUG=nozerocopy` turns it
+  off. Its 79 (214 in a long run) dEQP fails
+  depended on test order: a stream uploader writes more into its mapped
+  buffer, and the device copy was refreshed only at the unmap, so later
+  tests' draws read zeros (fixed 7543399, 0d2b9ec: the copy is refreshed
+  for the bytes a draw reads while a write map is open). Under zerocopy all
+  214 pass and a 3,898-test subset matches the default path. Left: one
+  chunk (clipping.triangle_vertex.clip_three) made 18 recoveries on the EA3
+  (services); 264/264 and 0 recoveries on the EA1 (powervr_sgx). Minecraft
+  gains nothing from zerocopy (10.8 vs 11.0 fps): its geometry is display
+  lists, drawn from the vertex cache.
+- Minecraft swaps every frame, so the DDK renders there too: its profile (TA
+  ~42 ms, 3D ~26 ms) stays the honest target.
+
+### perfmicro on the open stack (EA1, 2026-11-10)
+
+What users run: powervr_sgx and the open microkernel (EA1 normal boot, kernel
+7.1.8-m2drm, dev 3329021, default settings: zero-copy off), against the DDK
+on the same EA1 (its own boot). Every frame rendered (a 1-pixel readback);
+two rounds each, averaged; frames a second:
+
+| test | DDK 1440x960 | ours | ours/DDK | DDK 720x480 | ours | ours/DDK |
+|---|---|---|---|---|---|---|
+| fill | 243 | 236 | 0.97 | 829 | 752 | 0.91 |
+| fill-blend | 53.9 | 53.8 | 1.00 | 201.5 | 196.5 | 0.98 |
+| tex | 341 | 298 | 0.87 | 1075 | 854 | 0.79 |
+| verts | 202.5 | 116.5 | 0.58 | 360 | 158.5 | 0.44 |
+| rows | 72.5 | 61 | 0.84 | 102 | 84 | 0.83 |
+
+- The open stack has no polling quantization (powervr_sgx waits with poll()
+  on its fd). tex 0.79-0.87 is what is left to find on the pixel side,
+  higher at the small size: a per-frame cost.
+- verts is the CPU index path (every index read and rebased each draw);
+  zero-copy's resident indices take it to ~0.9 on the EA3. Zero-copy
+  becomes the default on powervr_sgx once its full dEQP + piglit run is clean.
+
+### perfmicro on the open stack against the DDK (EA3, 2026-11-11)
+
+Current gaps on the EA3, which has no persistent open stack:
+- **Ours:** a RAM boot of the CI kernel (m2-drm 9ab77e2, 7.3.3-m2drm, which
+  includes 0f4d7d3), powervr_sgx and the open microkernel. Mesa is from dev
+  01768aa, with its defaults: zero-copy, F16 sampling, state reuse and 4 slots.
+- **DDK:** the DDK's GLES2 on the normal boot.
+- The same perfmicro source for both (x86_64 on ours, i386 on the DDK), every
+  frame rendered (a 1-pixel readback).
+- Two rounds of 5 s each, averaged; frames a second. 0 job timeouts and
+  0 recoveries.
+
+| test | DDK 720x480 | ours | ours/DDK | DDK 1440x960 | ours | ours/DDK |
+|---|---|---|---|---|---|---|
+| fill | 840.0 | 758.8 | 0.90 | 248.1 | 242.1 | 0.98 |
+| fill-blend | 201.3 | 196.8 | 0.98 | 53.7 | 53.9 | 1.00 |
+| tex | 1104.7 | 958.1 | 0.87 | 351.0 | 334.9 | 0.95 |
+| verts | 366.3 | 360.3 | 0.98 | 212.2 | 209.4 | 0.99 |
+| rows | 98.1 | 95.3 | 0.97 | 72.0 | 76.7 | 1.06 |
+
+- **verts:** 0.44-0.58 is now 0.98-0.99, with zero-copy as the default.
+- **rows:** above the DDK at 1440x960.
+- **What is left is per frame:**
+  - At 1440x960 every test is within 5%. At 720x480, fill (0.90) and tex (0.87)
+    lose about 0.13 ms and 0.14 ms a frame against the DDK's 1.19 ms and
+    0.91 ms.
+  - That cost doesn't grow with the pixel count, so it is in the frame's fixed
+    work (kick, completion, the readback), not in the per-pixel programs.
+- glmark2 isn't on the EA3, which has no x64 root and no mounted Minecraft root,
+  so its numbers come from the EA1 run.
+
 ## Shader code against libusc
 
 The DDK's compiler (libusc) is the bar for the code the GPU runs. We compare its output with
@@ -321,6 +596,62 @@ What still holds temporaries:
   - libusc writes `fmad pa0, pa0, pa4, pa8 rpt=4`. We keep a repeated instruction's
     destination apart from its sources, which is safe but costs registers.
 
+### Speed pass, 2026-11-09 (not yet measured on hardware)
+
+Driver mode, against libusc (corpus c1/c2/c3, issue slots / temporaries). Each step was
+checked to make no shader worse in any mode (F32, F16, driver), and to change the
+encoding of nothing it doesn't intend to.
+
+| step | commit | what | effect |
+|---|---|---|---|
+| colour fast paths | 8f3d5f0 (merged fe15537) | a texel that is the colour as two `pck.u8.u8` byte picks; a uniform colour as one `mov` from a slot the driver packs to BGRA8 (constant map 0x12) | `texture2D` to colour 6 → 2 instructions, 0 temporaries; flat colour 2 → 1 |
+| early-exit loops | 82f3f5c | a loop whose trip count isn't exact (an early `break`) stays a loop | `loop_v` 31 → 4 temporaries (libusc 9); c2 temporaries 198 → 171 |
+| floor / in place | 1ead616 | `floor` as one `fsubflr d, c48, x` read negated (`ceil` becomes libusc's one instruction); split repeats write in place over the inputs they read last | c2 1647 / 171 → 1635 / 143, c1 797 / 280 → 785 / 276 |
+| mask booleans | 64d06e4 | or / and of comparisons stay test masks (bitwise `or` / `and`) | glamor radial gradient 225 → 205 instructions, linear 163 → 145; c3 slots −15, glmark2 −6 |
+| texel channels | 729718d | a texel unpacks only the channels something reads | glamor glyphs 7 → 4 |
+| branch tests | 60eea0e | an `if` on a comparison tests into `p0` directly; on a mask, `test.and.eq` | c3 slots 2489 → 2467 |
+
+Totals, driver mode: c1 797 → 783 slots (temps 280 → 276), c2 1696 → 1633 (198 → 143),
+c3 2507 → 2467 (264 → 263), glmark2 1302 → 1292 (99 → 98). libusc: c2 1391 / 101,
+c3 2277 / 219.
+
+Each step has its own `SGX_COMPILER_DEBUG` flag (`notexcolor`, `nopackedcolor`,
+`unrollexits`, `nomaskbool`, `noiftest`) for bisecting a hardware failure.
+`tools/isa/hwt_p13.py` checks the new instructions (`pck.u8.u8` lanes, mask `or` / `and`,
+`test.and.eq`) on a box: all 11 passed on the EA3 (2026-11-09). Full dEQP-GLES2 on the
+EA3 with the whole pass (60eea0e): 16,637 pass, 0 unexpected, 0 wedges.
+On the EA1 (708a02e, uapi-stream, 2026-11-09): the dEQP shaders/fragment_ops/texture.format
+subset 11,940 pass with no new failure (`functional.shaders.*` 10,101 with the one expected
+fail); glmark2 720x480 on Xorg/glamor score 51 -> 53 (most scenes 2-5% faster, loop/uniform
++9%); Minecraft 10.1 / 10.9 -> 10.2 / 11.0 FPS standing / walking, picture unchanged
+(the fragment work is not Minecraft's bottleneck at this point).
+
+efo chaining (3db45e4, libusc's chained `v_mvp`: the next chain's first efo stores the
+previous chain's last lane with `d=i1`): gl4es terrain VS 29 → 26 instructions, glmark2
+slots 1292 → 1242. On the EA1 (uapi-stream, A/B against `noefochain`): the dEQP vertex
+subset (5,357 tests) identical; glmark2 build/texture/shading equal or slightly up
+(score 172 → 173); Minecraft renders correctly.
+
+Still open, in order:
+- uniform-only math per pixel or vertex. Measured with `nir_opt_preamble` before
+  building it: glmark2 would lift 25 ALU ops over 7 programs (about 2% of its slots),
+  the gl4es Minecraft set 3, glamor's gradients 15-34 per program (about 15-20%), its
+  fills and glyphs none. The driver already runs a per-draw fragment secondary
+  (`fs->sec`), so the work is the compiler's: the preamble as a second program sharing
+  the main one's constant layout. The driver's contract for it (mesa-gallium,
+  `fs_uniform_sec` in `tools/gen/mkusse.py`, DOUTU'd from the per-draw secondary task):
+  the DDK's prologue (`phas.i #0, #0 [wait=7]`, `nop [nosched]`,
+  `test.and.ne p0, #0, #0`, `(p0) ld.a.d pa0, pa0, #0 [moe]`, `wdf`, which waits for the
+  constant DMA); the constants are the task's pa registers (the main program's `sa<n>` is
+  its `pa<n>`), so results go to `pa<slot>`; the last instruction carries `[end]`;
+  temporaries are its own r0.., sized by `sec_temps`. `struct sgx_shader` would carry
+  `sec_code`/`n_sec_code`/`sec_temps`, and the slots it writes a const-map format 0x13
+  that the DMA skips. Parked behind the items below;
+- fixed-function fragment programs in F16 (`fs_mediump` didn't apply to Minecraft's
+  programs; the cause is being checked in the driver);
+- 8-bit colour math (`sopwm`, `sop2` on texels and lowp colours, as libusc does);
+- the texel's channel swizzle in the sample, so a texel colour is 0 instructions.
+
 ## Kernel driver (powervr_sgx)
 
 What a job costs on the CPU side, from a submit to its fence, measured with the
@@ -377,3 +708,196 @@ Trims to consider, with these numbers:
   the DDK microkernel's three interrupts);
 - `queue → run`: drm_sched's worker wakeup is the largest kernel share. It is
   roughly constant, and only worth attacking if submits ever queue back to back.
+
+## Minecraft's frame on the open stack (EA1, 2026-11-10)
+
+Bench world, standing, Xorg + our x11 Mesa, kernel ftrace grouped by render target
+plus a CLKGATESTATUS sampler (per-unit clock busy, about every 18 us).
+
+Where the frame goes, default (3 ring slots): one world render (~40 ms TA, then
+~23.5 ms 3D, no gap between them), two small renders and X's copy; every unit idle
+39% of the time and TA/3D never overlapping, against the DDK's 11% idle and 40%
+overlap. The DDK's hardware work per frame is not smaller.
+
+| change | stand fps | world ms | all idle | what it removed |
+|---|---|---|---|---|
+| default | 11.5 | 66 | 39% | |
+| `SGX_SLOTS=4` | 13.3-13.7 | 66 | 27% | recording the next frame waiting for this frame's world render (slot wait, ~40% of the game thread) |
+| `SGX_SLOTS=6` | 13.5 | 66 | | nothing more |
+| parameter buffer 4 / 16 / 32 MiB | 10.5-11.2 | 65-68 | | nothing: no OOM at any size |
+| `ffmediump` | 10.9 | 64 | | nothing |
+| `phasesplit` | 11.2 | 65.6 | | nothing measurable |
+| `phasesplit,ffmediump,f16samples` | 11.8 | 61.4 | | ~3.5 ms of 3D (F16 texels, no unpacks) |
+
+- Three ring slots and three renders a frame keep one frame in flight: the game
+  waits for the world render before recording the next one. Four take the GPU from
+  67% to 96% job-busy. With deeper queues X's copies wait behind the game's frames
+  (Xorg in dirtyfb on simpledrm): an X request's median latency is 1.85 s at four
+  slots against 166 ms at three, with or without a high-priority X context
+  (5721e6f, `SGX_CTX_PRIORITY=high`). X's copy of the game window waits for the
+  game's newest frame, and dirtyfb blocks X's main thread on that copy at every
+  present. The sysfb damage commit stopped blocking (m2-drm e874e6f): X latency
+  at four slots is 23 ms median (20-53, n=20) against 25 ms at three, no damage
+  lost, Minecraft 13.6 / 11.0 fps standing / walking against 12.6 / 9.2 at
+  three. Four slots are the default since (`SGX_SLOTS=3` for the old
+  behaviour); gma500 never had the wait.
+- What is left of the idle at four slots is the vendor microkernel's too: 5.3%
+  all-idle on ours against 6.5% on the vendor's, same TA and 3D a frame (a
+  steady window; an earlier warm-up window had suggested 1-10 ms of
+  kick-to-TA a job). Serial job turnaround is at parity.
+- `phasesplit` and `f16samples` are correct (dEQP-GLES2 mustpass and 117
+  fixed-function piglit tests match the baseline, no channel swaps) but the 3D is
+  not where this frame's time goes. F16 fixed-function programs and F16 samples
+  are the default since dEQP-GLES2 mustpass and piglit matched the baseline with
+  both (`noffmediump`, `nof16samples` turn them off). The phase split is the
+  default too (piglit identical with it, dEQP clean, no slower;
+  `nophasesplit` turns it off): neutral in Minecraft, but it is the DDK's form
+  and spares overdrawn alpha-tested pixels their colour work.
+
+### Where the world render's TA and 3D go, and the plan
+
+Per frame at render distance 4, standing (CLKGATESTATUS, slots 3): world TA
+~40 ms, then world 3D ~22 ms, no gap between them; two small renders and X's
+copy after. Standing fps is now 12.6-13.4, the DDK's 12.8 (under Xvfb).
+
+What does not move the world TA (each within noise, +-2 ms):
+
+| tried | what it changed | TA |
+|---|---|---|
+| vertex program +3 instructions (`noefochain`) | shading per vertex | same |
+| gathered f32 x 4 fetch (`nozerocopy`) | bytes and streams fetched | same |
+| a TA state block per draw vs one per run of equal draws (af18996: 94% skipped) | state the TA writes into the tiles | same |
+| TSP precision mask as the DDK's (`tspf16`) | the parameter buffer's per-vertex format | same |
+| parameter buffer 4 / 16 / 32 MiB | partial renders (none at 16) | same |
+
+The TE's configuration (AA, macrotiles, TE screen, region headers, tail
+pointers, the PB descriptor and thresholds, render details) is the DDK's word for
+word on the services path; only TA flags 2 differs, with the scene structure (the
+DDK's world is the first kick of a three-kick scene).
+
+What does: render distance 2 instead of 4 takes the TA from 40 to 15 ms and the
+3D from 22.5 to 16.5. The TA's time is the tiling of the primitives it is given
+(~160K triangles, 486K indices into 258K vertices a frame, the DDK's count): the
+hardware's rate for this scene, not something per draw or per vertex the driver
+adds. The DDK's is no faster: its TA clock runs ~77 ms a frame, ~41 ms of it
+alone and ~35 ms under its 3D (the same sampler on the DDK's Minecraft), so the
+DDK's lead in busy time is overlap, not a quicker TA.
+
+The plan, largest first, with what each is worth:
+
+| item | owner | worth (frame ~75 ms) | state |
+|---|---|---|---|
+| four slots by default: the next frame recorded while this one renders | kernel (simpledrm's dirtyfb), then Mesa | +8-20% fps (13.6 vs 12.6 standing, 11.0 vs 9.2 walking) | done: the default, after m2-drm e874e6f made the damage commit nonblocking (X 23 ms median) |
+| TA/3D overlap across frames (the next world TA under this 3D) | open-ukernel + kernel | up to the 3D's ~22 ms with four slots; ~2% at three | parked: recovery storms with `overlap=1` |
+| fewer renders a frame: the small renders after the world (FBO blit, GUI) and X's copy, each a job with its own start cost | Mesa (scene merging, as the DDK's 3-kick scene), X flips | ~5-10 ms (their run time plus a kick-to-TA each) | to do |
+| 3D: F16 fixed-function and F16 samples (done, ~3.5 ms); phase split (done, neutral) | usse-compiler | done | default |
+| TA rate itself | none (hardware) | the DDK pays the same | |
+
+### Where the 3D goes, against the DDK's (offline, 2026-11-11)
+
+From captures already taken, with no new box time:
+- the CLKGATESTATUS sampler (`caps-ddk/2026-11-10-busy`, 30 s each, standing at
+  render distance 4, three slots);
+- the pvrtrace captures of one steady frame: ours on the services path
+  (`2026-11-10-mcworld` A, kicks 2506-2510) and the DDK's (`mc-31091`, kicks
+  4021-4025).
+
+**The unit split can't separate ISP, TSP, texturing and PBE.** Inside our world
+render's 3D, the ISP, PBE, PDS, USSE and cache clocks are on 98-99% of the time.
+The TSP, iterator and texture clocks are on 87-88% of it, as one group, so all
+the sampler shows is a TSP-side group that is idle 12% of the 3D. The DDK's 3D
+shows the same picture.
+
+**Per frame, our 3D isn't slower than the DDK's in clock time:**
+
+| | ours | DDK |
+|---|---|---|
+| 3D clocked | 244 ms/s at 8.3 frames/s = 29.4 ms a frame | 423 ms/s at ~11.2 frames/s (TA 866 ms/s, ~77 ms a frame) = ~38 ms a frame |
+| of it with the TA clocked too | 1% | 94% |
+| world render's 3D | 23.9 ms (median) | not separable: it runs under the TA |
+| other 3D a frame | 5.1 ms, in 4 renders: 3.0 + 0.9 + 1.0 + ~0 ms | mostly under the TA |
+
+The DDK's 3D shares the USSE with its TA, so its clock time runs long; its 3D
+alone isn't measurable here. Its lead is still overlap: it hides its 3D under
+its TA.
+
+**The world render's state matches the DDK's except in the iteration.** About
+99% of both world renders' indices go to one terrain class. Both use
+punch-through, `lequal`, depth write on and colour mask `f`. Both sample the
+512×256 BGRA8888 atlas (nearest, repeat, no mipmaps) and the 16×16 lightmap
+(linear, clamp), with projected samples. Both pixel programs are 17 instructions
+of F16 math ending in `atst8`. Ours uses 0 temporaries against the DDK's 8.
+
+The DDK keeps both textures linear (layout 3); ours are twiddled (layout 0),
+which should be no worse for the texture cache.
+
+The difference is the PDS:
+
+| | DOUTIs per pixel | iterated into PA |
+|---|---|---|
+| DDK | 3: `iterate tc0 x4 f16; sample tc1 proj`, `iterate tc3 x1 f16; sample tc2 proj`, the colour (`src22 x3`) | 3 dwords plus the 3 of the colour |
+| ours | 7: `iterate tc0 x4 f16`, `iterate tc1 x1 f16`, `iterate tc2 x4`, `iterate tc3 x4`, `sample tc2 proj`, `sample tc3 proj`, the colour | 11 dwords plus the 3 of the colour |
+
+Our program never reads `tc2` and `tc3` (pa3-pa10). They're the two sampled
+coordinates, iterated as F32×4 on top of the samples that iterate them again.
+The compiler's `pds_samples_alone` (89fab5db) is meant to drop such iterations,
+but `sample_only_load()` refuses any projected sample (`nir_tex_src_projector`,
+`c->proj`). st's fixed-function programs sample with TXP, and so does all of
+Minecraft's terrain. On top of that, the driver merges a sample only into a
+plain DOUTI of the same set, while the DDK merges a sample into the previous
+iteration of another set.
+
+**The other renders: a clear on its own, and ZLS traffic the DDK has none of.**
+
+| | ours | DDK |
+|---|---|---|
+| renders a frame | 4: the window's clear (1 draw); the world, into the FBO; the window (the FBO blit, one draw, a depth quad); the present copy | 2: clear, world and GUI into the FBO in one scene; the window (clear, blit, depth quad) in one render. The present goes as a transfer. |
+| clear | its own render: 1.0 ms of 3D, depth and stencil stored | drawn in the next render's scene |
+| world render ZLS | `001710b4`: depth and stencil stored at every tile, never loaded again | `001440b0`: no store, no load |
+| window render ZLS | `001770b6`: loaded and stored. Its background object also loads the clear's colour. 3.0 ms. | `001110b0`: neither, and the clear is in the render |
+| present | a 3D render, 0.9 ms | `SUBMITTRANSFER` |
+
+Our ZLS buffer is stored at the end of every render (`zls_target`) and loaded
+unless the render starts with a full clear. A target switch flushes a frame
+that holds only a clear (`sgx_set_framebuffer_state`, then `begin_frame`). The
+window render then has to load the colour and depth that the clear render
+stored, and the depth it loads is overwritten by its own depth quad before
+anything reads it. Each store or load moves the 720×480 ZLS buffer, 5 bytes a
+pixel, 1.7 MB.
+
+**The levers, largest first:**
+
+1. **The terrain's dead iterations.** Let `sample_only_load()` accept a
+   projected sample when the PDS does the projection: that's the sample
+   `sample tcN proj` already emitted. Merge each sample into the previous plain
+   DOUTI of another set, as the DDK does. This takes 8 F32 dwords and 4 DOUTIs
+   off every terrain pixel, on 99% of the world render's draws, in the 3D's
+   busiest group. The size is unmeasured; the sampler can't separate the
+   iterator. An A/B of the world render's 3D, with and without the change, on
+   the sampler gives it.
+2. **Lazy clears.** Keep a frame that holds only full clears pending on its
+   target instead of rendering it at a target switch. The next render of that
+   target starts with the clear: no background load, no ZLS load. That removes
+   the 1.0 ms clear render and the window render's colour and depth loads.
+   Measured: the window render takes 3.0 ms against 0.9 ms for the present
+   copy, a full-screen sample without loads, so ~2 ms of loads and stores. About
+   3 ms a frame in all.
+3. **Depth stores nothing loads.** A window's depth buffer is undefined after a
+   swap, so the window render needn't store it. An FBO's depth is dead once the
+   next render of that FBO starts with a depth clear. Minecraft clears every
+   frame, and the DDK never stores the world's depth. Storing only when a later
+   render could load it needs either a hint (`glInvalidateFramebuffer`, which
+   Minecraft doesn't use) or the store decided when that next render begins.
+   Worth ~0.5 ms of the world render, a guess from the window render's loads.
+   The window part is in lever 2's ~2 ms.
+
+Beyond the 3D itself, the biggest lever is still TA/3D overlap: the DDK runs
+94% of its 3D clock under its TA. Fewer renders a frame (the present as a
+transfer or a flip, 0.9 ms) is in the plan above.
+
+**Gaps.**
+- Overdraw and per-tile object counts need the parameter buffer after the TA.
+  The pvrtrace snapshots are taken at kick time, before it runs.
+- Capture A is a services-path build of 2026-11-10. Lever 1's cause is
+  unchanged in today's compiler (`sample_only_load`). Lever 2's is unchanged in
+  today's driver (`zls_target`, the target-switch flush).

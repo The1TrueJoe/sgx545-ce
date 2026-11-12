@@ -3,21 +3,20 @@
 
 # The driver's view of the winsys: sgxws.h alone.  No services or kernel
 # headers on its include path, so nothing from kernel/src can reach the
-# gallium driver (AGENTS.md section 3.5).
+# gallium driver.
 idep_sgx_ws = declare_dependency(
   include_directories : include_directories('.'),
-  dependencies : [idep_sgx_pds, idep_sgx_csb],
+  dependencies : [idep_sgx_pds, idep_sgx_csb, idep_sgx_core],
 )
 
 # The powervr_sgx backend: the uAPI header (include/drm-uapi) and the stream
-# packers generated from its stream definitions (powervr_sgx_kmd_stream.h,
-# docs/uapi/gen_stream.py).
+# packers generated from its stream definitions (src/sgx/kmd_stream).
 sgx_ws_files = files('sgx_frame.c', 'sgx_powervr_sgx.c')
 sgx_ws_args = []
 sgx_ws_inc = [include_directories('.')]
 
 # The services backend (pvrsrvkm, the DDK's kernel driver), with
-# -Dgallium-sgx-pvrsrvkm (patch 0007): mesa/build.sh links sgx545-ce's libpvr
+# -Dgallium-sgx-pvrsrvkm (patch 0007): mesa/build.sh links powervr_sgx's libpvr
 # into this directory for it.  It is built against the
 # kernel driver's own bridge headers (kernel/src, linked into the tree as
 # include/sgx-kernel) with the kernel's defines (libpvr/abi/flags.sh);
@@ -51,7 +50,7 @@ if get_option('gallium-sgx-pvrsrvkm')
     files('libpvr/pvr.c', 'sgx_pvr.c'),
     include_directories : [include_directories('.', 'libpvr'), inc_sgx_kernel, inc_src, inc_include],
     c_args : sgx_kernel_args,
-    dependencies : idep_sgx_pds,
+    dependencies : [idep_sgx_pds, idep_sgx_core, idep_sgx_compiler],
     gnu_symbol_visibility : 'hidden',
   )
   sgx_ws_args += '-DSGX_PVRSRVKM'
@@ -69,7 +68,8 @@ libsgxwinsys = static_library(
   ],
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
-  dependencies : [idep_mesautil, dep_libdrm, idep_sgx_pds, idep_sgx_csb],
+  dependencies : [idep_mesautil, dep_libdrm, idep_sgx_pds, idep_sgx_csb,
+                  idep_sgx_core, idep_sgx_kmd_stream, idep_sgx_compiler],
   gnu_symbol_visibility : 'hidden',
 )
 
@@ -81,7 +81,23 @@ sgx_frame_test = executable(
   include_directories : [sgx_ws_inc, inc_src, inc_include],
   c_args : sgx_ws_args,
   objects : sgx_ws_pvr,
-  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb],
+  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
+                  idep_sgx_core, idep_sgx_kmd_stream, idep_sgx_compiler],
+  build_by_default : false,
+  install : false,
+)
+
+# Hand-written fragment programs through the winsys, their result read back:
+# the hardware checks on the open stack (ninja sgx_hwt; tools/isa/hwt_open.py).
+sgx_hwt = executable(
+  'sgx_hwt',
+  files('sgx_hwt.c'), sgx_ws_files,
+  include_directories : [sgx_ws_inc, inc_src, inc_include],
+  c_args : sgx_ws_args,
+  objects : sgx_ws_pvr,
+  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
+                  idep_sgx_isa, idep_sgx_core, idep_sgx_kmd_stream,
+                  idep_sgx_compiler],
   build_by_default : false,
   install : false,
 )

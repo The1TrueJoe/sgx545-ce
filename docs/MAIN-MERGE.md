@@ -21,8 +21,8 @@ State on 2026-11-09:
 | 2 | Workflows: every one triggers on pushes to `um-re` or `m2-drm` only. Add `main` to the branches (or move the triggers there) in the same change as the merge. | open |
 | 3 | Artifact lookups: `cedarview-live.yml` and `cedarview-kit.yml` take the newest artifact by `head_branch == "m2-drm"` / `"um-re"`. If development moves to `main`, these must follow. | open |
 | 4 | Every workflow green at the merge commit (list below). | open (green on the branches today) |
-| 5 | `main`'s old layout goes away: `Config.in`, `sgx545-ce.mk`, `Kbuild`, `Kconfig`, `Makefile`, `linux.fragment`, `sgx-init`, `src/`, `dev/`. Anything that builds from `main` as a Buildroot package breaks at the merge, so check downstream pins first and point them at a tag of the old `main` if they still need it. | open |
-| 6 | Tag the current `main` (for example `pre-um-re`) before merging, so the old layout stays reachable. | open |
+| 5 | `main`'s old layout goes away: `Config.in`, `sgx545-ce.mk`, `Kbuild`, `Kconfig`, `Makefile`, `linux.fragment`, `sgx-init`, `src/`, `dev/`. Anything that builds from `main` as a Buildroot package breaks at the merge, so check downstream pins first and point them at a tag of the old `main` if they still need it. Downstream pins by submodule at a fixed commit, so the merge breaks nothing until someone bumps it; a bump must follow the new layout. | open |
+| 6 | Tag the current `main` as `intel-closed-userspace` before merging, so the old layout stays reachable. | open |
 | 7 | Root clutter: `ce5300-regsample-ab.sh`, `ce5300-ro1-test2.sh` and `ce5300-stabilize.sh` sit at the top level. Move them under `tools/` or drop them. | done: moved to `tools/rig/` |
 | 8 | `docs/log/data/2026-11-03-0700-ea3-ab-ddk-render.bb.bin` (1.4 MB) is named like a capture of a DDK render. Check that it holds no DDK-derived output; the repository is public. | done: removed from the tree |
 | 9 | README current: the stack, the status, the hardware, how to install and test. | done (this change) |
@@ -30,6 +30,13 @@ State on 2026-11-09:
 | 11 | No closed binaries: only the open microkernel is built and shipped; Intel's DDK image is never in the repository or a package. | done |
 | 12 | No mention of the board project in code or docs (CI workflows may name the board repository). | done (a case-insensitive grep for the board project's name matches one workflow only) |
 | 13 | American English in docs and kit text. The prose in `docs/` and `docs/log/` is converted (f45d19f and the follow-up). Code spans, identifiers, register names, quoted DDK messages and raw log output keep their original spelling. The kit and the tester guide were already clean. | done |
+| 14 | v3.1 sticks already in testers' hands link `blob/um-re`. Delete `um-re` only after v3.2 (whose links point at `main`) replaces v3.1 in issue #5 (the Cedarview test issue), or the testers' guide link breaks. | open |
+
+## Branches that downstream pins use
+
+`kernel-7.3` (f080457) is the old layout at efda5ef plus `strncpy` → `strscpy` in `kernel/`, for
+Linux 7.3. A downstream submodule pins it, so keep the branch as long as anything pins it, and
+across the merge.
 
 ## Workflows
 
@@ -51,7 +58,7 @@ Decide whether `cedarview-kit` (v2) stays now that v3 replaces it.
 
 ## INSTALL.md on hardware
 
-On a CE5300 board (EA1) on 2026-11-09, in the Debian 13 test root, with the packages from
+On a CE5300 board on 2026-11-09, in the Debian 13 test root, with the packages from
 `mesa-debian` run 42557836753 (the ones stick v3.1 carries) and the kernel from
 `powervr-sgx` 535b5dc. The run is `mesa/tests/desktop/install-e2e.sh`.
 

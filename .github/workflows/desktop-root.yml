@@ -7,7 +7,7 @@ name: desktop-root
 on:
   workflow_dispatch:
   push:
-    branches: [um-re]
+    branches: [dev, main]
     paths:
       - mesa/tests/desktop/packages.txt
       - .github/workflows/desktop-root.yml

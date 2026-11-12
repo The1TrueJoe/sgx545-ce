@@ -15,7 +15,7 @@
 #include "util/u_screen.h"
 
 #include "sgx_context.h"
-#include "sgx_device.h"
+#include "sgx_core.h"
 #include "sgx_program.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
@@ -36,21 +36,20 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
    {"flushall", SGX_DEBUG_FLUSH_ALL, "submit at every flush (none deferred)"},
    {"novcache", SGX_DEBUG_NO_VCACHE, "no vertex cache"},
    {"nof16", SGX_DEBUG_NO_F16, "no F16/C10 fragment arithmetic"},
-   {"nodrvconsts", SGX_DEBUG_NO_DRV_CONSTS,
-    "no driver constant formats (lowp as F16, literals)"},
-   {"fsconst", SGX_DEBUG_FS_CONST,
-    "every fragment shader a constant colour per program (measuring)"},
-   {"attrs", SGX_DEBUG_ATTRS,
-    "describe the first draws with 5 or more vertex inputs, and clears"},
-   {"blits", SGX_DEBUG_BLITS, "describe every 255th blit and its caller"},
-   {"novs", SGX_DEBUG_NO_VS_COMPILER,
-    "the fixed vertex programs instead of the compiler"},
-   {"nofs", SGX_DEBUG_NO_FS_COMPILER,
-    "the fixed fragment programs instead of the compiler"},
-   {"ffmediump", SGX_DEBUG_FF_MEDIUMP,
-    "fixed-function fragment programs at mediump (F16; texture coordinates F32)"},
-   {"zerocopy", SGX_DEBUG_ZERO_COPY,
-    "f32 vertex inputs DMAed where they are: buffers in place, client arrays copied as they are"},
+   {"noffmediump", SGX_DEBUG_NO_FF_MEDIUMP,
+    "fixed-function fragment programs at highp (F32), not mediump (F16; texture coordinates F32)"},
+   {"nozerocopy", SGX_DEBUG_NO_ZERO_COPY,
+    "vertex inputs gathered into f32 x 4, not DMAed where they are"},
+   {"nolazyscanout", SGX_DEBUG_NO_LAZY_SCANOUT,
+    "scanout buffers on a dumb-buffer display (kmsro) are the display's from the start, not when a KMS handle is asked for"},
+   {"nophasesplit", SGX_DEBUG_NO_PHASE_SPLIT,
+    "a fragment program that discards runs whole before the visibility feedback, not only its test (its colour after, as the DDK's alpha-tested programs)"},
+   {"nof16samples", SGX_DEBUG_NO_F16_SAMPLES,
+    "texels a mediump program reads come back RGBA8 to unpack, not F16 (T3 01028800)"},
+   {"nodepf16samples", SGX_DEBUG_NO_DEP_F16_SAMPLES,
+    "dependent texels a mediump program reads come back RGBA8 to unpack, not F16"},
+   {"nopdsmerge", SGX_DEBUG_NO_PDS_MERGE,
+    "a sample is merged only into the previous iteration of its own set, not of another"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -67,7 +66,12 @@ DEBUG_GET_ONCE_OPTION(sgx_trace, "SGX_TRACE", NULL)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_trace_kicks, "SGX_TRACE_KICKS", 0)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_dry_run, "SGX_DRY_RUN", -1)
 DEBUG_GET_ONCE_NUM_OPTION(sgx_frame_gap_us, "SGX_FRAME_GAP_US", 0)
+/* frames in flight, 2 to 4 (4 by default): fewer trade throughput for
+ * latency (an X desktop behind a game) */
 DEBUG_GET_ONCE_NUM_OPTION(sgx_slots, "SGX_SLOTS", 0)
+/* every draw its own programs and TA state; the parameter buffer's size */
+DEBUG_GET_ONCE_BOOL_OPTION(sgx_state_always, "SGX_STATE_ALWAYS", false)
+DEBUG_GET_ONCE_NUM_OPTION(sgx_pb_pages, "SGX_PB_PAGES", 0)
 
 const char *
 sgx_dump_code_dir(void)
@@ -102,7 +106,7 @@ sgx_get_screen_fd(struct pipe_screen *pscreen)
 static void
 sgx_init_shader_caps(struct pipe_screen *pscreen)
 {
-   const struct sgx_device_features *f = sgx_screen(pscreen)->features;
+   const struct sgx_core *f = sgx_screen(pscreen)->core;
 
    for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT;
         s += MESA_SHADER_FRAGMENT) {
@@ -135,7 +139,7 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
       /* u[i]: indexed from SA, or from the block when the array doesn't fit
        * (without it GLSL selects over the whole array, a load per element) */
       caps->indirect_const_addr = true;
-      caps->max_temps = f->max_temps;
+      caps->max_temps = f->gl_max_temps;
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = f->samplers;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
@@ -153,7 +157,7 @@ static void
 sgx_init_screen_caps(struct pipe_screen *pscreen)
 {
    struct sgx_screen *screen = sgx_screen(pscreen);
-   const struct sgx_device_features *f = screen->features;
+   const struct sgx_core *f = screen->core;
    struct pipe_caps *caps = (struct pipe_caps *)&pscreen->caps;
 
    u_init_pipe_screen_caps(pscreen, 1);
@@ -168,6 +172,12 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    /* blending is shader code (STATE.md section 3): any equation per channel */
    caps->blend_equation_separate = true;
    caps->uma = true;
+   /* the kernel's scheduler takes a context's priority (glamor asks for
+    * high, so X's copies don't queue behind a game's frames) */
+   if (screen->info->priorities)
+      caps->context_priority_mask = PIPE_CONTEXT_PRIORITY_LOW |
+                                    PIPE_CONTEXT_PRIORITY_MEDIUM |
+                                    PIPE_CONTEXT_PRIORITY_HIGH;
    /* a texture can be a render target: no bigger than the kernel takes one */
    caps->max_texture_2d_size =
       MIN3(f->max_texture_size, screen->info->rt_max_width,
@@ -185,8 +195,8 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    caps->fs_coord_pixel_center_half_integer = true;
    caps->min_line_width = caps->min_line_width_aa = 1;
    caps->min_point_size = caps->min_point_size_aa = 1;
-   caps->max_line_width = caps->max_line_width_aa = 16;
-   caps->max_point_size = caps->max_point_size_aa = 511;
+   caps->max_line_width = caps->max_line_width_aa = f->line_width_max;
+   caps->max_point_size = caps->max_point_size_aa = f->point_size_max;
    caps->point_size_granularity = caps->line_width_granularity = 0.1f;
    caps->max_texture_lod_bias = 16;
    /* What desktop GL has and the hardware does in the shader: st lowers the
@@ -331,13 +341,6 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
    if (!screen)
       return NULL;
    sgx_drv_debug = debug_get_option_sgx_drv_debug();
-   /* The GL linker's varying optimisation (nir_opt_varyings) packs varyings
-    * into shared slots whatever the driver asks: a fog varying packed in
-    * front of a texture coordinate keeps the PDS from doing the texture read
-    * (a projected read needs a whole vec4 varying at component 0), and it
-    * becomes a dependent sample in the shader.  Varyings are kept as
-    * declared, for this process, unless the user set it. */
-   setenv("MESA_GLSL_DISABLE_IO_OPT", "1", 0);
    screen->fd = screen->dev_fd = fd;
    simple_mtx_lock(&kept_lock);
    if (kept.fd >= 0) {
@@ -357,6 +360,8 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       .dry_run = debug_get_option_sgx_dry_run(),
       .frame_gap_us = debug_get_option_sgx_frame_gap_us(),
       .slots = debug_get_option_sgx_slots(),
+      .state_always = debug_get_option_sgx_state_always(),
+      .pb_pages = debug_get_option_sgx_pb_pages(),
    };
 
    if (screen->dev_fd == fd && !(screen->dev = sgxws_dev_create(fd, &wsopts))) {
@@ -364,17 +369,14 @@ sgx_screen_create(int fd, const struct pipe_screen_config *config,
       return NULL;
    }
    screen->info = sgxws_dev_info(screen->dev);
-   screen->features = sgx_device_features(screen->info);
-   if (!screen->features) {
-      mesa_loge("sgx: no support for core id %#x revision %#x",
-                screen->info->core_id, screen->info->core_revision);
-      sgxws_dev_destroy(screen->dev);
-      FREE(screen);
-      return NULL;
-   }
+   /* the winsys refused a core without a description */
+   screen->core =
+      sgx_core_lookup(screen->info->core_id, screen->info->core_revision);
    snprintf(screen->name, sizeof(screen->name), "PowerVR %s",
-            screen->features->name);
+            screen->core->name);
    screen->ro = ro;
+   screen->zero_copy =
+      !(sgx_drv_debug & SGX_DEBUG_NO_ZERO_COPY) && screen->info->zero_copy;
    simple_mtx_init(&screen->lock, mtx_plain);
    slab_create_parent(&screen->transfer_pool, sizeof(struct sgx_transfer), 16);
 

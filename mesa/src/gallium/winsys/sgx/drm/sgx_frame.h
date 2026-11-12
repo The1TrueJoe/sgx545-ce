@@ -41,10 +41,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "util/log.h"
+
+#include "sgx_core.h"
+#include "sgx_fixed.h"
 #include "sgxws.h"
 
-/* where a buffer lives: the SGX heap ids (the low byte of the DDK's heap ID),
- * which index sgxws_dev.heap_base */
+/* where a buffer lives: the SGX heap ids (the low byte of a services heap
+ * ID), which index sgxws_dev.heap_base */
 enum sgx_heap {
    SGX_HEAP_GENERAL = 0,
    SGX_HEAP_TADATA = 1,
@@ -67,6 +71,7 @@ struct sgxws_kif;
 /* the connection to the kernel driver; a backend's device embeds it first */
 struct sgxws_dev {
    const struct sgxws_kif *kif;
+   const struct sgx_core *core; /* the core info describes (sgx_core.h) */
    struct sgxws_device_info info; /* filled by the backend; PCI ids by
                                      sgxws_dev_create */
    uint32_t heap_base[16];        /* device address of each heap, by heap id */
@@ -75,8 +80,10 @@ struct sgxws_dev {
    int verbose;
    bool flush_rt; /* sgxws_dev_options */
    unsigned frame_gap_us;
+   bool state_always; /* every draw its own programs and TA state */
    unsigned slots;
    int dry_run;
+   unsigned ta_split; /* sgxws_dev_options */
 };
 
 /* a buffer's backend side; a backend's buffer embeds it first */
@@ -98,6 +105,24 @@ struct sgxws_ring {
    uint32_t part, hi, parts;
    uint32_t uploaded;
    uint32_t last_seq; /* the last kick that runs code from it (code pools) */
+   /* PDS rings: the slot's last programs, for a draw that needs one again
+    * (NULL: not kept) */
+   struct sgxws_pds_memo *memo;
+};
+
+/* USSE program code: chunks, each only appended to (powervr_sgx checks code
+ * as it is uploaded), emptied for reuse once every program in it is freed and
+ * no render can run it.  Fixed programs keep the first chunk. */
+#define SGXWS_CODE_CHUNK 0x10000u
+struct sgxws_code_chunk {
+   struct sgxws_ring r;
+   unsigned live;     /* programs in it not freed */
+   uint32_t free_seq; /* the last kick that may run one of them */
+};
+struct sgxws_code {
+   enum sgx_heap heap;
+   struct sgxws_code_chunk **chunk;
+   unsigned n, cur;
 };
 
 struct sgxws_rt_numbers {
@@ -129,8 +154,11 @@ struct sgxws_eot {
 struct sgxws_ctx {
    struct sgxws_dev *dev;
    void *k; /* the backend's */
-   /* code (persistent) and per-frame rings */
-   struct sgxws_ring usse_pix, usse_vtx;
+   int priority; /* sgxws_ctx_create's */
+   /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
+   struct sgxws_code usse[2];
+   struct sgxws_bo code_hold[2]; /* SGX_CODE_WINDOW's space below the code */
+   struct sgx_fixed_progs fixed; /* the fixed programs, assembled */
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
    /* the end-of-tile programs: two code pools used in turn, each emptied
     * once no render runs code from it */
@@ -149,7 +177,7 @@ struct sgxws_ctx {
    uint32_t idx;            /* identity 16-bit index buffer */
    uint32_t defaults;       /* what a fetch leaves out (vdm_fetch) */
    uint32_t idx_count;
-   uint32_t vdm_counter; /* the DDK's rotating TA-state buffer index */
+   uint32_t vdm_counter; /* the rotating TA-state buffer index */
    /* the frame being recorded */
    struct sgxws_rt *rt;
    struct sgxws_target target;
@@ -157,6 +185,14 @@ struct sgxws_ctx {
    uint32_t bg_pds[3];
    uint32_t pixev, pixev_rows; /* its pixel event program */
    unsigned draws;             /* objects recorded in this frame */
+   /* kick_ta: the TA kicks of this frame's scene so far, and the objects
+    * since the last one */
+   unsigned ta_kicks, seg_draws;
+   /* the TA state block the MTE has (0 words: none yet in this kick), and the
+    * frame's last fragment constant block, for draws that repeat them */
+   uint32_t last_blk[32];
+   unsigned last_blk_n;
+   uint32_t *last_u, last_u_cap, last_u_dwords, last_u_va;
    /* the frame's depth bias (render details +0x14, +0x18), once a draw
     * with it is recorded */
    bool bias_set;
@@ -193,6 +229,7 @@ struct sgxws_ctx {
    enum sgxws_reset reset; /* since sgxws_reset_status last asked */
    uint64_t gpu_indices,
       gpu_verts; /* stats: the VDM's indices and the vertices behind them */
+   unsigned state_sent, state_skipped; /* stats: draws' TA state blocks */
 };
 
 /*
@@ -234,6 +271,12 @@ struct sgxws_kif {
     * stream ends with vdm_end's words) as kick seq.  A failed kick counts
     * as done. */
    int (*kick)(struct sgxws_ctx *c, uint32_t seq);
+   /* optional: a TA kick of the frame recorded so far (c->vdm_start to
+    * vdm_end's words), the scene going on in later kicks; the last is kick,
+    * with c->ta_kicks > 0 */
+   int (*kick_ta)(struct sgxws_ctx *c);
+   /* kicks the backend's command ring holds unread (0: no bound) */
+   unsigned ring_kicks;
    /* 0 once kick seq is done; timeout 0 polls */
    int (*wait_seq)(struct sgxws_ctx *c, uint32_t seq, unsigned timeout_ms);
    /* the frame line SGX_DEBUG=frame prints, the backend's part */
@@ -251,11 +294,12 @@ int sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
 int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo,
                         enum sgx_heap heap, uint32_t attribs, uint32_t size,
                         uint32_t align);
-/* the attributes the DDK gives a colour buffer it renders to */
+/* the attributes of a colour buffer the GPU renders to [D] */
 #define SGXWS_ATTRIBS_COLOR 0x10000003
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are
- * relocated to where it lands).  Returns its device address. */
+ * relocated to where it lands, within its 512 KiB code base window).
+ * Returns its device address. */
 uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
                            unsigned n, const uint8_t *reloc, unsigned nreloc);
 
@@ -264,8 +308,6 @@ void sgxws_vdm_end(struct sgxws_ctx *c);
 
 uint64_t sgxws_now_ns(void);
 uint32_t sgxws_f32(float x);
-
-#define sgxws_err(...) fprintf(stderr, "sgx: " __VA_ARGS__)
 
 #ifdef __cplusplus
 }

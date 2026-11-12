@@ -1720,7 +1720,7 @@ spec@ext_texture_compression_s3tc@texwrap formats bordercolor@GL_COMPRESSED_RGBA
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor@GL_COMPRESSED_RGBA_S3TC_DXT5_EXT- border color only,Fail
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor@GL_COMPRESSED_RGB_S3TC_DXT1_EXT- border color only,Fail
 spec@arb_texture_rg@texwrap formats bordercolor,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled,Skip
+spec@arb_texture_rg@texwrap formats bordercolor-swizzled,Fail
 spec@arb_texture_rg@texwrap formats bordercolor@GL_R16- border color only,Fail
 spec@arb_texture_rg@texwrap formats bordercolor@GL_R8- border color only,Fail
 spec@arb_texture_rg@texwrap formats bordercolor@GL_RG16- border color only,Fail
@@ -1779,6 +1779,20 @@ spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRE
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_S3TC_DXT5_EXT- swizzled- border color only,Fail
 spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGB_S3TC_DXT1_EXT- swizzled- border color only,Fail
 spec@!opengl 1.1@texwrap formats@GL_R3_G3_B2- swizzled,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor-swizzled,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor-swizzled@GL_SLUMINANCE8- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor-swizzled@GL_SLUMINANCE8_ALPHA8- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor-swizzled@GL_SRGB8- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats bordercolor-swizzled@GL_SRGB8_ALPHA8- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SLUMINANCE- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SLUMINANCE_ALPHA- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT- swizzled- border color only,Fail
+spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_S3TC_DXT1_EXT- swizzled- border color only,Fail
 
 # texture formats: only five sampler formats (RGBA8, 565, A8, L8, LA88), so other sized and compressed formats fall back or are refused
 spec@!opengl 1.1@sized-texture-format-channels,Fail

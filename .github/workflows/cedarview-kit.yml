@@ -10,7 +10,7 @@ on:
         description: powervr-sgx run id whose powervr-sgx-cedarview artifact to use (default the newest)
         default: ''
   push:
-    branches: [um-re]
+    branches: [dev, main]
     paths:
       - kit/cedarview/**
       - .github/workflows/cedarview-kit.yml

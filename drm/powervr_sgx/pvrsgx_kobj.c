@@ -145,7 +145,20 @@ void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 
 void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 {
-	pvrsgx_kobj_reap(sdev, U64_MAX);
+	/*
+	 * Freeing can release more: a VM's last object frees the VM, which
+	 * drops its PB reference, and the PB's objects join the graveyard.
+	 */
+	for (;;) {
+		bool empty;
+
+		mutex_lock(&sdev->kobj_lock);
+		empty = list_empty(&sdev->graveyard);
+		mutex_unlock(&sdev->kobj_lock);
+		if (empty)
+			break;
+		pvrsgx_kobj_reap(sdev, U64_MAX);
+	}
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		drm_mm_takedown(&sdev->krange[r]);
 	mutex_destroy(&sdev->kobj_lock);

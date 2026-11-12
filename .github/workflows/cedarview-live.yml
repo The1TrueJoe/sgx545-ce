@@ -7,7 +7,7 @@ name: cedarview-live
 on:
   workflow_dispatch:
   push:
-    branches: [um-re]
+    branches: [dev, main]
     paths:
       - kit/cedarview-live/**
       - mesa/tests/desktop/packages.txt
@@ -40,8 +40,8 @@ jobs:
             gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$1" -D "$3"
             echo "$1: run $id" | tee -a sources.txt
           }
-          get powervr-sgx-deb-cedarview m2-drm debs
-          get mesa-sgx-trixie um-re debs
+          get powervr-sgx-deb-cedarview-kit m2-drm debs
+          get mesa-sgx-trixie dev debs
           get powervr-sgx-cedarview m2-drm tests
           ls -l debs tests
 
@@ -77,15 +77,19 @@ jobs:
             echo "variant B: $(python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel-xferbank.bin | head -1)";
           } | tee out/BUILD-INFO.txt
 
-      - name: Boot it in QEMU, BIOS and UEFI (results with screenshots; the other disk untouched)
+      - name: Boot it in QEMU, BIOS and UEFI, and once with a hung X (results with screenshots; the other disk untouched)
         run: |
           set -eux
           sudo chmod 666 /dev/kvm 2>/dev/null || true
           for fw in bios uefi; do sh kit/cedarview-live/qemu-test.sh out/*.img.gz $fw; done
+          sh kit/cedarview-live/qemu-test.sh out/*.img.gz bios xhang
+
+      - name: The artifact's name follows the kit's series
+        run: echo "KIT_SERIES=$(cat kit/cedarview-live/SERIES)" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sgx545-cedarview-kit-v3
+          name: sgx545-cedarview-kit-${{ env.KIT_SERIES }}
           path: out/
           compression-level: 0
           retention-days: 90

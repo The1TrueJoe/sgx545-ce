@@ -145,14 +145,13 @@ static const struct {
 };
 
 bool
-sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
-                            unsigned nparts, unsigned nops, const char **pat)
+sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts, unsigned nparts,
+                         unsigned nops, const char **pat)
 {
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
       int s = nparts == 3 ? LOOKUP(fdual_sec, parts[2]) : -1;
-      /* sec 3 is fsubflr; fadm and ffrc are other names for it (ISA.md "Dual
-       * issue") */
+      /* sec 3 is fsubflr; fadm and ffrc are other names for it */
       if (nparts == 3 &&
           (!strcmp(parts[2], "fadm") || !strcmp(parts[2], "ffrc")))
          s = 3;
@@ -176,8 +175,8 @@ sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
            opc == SGX_ISA_OPC_IMA32)) {
          I->sgn = true;
       } else if (nparts == 2 && fmtx) {
-         /* the format as a suffix: bilin.s8, ssum16.o8, firh.s8 (ISA.md
-          * "hw 16 / 17 / 1a"); ssum16's picks the form */
+         /* the format as a suffix: bilin.s8, ssum16.o8, firh.s8; ssum16's
+          * picks the form */
          static const char *const sfx[] = {"u8", "s8", "o8", "fmt3"};
          int f = LOOKUP(sfx, parts[1]);
          if (f <= 0 || (f == 3 && opc == SGX_ISA_OPC_SSUM16))
@@ -242,8 +241,8 @@ set_num(const char *v, uint8_t *out)
 }
 
 /*
- * efo's i, a and m as dis.py prints them, "i0=m0,i1=m1", into the table's
- * "m0/m1" (ISA.md "Other spellings asm.py takes"); NULL if it isn't that form.
+ * efo's i, a and m in their long spelling, "i0=m0,i1=m1", into the table's
+ * "m0/m1"; NULL if it isn't that form.
  */
 static const char *
 efo_pair(const char *v, char *buf, size_t size)
@@ -260,7 +259,7 @@ efo_pair(const char *v, char *buf, size_t size)
 
 bool
 sgx_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
-                        const char *value)
+                     const char *value)
 {
    enum sgx_isa_opc o = I->opc;
    bool sop2 = o == SGX_ISA_OPC_SOP2, sopwm = o == SGX_ISA_OPC_SOPWM;
@@ -357,7 +356,7 @@ sgx_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
    if (!strcmp(name, "cs")) {
       if (o == SGX_ISA_OPC_LRP1)
          return SET_ENUM(lrp1_cs, lcs);
-      /* dot's scales: x4, or cx4 / ax2 (ISA.md "Other spellings") */
+      /* dot's scales: x4, or cx4 / ax2 */
       if (dot && value && value[0] == 'c' && value[1] == 'x')
          value++;
       if (dot)

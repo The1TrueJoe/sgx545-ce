@@ -4,10 +4,10 @@
 Copyright © 2026 Joseph Telaak
 SPDX-License-Identifier: MIT
 
-The TA state block (docs/STATE.md section 3): a header word, then the groups
-it names, in the header's bit order. For Mesa's csbgen. A field named
-unknown_<bits> holds bits STATE.md gives a value but no meaning; widths
-STATE.md doesn't give are taken up to the next known field.
+The TA state block: a header word, then the groups it names, in the
+header's bit order. For Mesa's csbgen. A field named unknown_<bits> holds
+bits whose meaning is unknown, defaulting to the value they always have. A
+field of unknown width runs up to the next known field.
 -->
 
 <csbgen name="SGX" prefix="TA">

@@ -1,0 +1,14 @@
+sop2_u8_sel_nofc         0xaa335599  ok 
+sop2_c10_sel_nofc        0xff4080ff   
+sop2_u8_sel_fc11         0xaa335599  ok 
+sop2_c10_sel_fc11        0xff4080ff   
+sop2_u8_sel_fc00         0xaa335599  ok 
+sop2_c10_sel_fc00        0x1f020100   
+sop2_u8_sel_fc10         0xaa335599  ok 
+sop2_c10_sel_fc10        0x1f020100   
+sop2_u8_sel_fc01         0xaa335599  ok 
+sop2_c10_sel_fc01        0xff4080ff   
+sop2_u8_add              0xffd0a080   
+sop2_u8_sub              0x30001800   
+sop2_u8_mul              0x40802000   
+sop2_c10_add             0xffff7fff   

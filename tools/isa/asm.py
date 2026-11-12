@@ -15,14 +15,34 @@ assemble() also takes the older fields.json syntax (asm_fz.py, e.g.
 tools/decode/mkreplay.py keep working.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hw  # noqa: E402
 
+# An immediate written as a bare identifier: `#CR_3D_KICK`, resolved from a
+# per-core symbol table (docs/UKERNEL-TOOLING.md §2/§4). `#0x428` / `#1064` are
+# left alone, so numeric callers are unaffected.
+_SYM = re.compile(r"#([A-Za-z_]\w*)\b")
 
-def assemble(line):
-    """-> (hi, lo)"""
+
+def _resolve(line, symbols):
+    def sub(m):
+        name = m.group(1)
+        if name not in symbols:
+            raise ValueError(f"unknown symbol #{name}")
+        return "#" + str(int(symbols[name]))
+    return _SYM.sub(sub, line)
+
+
+def assemble(line, symbols=None):
+    """-> (hi, lo). With `symbols`, a per-core constants table (name -> int),
+    any `#NAME` immediate is resolved from it first, so microkernel source can
+    read `str #CR_3D_KICK, r5`. Expressions are not evaluated (a caller needing
+    `CR_3D_KICK // 4` keeps the literal); `symbols=None` is the old behaviour."""
+    if symbols:
+        line = _resolve(line, symbols)
     try:
         lo, hi = hw.encode(hw.parse(line))
         return hi, lo

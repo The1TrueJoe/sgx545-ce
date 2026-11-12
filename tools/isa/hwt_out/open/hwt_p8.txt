@@ -1,0 +1,19 @@
+test_f16_half_r0_lt_r1   0xaaaaaaaa   
+test_f16_half_r1_lt_r0   0x3f800000   
+efo_bit6_nofc            0x40404200   
+efo_bit6_fc01            0x40404200   
+efo_bit6_fc11            0x40800000  ok 
+sop2_c10_alpha_src       0x100000ff   
+sop2_c10_bytes           0x00442211   
+test_c10_onehot0_chan0   0x3f800000   
+test_c10_onehot0_chan1   0x3f800000   
+test_c10_onehot0_chan2   0xaaaaaaaa   
+test_c10_onehot0_chan3   0xaaaaaaaa   
+test_c10_onehot1_chan0   0xaaaaaaaa   
+test_c10_onehot1_chan1   0x3f800000   
+test_c10_onehot1_chan2   0xaaaaaaaa   
+test_c10_onehot1_chan3   0xaaaaaaaa   
+test_c10_onehot2_chan0   0xaaaaaaaa   
+test_c10_onehot2_chan1   0x3f800000   
+test_c10_onehot2_chan2   0xaaaaaaaa   
+test_c10_onehot2_chan3   0x3f800000   

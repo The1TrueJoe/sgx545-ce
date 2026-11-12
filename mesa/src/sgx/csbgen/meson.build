@@ -17,7 +17,7 @@ foreach f : sgx_csb_xml_files
   _name = '@0@.h'.format(f.split('.')[0])
   sgx_csb_h += custom_target(
     _name,
-    input : [files('../../imagination/csbgen/gen_pack_header.py'), f],
+    input : [pvr_gen_pack_header_py, f],
     output : _name,
     command : [prog_python, '@INPUT@'],
     capture : true,
@@ -25,10 +25,7 @@ foreach f : sgx_csb_xml_files
 endforeach
 
 idep_sgx_csb = declare_dependency(
-  include_directories : [
-    include_directories('.', '..'),
-    include_directories('../../imagination'),
-  ],
+  include_directories : [include_directories('.', '..'), inc_imagination],
   sources : sgx_csb_h,
 )
 

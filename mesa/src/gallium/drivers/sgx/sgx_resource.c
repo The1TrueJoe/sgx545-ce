@@ -81,6 +81,64 @@ level_offset(struct pipe_resource *prsc, uint32_t stride, unsigned level)
    return off;
 }
 
+/* kmsro with a display device whose buffers the CPU reads (simpledrm copies
+ * each frame out) */
+static bool
+dumb_display(const struct sgx_screen *screen)
+{
+   return screen->ro && screen->ro->create_for_resource ==
+                           renderonly_create_kms_dumb_buffer_for_resource;
+}
+
+/* A scanout buffer on such a display (dumb_later) when a KMS handle is asked
+ * for: the display device's own dumb buffer, cached, imported, with the
+ * contents so far (the kernel flushes the CPU caches around every job that
+ * lists it, which the winsys does for the frame's target).  A buffer already
+ * exported keeps its pages: the display device imports it instead. */
+static void
+make_scanout(struct sgx_screen *screen, struct sgx_resource *res)
+{
+   struct pipe_resource tmpl = res->base;
+   struct winsys_handle handle = {0};
+   struct sgxws_bo bo = {0};
+   int e;
+
+   res->dumb_later = false;
+   if (res->shared) {
+      res->scanout = renderonly_create_gpu_import_for_resource(
+         &res->base, screen->ro, NULL);
+      return;
+   }
+   tmpl.width0 = align(tmpl.width0, 32); /* rows of whole tiles */
+   res->scanout = renderonly_scanout_for_resource(&tmpl, screen->ro, &handle);
+   if (!res->scanout)
+      return;
+   simple_mtx_lock(&screen->lock);
+   e = handle.stride != res->stride
+          ? -EINVAL
+          : sgxws_bo_import(screen->dev, &bo, (int)handle.handle,
+                            handle.stride * res->base.height0);
+   if (!e) {
+      /* the frame recording into it goes, and its renders are waited for */
+      if (screen->hw && sgxws_target_bo(screen->hw) == &res->bo)
+         sgxws_flush(screen->hw, 0);
+      if (screen->hw)
+         sgxws_wait_idle(screen->hw, 2000);
+      memcpy(bo.map, res->bo.map, (size_t)res->stride * res->base.height0);
+      sgxws_bo_prepare_target(screen->dev, &bo);
+      sgxws_bo_free(screen->dev, &res->bo);
+      res->bo = bo;
+      res->shared = true;
+   }
+   simple_mtx_unlock(&screen->lock);
+   close(handle.handle);
+   if (e) {
+      renderonly_scanout_destroy(res->scanout, screen->ro);
+      res->scanout = renderonly_create_gpu_import_for_resource(
+         &res->base, screen->ro, NULL);
+   }
+}
+
 static struct pipe_resource *
 sgx_resource_create(struct pipe_screen *pscreen,
                     const struct pipe_resource *templ)
@@ -107,42 +165,6 @@ sgx_resource_create(struct pipe_screen *pscreen,
       return prsc;
    }
 
-   if (is_render_target(templ) && screen->ro &&
-       (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
-       screen->ro->create_for_resource ==
-          renderonly_create_kms_dumb_buffer_for_resource) {
-      /* kmsro with a display device whose buffers the CPU reads (simpledrm
-       * copies each frame out): its own dumb buffer, cached, imported; the
-       * kernel flushes the CPU caches around every job that lists it, which
-       * the winsys does for the frame's target */
-      struct pipe_resource scanout_tmpl = *templ;
-      struct winsys_handle handle = {0};
-      int e;
-
-      scanout_tmpl.width0 = align(templ->width0, 32); /* rows of whole tiles */
-      res->scanout =
-         renderonly_scanout_for_resource(&scanout_tmpl, screen->ro, &handle);
-      if (!res->scanout)
-         goto fail;
-      res->stride = handle.stride;
-      res->pitch = handle.stride / 4;
-      res->shared = true;
-      simple_mtx_lock(&screen->lock);
-      e = handle.stride % 128
-             ? -EINVAL
-             : sgxws_bo_import(screen->dev, &res->bo, (int)handle.handle,
-                               handle.stride * templ->height0);
-      if (!e)
-         sgxws_bo_prepare_target(screen->dev, &res->bo);
-      simple_mtx_unlock(&screen->lock);
-      close(handle.handle);
-      if (e) {
-         renderonly_scanout_destroy(res->scanout, screen->ro);
-         goto fail;
-      }
-      return prsc;
-   }
-
    if (is_render_target(templ)) {
       int e;
 
@@ -157,6 +179,18 @@ sgx_resource_create(struct pipe_screen *pscreen,
       SGX_DBG(SYNC, "render target %ux%u %s at %#x\n", templ->width0,
               templ->height0, util_format_short_name(templ->format),
               res->bo.va);
+      /* kmsro with a display device whose buffers the CPU reads (simpledrm
+       * copies each frame out): ours until a KMS handle is asked for
+       * (sgx_resource_get_handle).  Every DRI3 back buffer is asked for as
+       * scanout and X only copies from it; a cached dumb buffer would be
+       * flushed around every render into it */
+      if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ) &&
+          dumb_display(screen)) {
+         res->dumb_later = true;
+         if (sgx_drv_debug & SGX_DEBUG_NO_LAZY_SCANOUT)
+            make_scanout(screen, res);
+         return prsc;
+      }
       /* kmsro otherwise: exported to the display device, which scans it out */
       if (screen->ro && (templ->bind & PIPE_BIND_SCANOUT) && shareable(templ)) {
          res->scanout = renderonly_scanout_for_resource(prsc, screen->ro, NULL);
@@ -310,8 +344,11 @@ sgx_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
    switch (whandle->type) {
    case WINSYS_HANDLE_TYPE_KMS:
       /* kmsro: the display device's handle */
-      if (screen->ro)
+      if (screen->ro) {
+         if (res->dumb_later)
+            make_scanout(screen, res);
          return res->scanout && renderonly_get_handle(res->scanout, whandle);
+      }
       if (sgxws_bo_kms_handle(&res->bo, &whandle->handle))
          return false;
       res->shared = true;
@@ -404,15 +441,33 @@ vbo_retire(struct sgx_screen *screen, struct sgxws_bo *bo, uint32_t seq)
    }
 }
 
+/* The buffer's device copy for a draw that reads bytes [off, off + size) of
+ * it (screen lock held).  Unmaps copy what was written, so a copy is current
+ * unless the buffer is mapped for writes still (a stream uploader writes more
+ * into its mapped buffer): then the draw's range is copied again, into the
+ * same copy.  Such a map is unsynchronized (a synchronized one retires a copy
+ * renders may read: sgx_transfer_map), whose writes promise to leave alone
+ * what renders still read, as the unmap's copy does.  (Replacing a busy copy
+ * here instead freed one that a draw of the frame being recorded still read:
+ * two inputs from one buffer, an MMU fault.) */
 bool
-sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res)
+sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res, uint32_t off,
+               uint32_t size)
 {
    struct sgx_screen *screen = sgx_screen(ctx->base.screen);
 
-   if (sgxws_bo_valid(&res->vbo))
+   off = MIN2(off, res->base.width0);
+   size = MIN2(size, res->base.width0 - off);
+   if (sgxws_bo_valid(&res->vbo)) {
+      if (res->write_maps)
+         memcpy((uint8_t *)res->vbo.map + off, (const uint8_t *)res->data + off,
+                size);
       return true;
+   }
+   /* past the end, a page the vertex DMA and the VDM's index reads may run
+    * into */
    if (sgxws_bo_alloc(screen->dev, &res->vbo, SGXWS_MEM_VERTEX,
-                      align(MAX2(res->base.width0, 16), 4096), 0x1000)) {
+                      align(MAX2(res->base.width0, 16), 4096) + 4096, 0x1000)) {
       memset(&res->vbo, 0, sizeof(res->vbo));
       return false;
    }
@@ -473,7 +528,9 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
 {
    memset(t, 0, sizeof(*t));
    t->bo = &res->bo;
-   switch (res->base.format) {
+   /* an sRGB texture renders as its linear format: without
+    * EXT_framebuffer_sRGB nothing is encoded on the way out */
+   switch (util_format_linear(res->base.format)) {
    case PIPE_FORMAT_B8G8R8A8_UNORM:
    case PIPE_FORMAT_B8G8R8X8_UNORM:
       t->pbe_format = 0;
@@ -602,6 +659,7 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
    if (prsc->target == PIPE_BUFFER) {
       if (usage & PIPE_MAP_WRITE) {
          res->gen++; /* the vertex cache's copies of it are stale */
+         res->write_maps++;
          res->written_ns = os_time_get_nano();
          /* a device copy a render may still read is left to it; the next
           * draw makes another (an unsynchronized write promises to miss
@@ -798,9 +856,13 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
    }
 
    if (ptrans->resource->target == PIPE_BUFFER &&
-       (ptrans->usage & PIPE_MAP_WRITE) && res->vbo.map)
-      memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
-             (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
+       (ptrans->usage & PIPE_MAP_WRITE)) {
+      if (res->vbo.map)
+         memcpy((uint8_t *)res->vbo.map + ptrans->box.x,
+                (const uint8_t *)res->data + ptrans->box.x, ptrans->box.width);
+      if (res->write_maps)
+         res->write_maps--;
+   }
    pipe_resource_reference(&ptrans->resource, NULL);
    slab_free(&ctx->transfer_pool, ptrans);
 }

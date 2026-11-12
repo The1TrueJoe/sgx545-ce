@@ -228,7 +228,8 @@ static uint32_t usse_load(struct sgx_ctx *c, const struct usse_prog *pr, int ver
 {
 	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
 	struct sgx_ptr p = ring_alloc(r, pr->n * 8, USSE_ALIGN);
-	uint32_t pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+	/* from the start of its 512 KiB code base window, not the heap (ISA.md) */
+	uint32_t pc0 = ((p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) & 0x7ffff) / 8;
 
 	memcpy(p.p, pr->w, pr->n * 8);
 	for (unsigned i = 0; i < pr->nreloc; i++)
@@ -241,7 +242,8 @@ uint32_t sgx_usse_load(struct sgx_ctx *c, int vertex, const uint32_t *w, unsigne
 {
 	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
 	struct sgx_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
-	uint32_t pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+	/* from the start of its 512 KiB code base window, not the heap (ISA.md) */
+	uint32_t pc0 = ((p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) & 0x7ffff) / 8;
 
 	memcpy(p.p, w, n * 8);
 	for (unsigned i = 0; i < nreloc; i++)

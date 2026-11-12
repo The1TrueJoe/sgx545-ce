@@ -35,17 +35,18 @@ Design
 - Command streams are validated in the kernel, and shader code is
   uploaded through an ioctl that checks every instruction.
 - One parameter buffer (the tiler's output) for the device, shared by
-  every client, as Imagination's own driver does: the hardware keeps
-  one free-list state, and the microkernel doesn't switch it between
-  buffers. So one client's GPU work can address another client's
-  binned geometry; userspace can't map that range. A buffer per client,
-  with the microkernel switching the state, is planned.
+  every client, as Imagination's own driver does by default: the
+  hardware keeps one free-list state, and our microkernel doesn't yet
+  switch it between buffers. So one client's GPU work can address
+  another client's binned geometry; userspace can't map that range.
+  Imagination's driver can also give each context its own buffer, so
+  the hardware supports it; that is the planned next step here.
 - Hang recovery that blames only the context whose job hung (one job
   runs at a time), with guilty/innocent reporting.
 
 Userspace
 - A Gallium driver with a NIR compiler, in a Mesa fork for now
-  (https://github.com/The1TrueJoe/sgx545-ce/tree/um-re/mesa); a Mesa
+  (https://github.com/The1TrueJoe/powervr_sgx/tree/main/mesa); a Mesa
   merge request will follow review of this uAPI. On the CE5300 it passes
   16,587 of 17,165 dEQP-GLES2 tests with no resets, using no vendor
   code at all.
@@ -73,9 +74,6 @@ series is against drm-misc-next, where CI builds it with checkpatch
 --strict, sparse, smatch, coccinelle, gcc and clang W=1 (with BPF
 tracepoint events), kernel-doc, KUnit, and an i386/x86_64 uAPI layout
 check.
-
-I used an AI coding assistant for much of this work; each patch says so
-in an Assisted-by tag, and I have reviewed and tested what I send.
 
 Joseph Telaak (8):
   drm/powervr_sgx: Add the uAPI header and its documentation

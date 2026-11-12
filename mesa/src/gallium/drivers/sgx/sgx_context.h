@@ -40,6 +40,11 @@ struct sgx_const {
 };
 
 #define SGX_MAX_CONSTS 256 /* SA dwords of constants (sa127 ends them) */
+/* fragment constants the driver fills: texture unit u's level-0 width and
+ * height at SGX_K_TEXSIZE + 2u (st's textureSize, as its rectangle lookups
+ * scale by it); past every uniform (128 vec4) and under the compiler's 1024 */
+#define SGX_K_TEXSIZE       1000
+#define SGX_K_TEXSIZE_UNITS 8
 
 #define SGX_MAX_DEP_SAMPLES 8
 
@@ -66,11 +71,17 @@ struct sgx_pipe_shader {
     * epilogue is the blend, sgxws_blend) */
    uint64_t *code; /* with the dependent samples' smp put in */
    unsigned n_code, color_reg, temps;
+   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0
+    * (the test), code1 phase 1 (the colour, into pa<color_reg>) */
+   uint64_t *code1;
+   unsigned n_code1;
    int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
    /* dependent samples: the SA register of each one's 4 texture state words,
     * and its sampler */
    unsigned dep_sa[SGX_MAX_DEP_SAMPLES], dep_sampler[SGX_MAX_DEP_SAMPLES],
       n_deps;
+   /* the texel comes back F16 into two registers (T3 01028800) */
+   bool dep_f16[SGX_MAX_DEP_SAMPLES];
    struct {
       struct sgxws_blend key;
       uint32_t code;
@@ -88,11 +99,17 @@ struct sgx_pipe_shader {
    /* vertex: the input formats it unpacks (sgx_compile_options.vtx_fmt; all
     * 0, f32 x 4, unless SGX_DEBUG=zerocopy picked a variant) */
    uint8_t vtx_fmt[16];
+   /* vertex: st's program writes gl_PointSize, and this variant keeps it as
+    * an output (points draws; the others drop it, sgx_vs_for) */
+   bool writes_psize, points;
    /* fragment: the same decoding what the samplers in its mask sample as
     * sRGB, and swizzling what each sampler view's swizzle says (formats st
     * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
    unsigned srgb;
+   uint32_t srgb_filter; /* of those, the ones it filters (lower_srgb_filter) */
    uint16_t swz[PIPE_MAX_SAMPLERS];
+   uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
+                         ordered (sgx_tex_bgra) */
    struct sgx_pipe_shader *variants_srgb[8];
    unsigned next_variant_srgb;
 };
@@ -156,12 +173,16 @@ struct sgx_context {
    struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS]; /* fragment */
 
    /* SGX_STATS=1: where the time goes, printed every 2 s */
+   /* objects the frame being recorded has from clears (the stats tell a frame
+    * of clears alone) */
+   unsigned frame_clears;
    struct {
       bool on;
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read,
-         fl_deferred; /* flushes by cause */
+         fl_deferred;           /* flushes by cause */
+      unsigned fl_switch_clear; /* of the switches, of a frame of clears only */
       unsigned vc_hits, vc_misses, vc_uncacheable, zc_draws;
       unsigned blit_gpu, blit_copy, blit_cpu;
       uint64_t blit_cpu_px, blit_cpu_ns;

@@ -1,0 +1,9 @@
+Each file in this repository carries an SPDX-License-Identifier line, which is its
+license. The full texts are in LICENSES/.
+
+- MIT (LICENSES/MIT): the Mesa driver and compiler (mesa/), the open microkernel
+  (ukernel/), the tools (tools/), the test kit (kit/) and the documentation (docs/).
+- GPL-2.0-only (LICENSES/GPL-2.0): the Linux kernel driver (drm/) and the earlier DDK
+  port (kernel/), as Linux requires. The uAPI header is GPL-2.0-only OR MIT.
+
+Copyright (c) 2026 Joseph Telaak and contributors.

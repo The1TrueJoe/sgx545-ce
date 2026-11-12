@@ -109,7 +109,7 @@ static void reset_sleep(struct pvrsgx_device *sdev)
 static void soft_reset(struct pvrsgx_device *sdev, bool bif)
 {
 	sgx_wr(sdev, SGX_CR_SOFT_RESET,
-	       SGX_CR_SOFT_RESET_CORES | (bif ? SGX_CR_SOFT_RESET_BIF_RESET : 0));
+	       sdev->cr->soft_reset_cores | (bif ? sdev->cr->soft_reset_bif : 0));
 }
 
 /* BIF_CTRL is 0 whenever the microkernel runs: its invalidates pulse a bit, then write 0. */
@@ -134,7 +134,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, 0);
 	sgx_wr(sdev, SGX_CR_BIF_BANK_SET, 0);
 	sgx_wr(sdev, SGX_CR_BIF_BANK0, 0);
-	for (unsigned int i = 0; i < sdev->core->num_dir_lists; i++)
+	for (unsigned int i = 0; i < sdev->family->num_dir_lists; i++)
 		sgx_wr(sdev, sgx_cr_bif_dir_list_base(i), 0);
 
 	if (recovery) {
@@ -148,7 +148,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		for (int n = 0; n < 32; n++) {
 			u32 stat = sgx_rd(sdev, SGX_CR_BIF_INT_STAT), addr;
 
-			if (!(stat & SGX_CR_BIF_INT_STAT_FAULT_REQ))
+			if (!(stat & sdev->cr->bif_int_stat_fault_req))
 				break;
 			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK;
 			drm_warn(&sdev->base, "reset: page fault 0x%x at 0x%08x\n", stat, addr);
@@ -170,8 +170,8 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	}
 
 	sgx_wr(sdev, SGX_CR_BIF_BANK0,
-	       FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, SGX_BIF_DIRLIST_EDM));
-	sgx_wr(sdev, sgx_cr_bif_dir_list_base(SGX_BIF_DIRLIST_EDM),
+	       FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, pvrsgx_dirlist_edm(sdev)));
+	sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
 	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
 	       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
@@ -237,15 +237,21 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
  */
 static int identify(struct pvrsgx_device *sdev)
 {
-	/* Safe on a core in any state. */
-	sdev->core_id = sgx_rd(sdev, SGX_CR_CORE_ID);
-	sdev->core_rev = sgx_rd(sdev, SGX_CR_CORE_REVISION);
+	if (!sdev->family) {
+		drm_err(&sdev->base, "not an SGX core this driver knows; not touching it\n");
+		return -ENODEV;
+	}
+	sdev->cr = sdev->family->regs;
 
-	sdev->core = pvrsgx_core_lookup(sdev->core_id, sdev->core_rev);
+	/* Safe on a core in any state. */
+	sdev->core_id = sgx_rd(sdev, sdev->cr->core_id);
+	sdev->core_rev = sgx_rd(sdev, sdev->cr->core_revision);
+
+	sdev->core = pvrsgx_core_lookup(sdev->family, sdev->core_id, sdev->core_rev);
 	if (!sdev->core) {
 		drm_err(&sdev->base,
-			"SGX core id 0x%08x revision 0x%08x is not one this driver knows; not touching it. Please report these two values.\n",
-			sdev->core_id, sdev->core_rev);
+			"%s core id 0x%08x revision 0x%08x is not one this driver knows; not touching it. Please report these two values.\n",
+			sdev->family->name, sdev->core_id, sdev->core_rev);
 		return -ENODEV;
 	}
 	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",

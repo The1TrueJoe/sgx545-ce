@@ -67,8 +67,10 @@ jobs:
             clang --target=$t $W $I -c docs/uapi/check_layout.c -o /dev/null
           done
           # The asserts must catch a misplaced __u64.
-          ! clang --target=i386-linux-gnu $W $I -DCHECK_NEGATIVE \
-            -c docs/uapi/check_layout.c -o /dev/null 2>/dev/null
+          if clang --target=i386-linux-gnu $W $I -DCHECK_NEGATIVE \
+              -c docs/uapi/check_layout.c -o /dev/null 2>/dev/null; then
+            echo "the negative layout case compiled"; exit 1
+          fi
 
       - name: Lay out mainline with the driver and gma500 patch in tree
         run: |
@@ -88,9 +90,9 @@ jobs:
           L=linux
           D="drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/"
           make -C $L ARCH=x86_64 -j"$(nproc)" W=1 $D 2>&1 | tee gcc.log
-          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' gcc.log
+          if grep -E '(powervr_sgx|gma500)/.*(warning|error):' gcc.log; then exit 1; fi
           make -C $L ARCH=x86_64 -j"$(nproc)" C=2 $D 2>&1 | tee sparse.log
-          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' sparse.log
+          if grep -E '(powervr_sgx|gma500)/.*(warning|error):' sparse.log; then exit 1; fi
 
       - name: smatch
         run: |
@@ -100,14 +102,14 @@ jobs:
           L=linux
           make -C $L ARCH=x86_64 -j"$(nproc)" C=2 CHECK="$PWD/smatch/smatch -p=kernel" \
             drivers/gpu/drm/powervr_sgx/ 2>&1 | tee smatch.log
-          ! grep -E 'powervr_sgx/.*(warn|error):' smatch.log
+          if grep -E 'powervr_sgx/.*(warn|error):' smatch.log; then exit 1; fi
 
       - name: coccinelle
         run: |
           set -eux
           L=linux
           make -C $L ARCH=x86_64 coccicheck MODE=report M=drivers/gpu/drm/powervr_sgx 2>&1 | tee cocci.log
-          ! grep -E '^(\./)?drivers/gpu/drm/powervr_sgx/' cocci.log
+          if grep -E '^(\./)?drivers/gpu/drm/powervr_sgx/' cocci.log; then exit 1; fi
 
       - name: clang W=1
         run: |
@@ -119,15 +121,15 @@ jobs:
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" prepare >/dev/null
           make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 \
             drivers/gpu/drm/powervr_sgx/ drivers/gpu/drm/gma500/ 2>&1 | tee clang.log
-          ! grep -E '(powervr_sgx|gma500)/.*(warning|error):' clang.log
+          if grep -E '(powervr_sgx|gma500)/.*(warning|error):' clang.log; then exit 1; fi
 
       - name: checkpatch --strict and kernel-doc
         run: |
           set -eux
           L=linux
           perl $L/scripts/checkpatch.pl --strict --no-tree --terse -f \
-            $(ls drm/powervr_sgx/*.[ch] | grep -v _trace.h) drm/powervr_sgx/tests/*.c \
+            $(ls drm/powervr_sgx/*.[ch] | grep -v -e _trace.h -e '\.mod\.c$') drm/powervr_sgx/tests/*.c \
             drm/powervr_sgx/include/uapi/drm/*.h | tee checkpatch.log
-          ! grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log
+          if grep -E ': (ERROR|WARNING|CHECK):' checkpatch.log; then exit 1; fi
           python3 $L/scripts/kernel-doc -none -Wall -Werror \
             drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h drm/powervr_sgx/pvrsgx_*.[ch]
