@@ -461,7 +461,12 @@ def build(a):
         # USSE_PHAS puts phas.i first (the real entry's order), to test whether the
         # SGX530 needs it before any work (no USE_UNLIMITED_PHASES).
         if USSE_PHAS:
-            a.phas()
+            if USSE_PHAS_TEMPS4:
+                # phas.i with a nonzero temps4 (temporaries/4): does the 530 take the
+                # task's temps from phas.i, not the DOUTU? Our normal entry has #0 here.
+                a.i(f"phas.i #0, #{USSE_PHAS_TEMPS4} [wait=7]")
+            else:
+                a.phas()
         if USSE_ALUWRITE:
             # does a non-limm ALU write land? or r5, r5, r17 = r5's leftover (0x0c004000)
             # | r17's (0x0fd79000) = 0x0fd7d000, then ld.a.d r3, r5, #0. Fault at

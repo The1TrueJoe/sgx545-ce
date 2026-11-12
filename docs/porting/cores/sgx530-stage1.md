@@ -1356,9 +1356,54 @@ Readout: the `aluwr` image (81dd5785…, packaged 18ce50ba…), by its fault pag
   start working.
 - **0x0c004000:** still 0 temps; try the next position.
 
+**The cheapest, most likely variant first: temp field = 8 (bit 27).** `pvrsgx_doutu` sets
+`0x8000000` (bit 27). The attempt-24 override is `(doutu & ~GENMASK(31,24)) | FIELD_PREP(…,
+DIV_ROUND_UP(ukernel_temps, 4))`, and `GENMASK(31,24)` includes bit 27, so `ukernel_temps =
+24` writes field value 6 and **clears bit 27**. PDS.md: the microkernel's own entries
+(pds0/2/3/4) have bit 27 set = field value 8 = 32 temporaries, and the SGX545 keeps it (it
+has no override). So attempt 24's reduction to 24 temps cleared the bit the vendor entry
+carries, and that alone could be why 31-34 saw 0 temps. Variant 0: `ukernel_temps = 32`
+(field 8, bit 27 set). If `aluwr` then writes (0x0fd7d000), re-run the real `sgx530` image
+with it — likely init completing. Only if that's flat do the group ORs below matter.
+
+Note (the kernel session's constraint): b0-3/b4-7/b16-18 move the code fetch (attempts
+21-22), so the free bits for a moved field are b8-15, b19-23 and b27-31; the sweep ORs each
+group all-ones onto the normal word (0x0000ff00, 0x00f80000, 0xf0000000) and bisects the one
+that works.
+
 If a position works, re-run the real `sgx530` image: with temporaries, `limm` and the stores
 should land and init can complete. Also worth a look: `phas.i`'s `temps4` field (ISA.md) as
 an alternate temp source, since the entry's `phas.i #0, #0` carries 0 there.
+
+## After the thirty-fifth attempt: phas.i's temps4
+
+Attempt 35 (log 16baa779) was flat on the DOUTU temp field. `aluwr` faulted at 0x0c004000
+for field 6, field 8 (bit 27), and `|= 0xff00 / 0xf80000 / 0xf0000000`; the real image faulted
+at 0x0fd79000 for all except `|= 0xff00` (b8-15), which ran without faulting — because b8-15
+are code-offset bits below the fault page (attempt 21), so it just moved the entry inside
+page 0. So **the task's temporaries do not come from DOUTU word 0.** Restoring bit 27 (field
+8) didn't help either.
+
+**Attempt 36: `phas.i`'s `temps4` field.** On the SGX545, `phas.i #pc, #temps4` carries the
+temporaries/4 (ISA.md), and the entry's `phas.i #0, #0` has 0 there. If the SGX530 allocates
+the task's temporaries from `phas.i` rather than the DOUTU, `temps4 = 0` gives 0 temps —
+matching attempts 31-35. `cores/sgx530_aluwr_ph{8,6,63}.py` is `aluwr` with `phas.i #0,
+#temps4` for temps4 = 8 (32 temps), 6 (24), 63 (max):
+
+| Probe | temps4 | temps | img sha256 (16) | packaged (16) |
+|---|---|---|---|---|
+| aluwr_ph8 | 8 | 32 | 1674add53368bbf0… | 1793ae6426fdde95… |
+| aluwr_ph6 | 6 | 24 | a0ed44b23da3a86e… | d9ab5f7caa9ec807… |
+| aluwr_ph63 | 63 | 252 | 982cc613659d369d… | a789287df9c7271b… |
+
+Build each then mkukfw; all same through asm.py and `sgx-asm`. Readout is the fault page:
+- **0x0fd7d000:** `phas.i`'s `temps4` is the SGX530's temp source — the `or` now writes r5.
+  Then set the entry (and every task's) `phas.i` `temps4` on the SGX530, a 530-only image
+  change via a per-core flag; the SGX545 `phas.i #0,#0` is unchanged, golden intact. Re-run
+  the real image with it: likely init completing.
+- **0x0c004000:** still 0 temps; `phas.i` isn't it either, and the temp allocation is
+  neither DOUTU word 0 nor `phas.i` — next look at `phas.i`'s other fields (rate, the
+  phase-count semantics without `USE_UNLIMITED_PHASES`) or a `setfc`/MOE-style setup.
 
 ## Abort conditions
 
