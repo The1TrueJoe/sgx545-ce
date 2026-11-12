@@ -67,14 +67,13 @@ Questions for reviewers
 1. Placement. Imagination said in 2023 that SGX should have its own
    driver [1]. Alessio, Luigi: drivers/gpu/drm/powervr_sgx beside
    drivers/gpu/drm/imagination, or under it?
-2. Cedarview and Poulsbo. Their SGX sits behind gma500. A follow-up
-   has gma500 publish it as an auxiliary device that this driver binds
-   to, as nova-drm and i915's GSC do; on four Cedarview machines it
-   renders with the open firmware. Gabriel Gama is preparing gma500's
-   own SGX535 (Poulsbo) code [2]. This driver is separate because it
-   also runs hardware without gma500, the CE5300, and an SGX535 or
-   SGX544 would be one more core-table entry in it. Is that the right
-   split?
+2. Cedarview. Its SGX sits behind gma500. A follow-up has gma500
+   publish it as an auxiliary device that this driver binds to, as
+   nova-drm and i915's GSC do; on four Cedarview machines it renders
+   with the open firmware. Gabriel Gama is preparing gma500's own
+   SGX535 (Poulsbo) code [2]. This driver is separate because it also
+   runs hardware without gma500, the CE5300, and an SGX544 would be one
+   more core-table entry in it. Is that the right split?
 3. Cache maintenance for imports is part of SUBMIT_JOBS, as per-job
    byte ranges, rather than a separate BO_SYNC-style ioctl. Is cache
    work in the submit path acceptable?
