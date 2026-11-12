@@ -140,6 +140,8 @@ jobs:
             -o powervr_sgx_test drm/tests/powervr_sgx_test.c
           musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm \
             -o powervr_sgx_pb drm/tests/powervr_sgx_pb.c
+          musl-gcc -static -O2 -Wall -Wextra -Werror -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm \
+            -o powervr_sgx_unplug drm/tests/powervr_sgx_unplug.c
           # A real frame: tools/gen's frame builder on the DRM uAPI.
           python3 tools/gen/mkusse.py > tools/gen/usse_progs.h
           musl-gcc -static -O2 -fno-strict-aliasing -Wall -Wno-unused-function -DSGXGEN_DRM -I hdr/include -I hdr/include/drm \
@@ -168,7 +170,7 @@ jobs:
           mkdir -p out/modules
           cp $L/arch/x86/boot/bzImage out/bzImage
           cp $L/.config out/config
-          cp powervr_sgx_test powervr_sgx_frame powervr_sgx_blit powervr_sgx_hang powervr_sgx_prime powervr_sgx_pb out/
+          cp powervr_sgx_test powervr_sgx_frame powervr_sgx_blit powervr_sgx_hang powervr_sgx_prime powervr_sgx_pb powervr_sgx_unplug out/
           for m in powervr_sgx gpu-sched drm_exec drm_gpuvm drm_shmem_helper; do
             find $L -name "$m.ko" -exec cp {} out/modules/ \;
           done

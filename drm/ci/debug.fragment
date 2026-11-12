@@ -23,3 +23,13 @@ CONFIG_DEBUG_OBJECTS_TIMERS=y
 CONFIG_KALLSYMS_ALL=y
 # /sys/power/pm_test: a suspend cycle that never leaves RAM, so the box needs no wake source.
 CONFIG_PM_DEBUG=y
+# The importer must never touch an exporter's pages: poison them (D6).
+CONFIG_DMABUF_DEBUG=y
+# drm_exec's ww_mutex backoff, taken on every contended submit.
+CONFIG_DEBUG_WW_MUTEX_SLOWPATH=y
+CONFIG_SOFTLOCKUP_DETECTOR=y
+CONFIG_DETECT_HUNG_TASK=y
+# The kernel log off the box (/sys/kernel/config/netconsole), for a soak that loses userspace.
+CONFIG_CONFIGFS_FS=y
+CONFIG_NETCONSOLE=y
+CONFIG_NETCONSOLE_DYNAMIC=y
