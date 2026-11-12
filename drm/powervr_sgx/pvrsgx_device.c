@@ -202,12 +202,17 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR,
 	       SGX_CR_EVENT_HOST_CLEAR_SW_EVENT | SGX_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT);
 	atomic_inc(&sdev->irq_count);
+	if (!READ_ONCE(sdev->fw_running))
+		return IRQ_HANDLED;
 	/*
 	 * The microkernel may interrupt at TA and 3D completion too: wake the
-	 * thread only for a finished job or a lockup report.
+	 * thread only for a finished job, an idle notice not yet acknowledged, or
+	 * a lockup not yet reported.
 	 */
-	if (!sdev->fw_running || pvrsgx_job_oldest_done(sdev) ||
-	    (pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS) & HOSTCTL_INTERRUPT_HWR))
+	if (pvrsgx_job_oldest_done(sdev) ||
+	    (pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS) &
+	     ~pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR) & HOSTCTL_INTERRUPT_ACTIVE_POWER) ||
+	    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS) != READ_ONCE(sdev->uk_lockups))
 		return IRQ_WAKE_THREAD;
 	return IRQ_HANDLED;
 }
@@ -215,16 +220,19 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 {
 	struct pvrsgx_device *sdev = arg;
-	u32 flags, clear;
+	u32 flags, clear, lockups;
 
-	if (!sdev->fw_running)
+	if (!READ_ONCE(sdev->fw_running))
 		return IRQ_HANDLED;
 
 	flags = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS);
 	clear = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR);
-	if ((flags & HOSTCTL_INTERRUPT_HWR) && !(clear & HOSTCTL_INTERRUPT_HWR))
-		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
-				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
+	/* Reported once per count; the job's timeout does the recovery. */
+	lockups = pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS);
+	if (lockups != READ_ONCE(sdev->uk_lockups)) {
+		WRITE_ONCE(sdev->uk_lockups, lockups);
+		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n", lockups);
+	}
 	/*
 	 * The microkernel's idle notice: acknowledge it in the interrupt clear word.
 	 * Powering down is runtime PM's business, so nothing else happens here.

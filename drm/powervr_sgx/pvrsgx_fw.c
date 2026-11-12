@@ -680,7 +680,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		return err;
 	}
-	sdev->fw_running = true;
+	WRITE_ONCE(sdev->uk_lockups, 0);
+	WRITE_ONCE(sdev->fw_running, true);
 	sdev->fw_started = true;
 	if (first || sdev->reset_count != sdev->reset_logged) {
 		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
@@ -725,7 +726,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		WRITE_ONCE(sdev->powered, false);
 		pvrsgx_irq_sync(sdev);
 		deinit_script(sdev);
-		sdev->fw_running = false;
+		WRITE_ONCE(sdev->fw_running, false);
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	} else if (READ_ONCE(sdev->powered)) {

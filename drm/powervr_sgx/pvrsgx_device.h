@@ -159,6 +159,8 @@ struct pvrsgx_device {
 	struct pvrsgx_fw fw;
 	/** @fw_running: The microkernel has started and takes commands. */
 	bool fw_running;
+	/** @uk_lockups: The microkernel's lockup count, as last reported. */
+	u32 uk_lockups;
 	/**
 	 * @powered: The SGX is clocked and its registers may be read. Off between
 	 * a stop and the next start: a read of an unclocked CE5300 block can hang

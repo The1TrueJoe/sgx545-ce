@@ -458,7 +458,7 @@ fail:
 	 */
 	cookie = dma_fence_begin_signalling();
 	sdev->reset_count++;
-	sdev->fw_running = false;
+	WRITE_ONCE(sdev->fw_running, false);
 	/* The restart's reset clears the BIF's fault state. */
 	WRITE_ONCE(sdev->faulted, false);
 	if (pvrsgx_fw_start(sdev)) {
