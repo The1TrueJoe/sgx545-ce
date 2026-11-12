@@ -468,9 +468,10 @@ def build(a):
             # load) to isolate the real image's first-load fault, then store what was
             # read to a readable marker and loop
             a.patch(14, "pdtable")
-            a.i(f"ld.a.d r3, r17, #{HEARTBEAT} [moe]")     # the real entry's first load
+            moe = " [moe]" if USSE_MOE else ""           # USSE_MOE=False drops [moe]
+            a.i(f"ld.a.d r3, r17, #{HEARTBEAT}{moe}")      # the real entry's first load
             a.i("wdf")
-            a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r3 [moe]")  # 0x28 = what the load read
+            a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r3{moe}")   # 0x28 = what the load read
             a.i("idf")
             a.i("wdf")
             a.i(f"limm r0, #{DIAG_TIMER}")

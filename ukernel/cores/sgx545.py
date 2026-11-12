@@ -336,6 +336,7 @@ BASE_PADS = None             # code-base pads past the image (cores/sgx530_bases
 USSE_PROBE = None            # a minimal self-looping event task (cores/sgx530_usse.py)
 USSE_PHAS = False            # USSE probe: emit phas.i first (cores/sgx530_usse_phas.py)
 USSE_MIRROR = False          # USSE probe: mirror the real entry preamble (cores/sgx530_usse_mirror.py)
+USSE_MOE = True              # USSE mirror probe: False drops [moe] (cores/sgx530_usse_nomoe.py)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
