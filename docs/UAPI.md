@@ -116,33 +116,35 @@ addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an im
 with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
 GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, not even through
 cache-consistent PTEs (EA1, 2026-11-09), and an import's pages may be cached on the CPU
-side. **So a job lists the bytes of imports it reads or writes in `cache_ranges`**
-(rev 3; `READ`, `WRITE` or both, rows of bytes at a stride, so one damage rectangle is one
-entry). The kernel flushes only those bytes:
+side. **So a job lists the bytes of imports it reads or writes in `cache_ranges`** (D6;
+`READ`, `WRITE` or both, rows of bytes at a stride, so one damage rectangle is one entry).
+The kernel flushes only those bytes:
 
-- before the job, it writes back and drops the CPU's lines of every range (a GPU read sees
-  the CPU's writes; no dirty line lands on a GPU write later);
+- when the job is about to run, it writes back and drops the CPU's lines of every range
+  (a GPU read sees the CPU's writes; no dirty line lands on a GPU write later);
 - once the job's writes have reached memory, before its out-fence signals, it drops the
   lines of every `WRITE` range again (the CPU may have fetched them during the job);
 - once, when an object is imported, it writes back the whole object.
 
 It flushes through the exporter's vmap, held for the import's life, so an import must
 come from an exporter that supports vmap. A job whose fence carries an error (reset,
-device lost) gets no after-flush: its `WRITE` ranges are undefined.
+device lost) gets no after-flush: its `WRITE` ranges are undefined. Bytes the job changes
+but doesn't list have undefined contents afterwards, for the CPU and the GPU, and that is
+never a leak: after the import-time write-back, a stale line or DRAM word is the object's
+own earlier contents. Writes by another process into a cached dma-buf the job reads are
+not covered: the same open problem as panthor's, not solved here. Flushing every import
+mapped in the VM (the first version) cost Minecraft about 12 ms a frame, most of it for X
+jobs that never touched the scanout (2026-11-09); one 720x480 buffer is about 1.4 MB,
+about 1.15 ms to flush on the CE5300 (0.85 us/KB, B3). With ranges, X lists the scanout's
+damage on the jobs that draw into it, usually a few KB. An entry for an object that isn't
+an import (our own objects are write-combined, and a dma-buf of this device imports as the
+original object) is checked and flushes nothing.
 
-Bytes the job touches but doesn't list have undefined contents afterwards, for the CPU
-and the GPU, and that is never a leak: after the import-time write-back, a stale line or
-DRAM word is the object's own earlier contents. Writes by another process into a cached
-dma-buf the job reads are not covered: the same open problem as panthor's, not solved
-here. Flushing every import mapped in the VM (the first version) cost Minecraft about
-12 ms a frame, most of it for X jobs that never touched the scanout (2026-11-09); one
-720x480 buffer is about 1.4 MB, about 1.3 ms to flush on the CE5300. With ranges, X lists
-the scanout's damage on the jobs that draw into it, usually a few KB (B3, 2026-11-12). Our
-own objects, write-combined on the CPU, need no flush and can't be listed (`-EINVAL`). The
-BO list (`bo_refs`) is for implicit sync of shared objects only. An object in a job's BO list gets the job's fence
-in its reservation object (written: `WRITE`, else `READ`), and the job waits for the
-fences already there. That shared reservation is what makes a KMS commit of an imported
-buffer wait for the render (`powervr_sgx_prime`, the implicit frames).
+**Sync is explicit** (D6, M5): a job's fences are its `sync_ops`, and nothing is added to a
+shared object's reservation. Implicit sync with other drivers goes through the dma-buf:
+`DMA_BUF_IOCTL_EXPORT_SYNC_FILE` for what a job must wait for, and the job's out-fence
+put back with `DMA_BUF_IOCTL_IMPORT_SYNC_FILE`, which is what makes a KMS commit of an
+imported buffer wait for the render (`powervr_sgx_prime`).
 
 `DRM_POWERVR_SGX_BO_CODE` makes a code object (D12): it holds USSE programs, it is the
 only kind of object the USSE heaps accept, and it can go nowhere else. It has no CPU
@@ -276,8 +278,7 @@ multisampled frame (G14). `flags` is reserved. `TE_AA`, `RT +0x10`, `+0x14`, `+0
 | `flags` | per type: transfer has `DST_TWIDDLED`, render has none yet |
 | `cmd` | a `drm_powervr_sgx_cmd_render` or `drm_powervr_sgx_cmd_transfer` (section 3) |
 | `sync_ops` | array of `{handle, flags, value}`, wait or signal, binary or timeline, as pvr |
-| `bo_refs` | array of `{handle, flags}`, read or write. Only shared objects need one, for implicit sync (D6) |
-| `cache_ranges` | rev 3: array of `{handle, flags, offset, size, stride, rows}` of imports, read and/or write, at most 64: the bytes the kernel keeps coherent around the job (D6) |
+| `cache_ranges` | array of `{handle, flags, offset, size, stride, rows}`, read and/or write, at most 64: the bytes of imports the kernel keeps coherent around the job (D6) |
 | `ta_kicks` | render only: array of `drm_powervr_sgx_cmd_ta_kick`, each `head.size` equal to the stride; at least one |
 | `rt_dataset_handle` | render only |
 
@@ -291,9 +292,8 @@ Fences and errors:
 
 - One out-fence per job. It signals from the completion interrupt when the 3D has
   finished, or when the transfer has finished.
-- Reservation objects: the out-fence goes on the VM's reservation object as bookkeeping,
-  and on each `bo_refs` entry as read or write. In-fences of `bo_refs` become scheduler
-  dependencies.
+- Reservation objects: the out-fence goes on the VM's reservation object as bookkeeping
+  only. Shared objects get no fence from the kernel (D6: sync is explicit).
 - `-ECANCELED`: the context is not OK (section 8). `-EIO`: the device is lost. `-ENOENT`:
   a handle is wrong. `-EINVAL`: a command is malformed, or a command or job field failed
   validation (section 3). `-E2BIG`: a command or extension has non-zero bytes past what
@@ -670,9 +670,8 @@ XML, the decoder compiles for both targets, and the stream test passes.
 | `drm_powervr_sgx_ext_sgx545_render` | 24 | `0x00 base (16)`, `0x10 zls_control (4)`, `0x14 flags_3d (4)` |
 | `drm_powervr_sgx_ext_sgx545_ta_kick` | 24 | `0x00 base (16)`, `0x10 ta_flags2 (4)`, `0x14 _padding_14 (4)` |
 | `drm_powervr_sgx_sync_op` | 16 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 value (8)` |
-| `drm_powervr_sgx_bo_ref` | 8 | `0x00 handle (4)`, `0x04 flags (4)` |
 | `drm_powervr_sgx_cache_range` | 32 | `0x00 handle (4)`, `0x04 flags (4)`, `0x08 offset (8)`, `0x10 size (8)`, `0x18 stride (4)`, `0x1c rows (4)` |
-| `drm_powervr_sgx_job` | 96 | `0x00 type (4)`, `0x04 context_handle (4)`, `0x08 flags (4)`, `0x0c _padding_c (4)`, `0x10 cmd (8)`, `0x18 sync_ops (16)`, `0x28 bo_refs (16)`, `0x38 ta_kicks (16)`, `0x48 rt_dataset_handle (4)`, `0x4c _padding_4c (4)`, `0x50 cache_ranges (16)` |
+| `drm_powervr_sgx_job` | 80 | `0x00 type (4)`, `0x04 context_handle (4)`, `0x08 flags (4)`, `0x0c _padding_c (4)`, `0x10 cmd (8)`, `0x18 sync_ops (16)`, `0x28 cache_ranges (16)`, `0x38 ta_kicks (16)`, `0x48 rt_dataset_handle (4)`, `0x4c _padding_4c (4)` |
 | `drm_powervr_sgx_ioctl_submit_jobs_args` | 24 | `0x00 jobs (16)`, `0x10 failed_index (4)`, `0x14 _padding_14 (4)` |
 <!-- layout-table end -->
 
@@ -795,7 +794,7 @@ check it.
 | `bg_block_addr` (transfer) | below 2^32, aligned, 0x200 bytes mapped | HW (ISP) | fault or hang |
 | transfer `pixel_event_pds_addr` | as above | HW (PDS) | fault or hang |
 | `VM_MAP.device_addr` | below 2^32, page aligned, inside one heap, no overlap | kernel | `-EINVAL` or `-EEXIST` |
-| `sync_ops`, `bo_refs`, `ta_kicks`, `jobs`, `cmd` and the extension chains, `DEV_QUERY.pointer`, `quirks`, `heaps` | CPU user pointers: `copy_from_user` | kernel | `-EFAULT` |
+| `sync_ops`, `cache_ranges`, `ta_kicks`, `jobs`, `cmd` and the extension chains, `DEV_QUERY.pointer`, `quirks`, `heaps` | CPU user pointers: `copy_from_user` | kernel | `-EFAULT` |
 
 **Class B:** inside client memory, read by the hardware at draw time. The kernel doesn't
 look at these and can't: the client can change them after submit, and a shader can compute
@@ -988,7 +987,7 @@ these words (MSAA, multi-RT) waits for a uAPI addition, which is append-only and
 
 ### D6. BO lists
 
-**Decided (Joseph, 2026-11-02): an optional per-job list of shared objects, as recommended.**
+**Decided (Joseph, 2026-11-02): an optional per-job list of shared objects, as recommended. Replaced 2026-11-12, below.**
 
 **Recommendation: an optional per-job list of shared objects, for implicit sync only.**
 Residency needs no list because `VM_MAP` pins pages, and private objects are covered by the
@@ -998,16 +997,17 @@ style and fits Wayland explicit sync. The list is cheaper for X11 and old Waylan
 matches what `AGENTS.md` section 5 asked for. **Closes nothing:** an empty list is valid.
 **Amended (2026-11-09):** the list is also how a job names the imports it touches, and
 it must name every one (CREATE_BO, GET_BO_MMAP_OFFSET, imports): the kernel flushes only listed imports.
-**Amended (rev 3, 2026-11-12, pending Joseph):** cache maintenance moves out of the BO list
-into `drm_powervr_sgx_job.cache_ranges`: rows of bytes of an import, read and/or write, no
-fence. The BO list goes back to implicit sync only. B3 (EA1, 720x480, X down) measured
+**Replaced (Joseph, 2026-11-12: "per-job ranges"; rev 3, M5):** the BO list goes. A job
+lists the bytes of imports it touches in `cache_ranges` (the job fields table: rows of bytes at a
+stride, read and/or write, at most 64, no fence), and sync is explicit only, through
+`sync_ops` and the dma-buf sync-file ioctls above. B3 (EA1, 720x480, X down) measured
 simpledrm's DIRTYFB at 4.2 ms/MB from its own dumb buffer and 199 ms/MB from our imported
-write-combined buffer. So the scanout stays simpledrm's cached dumb buffer, the GPU blits
-into it, and the flush has to follow the damage, not the buffer. Alternatives: a
-per-mapping `VM_BIND` coherence flag (flushes the whole buffer on every job in the VM: the
-12 ms again); a panthor-style `BO_SYNC` ioctl of linear `{handle, op, offset, size}`
-(mainline precedent, but a second ioctl after waiting for each job, and a damage rect is
-one op per row).
+write-combined buffer, and clflush at 0.85 us/KB. So the scanout stays simpledrm's cached
+dumb buffer, the GPU blits into it, and the flush follows the damage, not the buffer.
+Rejected: a per-mapping `VM_BIND` coherence flag (flushes the whole buffer on every job in
+the VM: the 12 ms again); a panthor-style `BO_SYNC` ioctl of linear `{handle, op, offset,
+size}` (mainline precedent, but a second ioctl after waiting for each job, and a damage
+rect is one op per row). Details: `docs/uapi/rev3-commands.md` section 8.
 
 ### D7. VM contexts: explicit handles, or one per file
 

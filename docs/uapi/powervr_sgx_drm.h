@@ -995,35 +995,6 @@ struct drm_powervr_sgx_sync_op {
 };
 
 /**
- * DOC: Flags for struct drm_powervr_sgx_bo_ref
- *
- * .. c:macro:: DRM_POWERVR_SGX_BO_REF_FLAG_WRITE
- *
- *    The job writes this object: the out-fence is added to its reservation
- *    object as a write fence and the job waits for all earlier fences on it.
- *    Without this flag the job reads it: the out-fence is added as a read fence
- *    and the job waits for earlier write fences.
- */
-#define DRM_POWERVR_SGX_BO_REF_FLAG_WRITE _BITUL(0)
-
-/**
- * struct drm_powervr_sgx_bo_ref - An object a job takes part in implicit sync on
- *
- * Only objects shared with another client or process need an entry. An object
- * must be mapped in the job's VM to be useful, and that is not checked here.
- *
- * An entry is for implicit sync only. Cache maintenance of imports is
- * &drm_powervr_sgx_job.cache_ranges.
- */
-struct drm_powervr_sgx_bo_ref {
-	/** @handle: GEM handle. */
-	__u32 handle;
-
-	/** @flags: ``DRM_POWERVR_SGX_BO_REF_FLAG_*`` flags. */
-	__u32 flags;
-};
-
-/**
  * DOC: Flags for struct drm_powervr_sgx_cache_range
  *
  * .. c:macro:: DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ
@@ -1040,30 +1011,34 @@ struct drm_powervr_sgx_bo_ref {
 /**
  * struct drm_powervr_sgx_cache_range - Bytes of an import a job reads or writes
  *
- * The GPU doesn't snoop the CPU caches, and an import's pages may be cached.
- * The kernel keeps a job coherent with the CPU on the listed bytes only:
+ * The GPU doesn't snoop the CPU caches, and an imported object's pages may be
+ * cached. The kernel keeps a job coherent with the CPU on the listed bytes
+ * only:
  *
- *  - before the job, it writes back and drops the CPU's lines of every range,
- *    so the GPU reads what the CPU wrote and no dirty line lands on the job's
- *    output later;
+ *  - when the job is about to run, it writes back and drops the CPU's lines of
+ *    every range, so the GPU reads what the CPU wrote and no dirty line lands on
+ *    the job's output later;
  *  - once the job's writes have reached memory, and before its out-fence
  *    signals, it drops the lines of every range with
  *    %DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE, which the CPU may have fetched
- *    again meanwhile.
+ *    again meanwhile. A job whose out-fence carries an error gets no such
+ *    flush: its WRITE ranges are undefined.
  *
- * Ranges are widened to whole cache lines. The range is @rows rows of @size
- * bytes, @stride bytes apart, from @offset: one damage rectangle of a linear
- * buffer is one entry. @rows 0 is one row. No fence is attached: sync is
- * @sync_ops (and &drm_powervr_sgx_bo_ref for implicit sync).
+ * The range is @rows rows of @size bytes, @stride bytes apart, from @offset,
+ * widened to whole cache lines: one damage rectangle of a linear buffer is one
+ * entry. @rows 0 is one row. An entry for an object that isn't an import (ours
+ * are write-combined, and a dma-buf of this device imports as the original
+ * object) is checked and flushes nothing. No fence is attached.
  *
- * Bytes of an import the job touches but doesn't list have undefined contents
+ * Bytes of an import the job changes but doesn't list have undefined contents
  * afterwards, for the CPU and the GPU alike. That is never a leak: the kernel
  * writes the whole import back once when it is imported, so a stale line or a
- * stale DRAM word is the object's own earlier contents. A job whose out-fence
- * carries an error leaves its WRITE ranges undefined.
+ * stale DRAM word is the object's own earlier contents. Bytes a job rewrites
+ * unchanged (a render's tiles outside its draws, which it loaded) need no entry
+ * while the CPU doesn't write the object during the job.
  */
 struct drm_powervr_sgx_cache_range {
-	/** @handle: GEM handle of an imported object. */
+	/** @handle: GEM handle. */
 	__u32 handle;
 
 	/** @flags: ``DRM_POWERVR_SGX_CACHE_RANGE_FLAG_*``, at least one. */
@@ -1142,8 +1117,11 @@ struct drm_powervr_sgx_job {
 	/** @sync_ops: Array of &struct drm_powervr_sgx_sync_op. May be empty. */
 	struct drm_powervr_sgx_obj_array sync_ops;
 
-	/** @bo_refs: Array of &struct drm_powervr_sgx_bo_ref. May be empty. */
-	struct drm_powervr_sgx_obj_array bo_refs;
+	/**
+	 * @cache_ranges: Array of &struct drm_powervr_sgx_cache_range, at most
+	 * 64: the bytes of imports the job reads or writes. May be empty.
+	 */
+	struct drm_powervr_sgx_obj_array cache_ranges;
 
 	/**
 	 * @ta_kicks: Array of &struct drm_powervr_sgx_cmd_ta_kick, each with
@@ -1158,13 +1136,6 @@ struct drm_powervr_sgx_job {
 
 	/** @_padding_4c: Reserved. This field must be zero. */
 	__u32 _padding_4c;
-
-	/**
-	 * @cache_ranges: Array of &struct drm_powervr_sgx_cache_range, at most
-	 * 64: the bytes of imports the job reads or writes. May be empty.
-	 * Revision 3; a shorter job stride leaves it empty.
-	 */
-	struct drm_powervr_sgx_obj_array cache_ranges;
 };
 
 /**
