@@ -990,6 +990,17 @@ So **the SGX530 encodes `USE_CODE_BASE` as `addr >> 8` (256 B units), not `>> 7`
 SGX545.** `USE_CODE_BASE_ADDR_SHIFT` is a register-field shift; the address granularity is
 the hardware's, and it is a power of two larger on the SGX530.
 
+Provenance: tag the shift **C**, from attempt 23's three cells. The GPL `sgx530defs.h`
+defines only the field (`ADDR_MASK` 0x00FFFFFF, 24 bits; `ADDR_SHIFT` 0, the register-field
+shift; `DM` b24-25) and has no `ADDR_ALIGNSHIFT`, so it doesn't give the granularity. The
+`<< 8` map fits all three cells exactly, and its high half is the coordinator's "field bits
+12-19 as 1 MiB units" (field bit 12 → address bit 20 = 1 MiB); the low half is attempt 21's
+b4-b7/b16-b18 = address bits 12-18. The 24-bit field at `<< 8` reaches address bit 31,
+masked to the SGX530's 28-bit space.
+
+**Where it lives:** the shift is a per-core value in the driver's core table (7 for the
+SGX545, 8 for the SGX530), not an `if (530)` in the code path, so a third core sets its own.
+
 The driver sets code base 15 = `kernel_code >> 7` = 0x1d8000. Under `<< 8` that is
 `PDS_EXEC_BASE`, so every attempt fetched the EDM task from `PDS_EXEC_BASE` + 0. That single
 wrong shift is the whole of why stage 1 never started: the PDS ran, the DOUTU started a USSE
