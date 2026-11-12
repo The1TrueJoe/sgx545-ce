@@ -408,13 +408,45 @@ static u32 use_code_base_val(struct pvrsgx_device *sdev, u64 addr, u32 dm)
 	return (u32)(addr >> cr->use_code_base_addr_shift) | dm << cr->use_code_base_dm_shift;
 }
 
+/*
+ * The event program's address as the event PDS base register takes it. A core
+ * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there, the 64 MiB the
+ * GPL DDK lets PDS code lie above PDS_EXEC_BASE: an offset from it (G).
+ */
+static u32 event_pds_addr(struct pvrsgx_device *sdev)
+{
+	u32 a = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu;
+
+	if (!(sdev->family->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE))
+		a -= pvrsgx_heaps(sdev)->pds_pixel.base;
+	return a;
+}
+
+/* Where the event PDS registers are a guess, the address must read back before any kick. */
+static int check_event_pds(struct pvrsgx_device *sdev)
+{
+	u32 want = event_pds_addr(sdev), got;
+
+	if (!sdev->family->event_pds_guessed)
+		return 0;
+	got = sgx_rd(sdev, sdev->cr->event_pds_base);
+	if (got != want) {
+		drm_err(&sdev->base,
+			"event PDS base 0x%04x reads 0x%08x, not 0x%08x; not starting the microkernel\n",
+			sdev->cr->event_pds_base, got, want);
+		return -EIO;
+	}
+	return 0;
+}
+
 /* Init script part 2: the core's script, then the bases. */
-static void init_script_part2(struct pvrsgx_device *sdev)
+static int init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
 	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
+	int err;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -438,10 +470,15 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);	/* unnamed, as the vendor script */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
-	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
+	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
 	sgx_wr(sdev, cr->event_pds_data0, 1);
 	sgx_wr(sdev, cr->event_pds_data1, 6);
+	/* Before the events are enabled, so a wrong guess starts nothing. */
+	err = check_event_pds(sdev);
+	if (err)
+		return err;
 	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+	return 0;
 }
 
 static void deinit_script(struct pvrsgx_device *sdev)
@@ -529,7 +566,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	pvrsgx_reset(sdev, true);
 
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
-	init_script_part2(sdev);
+	err = init_script_part2(sdev);
+	if (err)
+		return err;
 
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
