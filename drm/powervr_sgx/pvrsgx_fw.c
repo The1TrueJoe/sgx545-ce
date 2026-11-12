@@ -842,7 +842,7 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 	if (sv->flags & PVRSGX_SWEEP_ENABLE)
 		n += scnprintf(buf + n, len - n, " enable 0x%x", sv->enable);
 	if (sv->flags & ~PVRSGX_SWEEP_ENABLE)
-		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~PVRSGX_SWEEP_ENABLE);
+		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~(u32)PVRSGX_SWEEP_ENABLE);
 }
 
 /*
