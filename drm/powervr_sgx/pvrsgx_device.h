@@ -115,6 +115,8 @@ struct pvrsgx_fw {
 	 * microkernel loads into list 0, by slot; GPU read-only.
 	 */
 	struct pvrsgx_kmem pdtable;
+	/** @exec0: Stage-1 sweep only: a page at PDS_EXEC_BASE + 0, GPU read-only. */
+	struct pvrsgx_kmem exec0;
 	/** @pd_slots: The @pdtable slots VMs hold; slot 0 is the firmware's. */
 	struct ida pd_slots;
 	/** @event_entry: The microkernel offset the event program starts. */
@@ -134,10 +136,13 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_PDS_INV		BIT(9)	/* invalidate the PDS caches before the kick */
 #define PVRSGX_SWEEP_A68_HOLE		BIT(10)	/* event program address in the unmapped hole */
 #define PVRSGX_SWEEP_PDS_CTRL		BIT(11)	/* PDS (0xabc) = 0xe, the SGX545's value */
+#define PVRSGX_SWEEP_EXEC0_ENTRY	BIT(12)	/* a page at PDS_EXEC_BASE: the entry program */
+#define PVRSGX_SWEEP_EXEC0_HALT		BIT(13)	/* ... or its data row and a HALT */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4
 #define PVRSGX_SWEEP_PROG_F2		5
+#define PVRSGX_SWEEP_PROG_HALT		6
 
 /**
  * struct pvrsgx_device - The SGX545

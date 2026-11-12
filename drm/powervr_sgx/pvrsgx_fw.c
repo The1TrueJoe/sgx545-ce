@@ -474,6 +474,7 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
 	pvrsgx_kmem_free(sdev, &sdev->fw.pdtable);
+	pvrsgx_kmem_free(sdev, &sdev->fw.exec0);
 	ida_destroy(&sdev->fw.pd_slots);
 }
 
@@ -873,35 +874,58 @@ struct sweep_variant {
 };
 
 /*
- * What does the PDS need before it fetches? The baseline; PDS (0xabc) = 0xe,
- * alone and with F1; then, with stage1_vendor, 0xa00, 0xa74, 0xa78 and 0xaac
- * one at a time and together, and only if none of those faulted, 0xa7c and
- * 0xa80 alone; each alone and with F1. F1 faulting at the hole means the PDS
- * now fetches. Every write is put back after its variant.
+ * With 0xa74 set, the entry program faults at PDS_EXEC_BASE + 0 (stage 1, log
+ * 2026-11-12-0151). Whose fetch is it? The baseline; a program with no DOUT;
+ * then a page mapped at PDS_EXEC_BASE holding the entry program, or its data
+ * row and a HALT. If the fetch there is a PDS program's, the first runs the
+ * microkernel and the second ends the fault with no task.
  */
-#define F1	PVRSGX_SWEEP_PROG_F1
-
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_PDS_CTRL }, { .flags = PVRSGX_SWEEP_PDS_CTRL, .prog = F1 },
-	{ .vendor = 1 }, { .vendor = 1, .prog = F1 },
-	{ .vendor = 2 }, { .vendor = 2, .prog = F1 },
-	{ .vendor = 3 }, { .vendor = 3, .prog = F1 },
-	{ .vendor = 4 }, { .vendor = 4, .prog = F1 },
-	{ .vendor = SWEEP_VENDOR_ALL }, { .vendor = SWEEP_VENDOR_ALL, .prog = F1 },
-	{ .vendor = 6 }, { .vendor = 6, .prog = F1 },
-	{ .vendor = 7 }, { .vendor = 7, .prog = F1 },
+	{ .prog = PVRSGX_SWEEP_PROG_HALT },
+	{ .flags = PVRSGX_SWEEP_EXEC0_ENTRY },
+	{ .flags = PVRSGX_SWEEP_EXEC0_HALT },
 };
 
-#undef F1
+/*
+ * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
+ * a copy of the event program, or of its data row followed by a HALT.
+ */
+static int exec0_fill(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_kmem *km = &sdev->fw.exec0;
+	bool entry = sdev->sweep_flags & PVRSGX_SWEEP_EXEC0_ENTRY;
+	u32 *w;
+	int err;
+
+	if (!(sdev->sweep_flags & (PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT))) {
+		pvrsgx_kmem_free(sdev, km);
+		return 0;
+	}
+	if (!km->pages) {
+		err = pvrsgx_kmem_alloc(sdev, km, pvrsgx_heaps(sdev)->pds_pixel.base, PAGE_SIZE,
+					SGX_MMU_PTE_READONLY);
+		if (err)
+			return err;
+		drm_info(&sdev->base, "sweep: a page mapped at PDS_EXEC_BASE 0x%08x\n",
+			 km->dev_addr);
+	}
+	w = km->cpu;
+	memset32(w, 0, PAGE_SIZE / sizeof(u32));
+	memcpy(w, sdev->fw.cpu[PVRSGX_FW_PDS0], entry ? 0x18 : 0x10);
+	if (!entry)
+		w[4] = 0xaf000000;	/* HALT */
+	return 0;
+}
 
 /* The flags sweep_name() names; it prints the rest as hex. */
 #define SWEEP_NAMED	((u32)(PVRSGX_SWEEP_ENABLE | PVRSGX_SWEEP_PDS_INV | \
-			       PVRSGX_SWEEP_A68_HOLE | PVRSGX_SWEEP_PDS_CTRL))
+			       PVRSGX_SWEEP_A68_HOLE | PVRSGX_SWEEP_PDS_CTRL | \
+			       PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT))
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
-	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2" };
+	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2", "HALT" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
 			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ? "" : "baseline");
 
@@ -927,6 +951,10 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " 0xa68 hole");
 	if (sv->flags & PVRSGX_SWEEP_PDS_CTRL)
 		n += scnprintf(buf + n, len - n, " 0xabc 0xe");
+	if (sv->flags & PVRSGX_SWEEP_EXEC0_ENTRY)
+		n += scnprintf(buf + n, len - n, " exec base: entry");
+	if (sv->flags & PVRSGX_SWEEP_EXEC0_HALT)
+		n += scnprintf(buf + n, len - n, " exec base: HALT");
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
@@ -1140,6 +1168,9 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_a68_low = sv->a68_low;
 			sdev->sweep_vendor = sv->vendor;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
+			err = exec0_fill(sdev);
+			if (err)
+				return err;
 			pvrsgx_reset(sdev, true);
 			/*
 			 * The SGX530's SOFT_RESET has no PDS bit: a unit still busy
@@ -1177,9 +1208,9 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 		st = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
 		if (st & cr->bif_int_stat_fault_req) {
 			drm_info(&sdev->base,
-				 "sweep %s: BIF int 0x%x fault 0x%08x (the hole 0x%08x, 0x1000 rows in 0x%08x)\n",
-				 when, st, sgx_rd(sdev, SGX_CR_BIF_FAULT), pvrsgx_pds_f1_addr(sdev),
-				 sdev->fw.addr[PVRSGX_FW_PDS0] + 0x10000);
+				 "sweep %s: BIF int 0x%x fault 0x%08x (PDS_EXEC_BASE 0x%08x, the hole 0x%08x)\n",
+				 when, st, sgx_rd(sdev, SGX_CR_BIF_FAULT),
+				 (u32)pvrsgx_heaps(sdev)->pds_pixel.base, pvrsgx_pds_f1_addr(sdev));
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			vendor_fault |= sv->vendor != 0;
 			err = bif_recover(sdev, when);
@@ -1192,6 +1223,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 		}
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
+	sgx_wr(sdev, cr->event_pds_enable, 0);
+	pvrsgx_kmem_free(sdev, &sdev->fw.exec0);
 	return fault_check(sdev, hc);
 }
 

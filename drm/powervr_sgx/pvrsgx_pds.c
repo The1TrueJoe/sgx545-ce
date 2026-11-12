@@ -92,7 +92,8 @@ struct pvrsgx_pds pvrsgx_pds_prog(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf
  * F1 and F2 detect execution by a BIF fault at an address only that
  * instruction touches. F1: a one-dword DOUTD from PVRSGX_PDS_F1_ADDR past the
  * PDS vertex heap, where nothing is mapped. F2: a branch 0x10000 bytes past
- * the first code word, beyond the code arena and the PD table.
+ * the first code word, beyond the code arena and the PD table. HALT: the
+ * data row and a HALT, no DOUT.
  */
 #define BRA(t)	(0x97000000 | (t))
 #define HALT	0xaf000000
@@ -103,6 +104,7 @@ static const u32 sweep_prog[][12] = {
 	[2] = { BRA(4), HALT, HALT, HALT, HALT, HALT, HALT, HALT },
 	[3] = { BRA(8), HALT, HALT, HALT, HALT, HALT, HALT, HALT, BRA(8), HALT, HALT, HALT },
 	[PVRSGX_SWEEP_PROG_F2] = { BRA(0x4000), HALT, HALT, HALT },
+	[PVRSGX_SWEEP_PROG_HALT] = { HALT },
 };
 
 #undef BRA
