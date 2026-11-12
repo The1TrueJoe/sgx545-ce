@@ -349,6 +349,7 @@ USSE_ALU_NOPS = 0            # aluwr: nops between the or and the ld (pairing/la
 USSE_ALU_DST = 5             # aluwr: the register the or writes and the ld reads back
 USSE_PA_READ = False         # read pa0 as the ld base: are PDS-set attributes visible? (cores/sgx530_pa0.py)
 USSE_ALU_DSTOP = None        # aluwr: an explicit dest/base operand (e.g. 'o0','pa0') for the write-file test
+USSE_OUTSWEEP = 0            # write o0..o{N-1} and store each to ctlblk scratch: usable-output count (cores/sgx530_outsweep.py)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
