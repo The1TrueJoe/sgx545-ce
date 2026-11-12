@@ -133,6 +133,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_ENABLE		BIT(8)	/* event PDS enable = @sweep_enable */
 #define PVRSGX_SWEEP_PDS_INV		BIT(9)	/* invalidate the PDS caches before the kick */
 #define PVRSGX_SWEEP_A68_HOLE		BIT(10)	/* event program address in the unmapped hole */
+#define PVRSGX_SWEEP_PDS_CTRL		BIT(11)	/* PDS (0xabc) = 0xe, the SGX545's value */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4
@@ -214,6 +215,8 @@ struct pvrsgx_device {
 	u8 sweep_prog;
 	/** @sweep_a68_low: The sweep's low bits of the event PDS base, 0 normally. */
 	u8 sweep_a68_low;
+	/** @sweep_vendor: The sweep's SGX545 init write (pvrsgx_fw.c), + 1; 0 none. */
+	u8 sweep_vendor;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;

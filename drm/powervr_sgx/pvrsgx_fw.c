@@ -563,6 +563,42 @@ static void pads_set(struct pvrsgx_device *sdev)
 }
 
 /* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
+/*
+ * The stage-1 sweep's SGX545 init-script writes in the PDS and event block,
+ * which the SGX530's part 2 leaves out: unnamed in the SGX530 header (G).
+ * @sweep_vendor 1-4 writes one; 5 writes them all, with 0xa7c and 0xa80 = 0.
+ */
+static const struct pvrsgx_core_init_reg sweep_vendor_regs[] = {
+	{ 0xa00, 0x7c000 }, { 0xa74, 0x208200 }, { 0xa78, 0x2c }, { 0xaac, 0x45 },
+	{ 0xa7c, 0 }, { 0xa80, 0 },
+};
+
+#define SWEEP_VENDOR_ALL	5
+
+/* Write reg = val, logging what it held before and after. */
+static void sweep_write(struct pvrsgx_device *sdev, u32 reg, u32 val)
+{
+	u32 before = sgx_rd(sdev, reg);
+
+	sgx_wr(sdev, reg, val);
+	drm_info(&sdev->base, "sweep write 0x%04x: read 0x%08x, wrote 0x%08x, read 0x%08x\n",
+		 reg, before, val, sgx_rd(sdev, reg));
+}
+
+static void sweep_setup_writes(struct pvrsgx_device *sdev)
+{
+	unsigned int v = sdev->sweep_vendor;
+
+	if ((sdev->sweep_flags & PVRSGX_SWEEP_PDS_CTRL) && sdev->cr->pds_ctrl)
+		sweep_write(sdev, sdev->cr->pds_ctrl, 0xe);
+	if (v == SWEEP_VENDOR_ALL) {
+		for (unsigned int i = 0; i < ARRAY_SIZE(sweep_vendor_regs); i++)
+			sweep_write(sdev, sweep_vendor_regs[i].reg, sweep_vendor_regs[i].val);
+	} else if (v) {
+		sweep_write(sdev, sweep_vendor_regs[v - 1].reg, sweep_vendor_regs[v - 1].val);
+	}
+}
+
 static int init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
@@ -590,6 +626,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
+	sweep_setup_writes(sdev);
 	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
 	if (pads_wanted(sdev)) {
 		pads_set(sdev);
@@ -798,6 +835,10 @@ static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
+static bool stage1_vendor;
+module_param(stage1_vendor, bool, 0444);
+MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unnamed init writes");
+
 /*
  * Each variant one change from the normal start, + 1 where 0 means none:
  * the event program's MOVS destination and condition, the event data words
@@ -806,31 +847,38 @@ MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a gue
 struct sweep_variant {
 	u32 flags, enable;
 	u16 data0;
-	u8 dest, cc, data1, prog, a68_low;
+	u8 dest, cc, data1, prog, a68_low, vendor;
 };
 
 /*
- * Does the PDS fetch the program at all? The baseline; the PDS caches
- * invalidated, alone and with F1; the code start 64 KiB past the program,
- * unmapped (0x0a6c = 0x1000 rows); the program address in the unmapped hole.
- * Each fetch faults where only it reads.
+ * What does the PDS need before it fetches? The baseline; PDS (0xabc) = 0xe,
+ * alone and with F1; then, with stage1_vendor, each SGX545 init write in the
+ * PDS block alone and all together, each alone and with F1. F1 faulting at
+ * the hole means the PDS now fetches.
  */
+#define F1	PVRSGX_SWEEP_PROG_F1
+
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_PDS_INV },
-	{ .flags = PVRSGX_SWEEP_PDS_INV, .prog = PVRSGX_SWEEP_PROG_F1 },
-	{ .data0 = 0x1000 + 1 },
-	{ .flags = PVRSGX_SWEEP_A68_HOLE },
+	{ .flags = PVRSGX_SWEEP_PDS_CTRL }, { .flags = PVRSGX_SWEEP_PDS_CTRL, .prog = F1 },
+	{ .vendor = 1 }, { .vendor = 1, .prog = F1 },
+	{ .vendor = 2 }, { .vendor = 2, .prog = F1 },
+	{ .vendor = 3 }, { .vendor = 3, .prog = F1 },
+	{ .vendor = 4 }, { .vendor = 4, .prog = F1 },
+	{ .vendor = SWEEP_VENDOR_ALL }, { .vendor = SWEEP_VENDOR_ALL, .prog = F1 },
 };
 
+#undef F1
+
 /* The flags sweep_name() names; it prints the rest as hex. */
-#define SWEEP_NAMED	((u32)(PVRSGX_SWEEP_ENABLE | PVRSGX_SWEEP_PDS_INV | PVRSGX_SWEEP_A68_HOLE))
+#define SWEEP_NAMED	((u32)(PVRSGX_SWEEP_ENABLE | PVRSGX_SWEEP_PDS_INV | \
+			       PVRSGX_SWEEP_A68_HOLE | PVRSGX_SWEEP_PDS_CTRL))
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
 	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
-			  sv->data1 || sv->prog || sv->a68_low ? "" : "baseline");
+			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ? "" : "baseline");
 
 	if (sv->prog)
 		n += scnprintf(buf + n, len - n, " program %s",
@@ -852,6 +900,13 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " PDS inv");
 	if (sv->flags & PVRSGX_SWEEP_A68_HOLE)
 		n += scnprintf(buf + n, len - n, " 0xa68 hole");
+	if (sv->flags & PVRSGX_SWEEP_PDS_CTRL)
+		n += scnprintf(buf + n, len - n, " 0xabc 0xe");
+	if (sv->vendor == SWEEP_VENDOR_ALL)
+		n += scnprintf(buf + n, len - n, " SGX545 writes");
+	else if (sv->vendor)
+		n += scnprintf(buf + n, len - n, " 0x%x write",
+			       sweep_vendor_regs[sv->vendor - 1].reg);
 	if (sv->flags & ~SWEEP_NAMED)
 		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~SWEEP_NAMED);
 }
@@ -967,6 +1022,7 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_data1 = 0;
 	sdev->sweep_prog = 0;
 	sdev->sweep_a68_low = 0;
+	sdev->sweep_vendor = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -1040,6 +1096,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 
 		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
 			continue;
+		if (sv->vendor && !stage1_vendor)
+			continue;
 		sweep_name(sv, name, sizeof(name));
 		if (v) {
 			sgx_wr(sdev, cr->event_pds_enable, 0);
@@ -1052,6 +1110,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_enable = sv->enable;
 			sdev->sweep_prog = sv->prog;
 			sdev->sweep_a68_low = sv->a68_low;
+			sdev->sweep_vendor = sv->vendor;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
 			/*
