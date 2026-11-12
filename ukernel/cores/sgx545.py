@@ -364,6 +364,9 @@ USSE_STOR_SA = None         # store with a SECONDARY-ATTRIBUTE base: st r5 to [s
                             # via DOUTD (the vendor's route, vendor-setup §5/§6) with a mapped EDMPROTECT
                             # scratch addr. stor5 (temp base) and stout (pa base) dropped; does the SA-held
                             # address commit? (cores/sgx530_stor_sa.py)
+USSE_LDRETIRE = None        # load-retire check: ld [ctlblk+4*(off+1)] into r5 (a driver-placed sentinel),
+                            # then fault-read r5. Fault at the sentinel => the LOADED VALUE landed in the
+                            # temp (loads retire); fault at r5's leftover => it did not. (cores/sgx530_ldret.py)
 USSE_ODIST = None           # read o{N} after writing o0..o9 distinct values: are the outputs distinct regs or aliases? (cores/sgx530_odist0.py)
 USSE_ODIST_N = 10           # how many outputs the odist sweep writes (11 includes o10 for the margin-1 check)
 

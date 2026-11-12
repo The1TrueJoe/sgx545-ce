@@ -509,6 +509,23 @@ def build(a):
             a.i("ba usse_loop")
             a.end()
             return a
+        if USSE_LDRETIRE is not None:
+            # coordinator: confirm LOADS retire (the microkernel loads the CCB/control
+            # block into temps). r17 is loader-patched to ctlblk; the driver pre-writes a
+            # distinctive UNMAPPED sentinel at [ctlblk + 4*(off+1)] (e.g. 0x0dddd000).
+            # ld that word into r5, then fault-read r5: fault at the sentinel => the loaded
+            # value landed in r5 (loads retire, C); fault at r5's leftover 0x0fa93000 => it
+            # did not. Now that temps retire (xorr5), this is the last register-file fact
+            # the EDM-with-host-memory path needs.
+            a.patch(17, "ctlblk")
+            a.i(f"ld.a.d r5, r17, #{USSE_LDRETIRE}")
+            a.i("wdf")
+            a.i("ld.a.d r3, r5, #0")
+            a.i("wdf")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_STOR_SA is not None:
             # coordinator lead (a): the vendor's stores use addresses held in SECONDARY
             # ATTRIBUTES (filled by the control-block DOUTD), not temps — vendor-setup

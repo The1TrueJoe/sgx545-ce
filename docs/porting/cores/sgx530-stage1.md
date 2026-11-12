@@ -2203,3 +2203,39 @@ EDMPROTECT rejected it. img
 **Order:** `limmwr_r5` (str/limm) FIRST — it decides the architecture (host-owned
 memory needs str); then `stor_sa` (does a SA store commit, for the fuller path).
 `sgx530_andr5` is dropped — xorr5 already nailed the temp-retire value.
+
+## Reporting progress without stores (the EDM-with-host-memory path)
+
+If `st.a.d` never commits (stor5), the microkernel can still work, because the host
+reads hardware state directly and owns the firmware-visible structures. What the DDK
+microkernel persists with stores, and where each goes instead:
+
+- **Completion / `done_seq`.** Not a store. The hardware raises the completion bits in
+  `EVENT_STATUS` (PIXELBE_END_RENDER b18, DPM_3D_MEM_FREE b0; TA_FINISHED b13). The
+  host IRQ handler reads `EVENT_STATUS` and signals the `dma_fence`; the done-sequence
+  counter is the host counting its own completion IRQs (one per job), not a
+  microkernel-written word.
+- **CCB read offset.** In the uAPI model the KERNEL owns the job ring and tracks
+  submit/retire via fences; it never reads a microkernel-written read offset. The
+  microkernel processes one kick at a time.
+- **Liveness / heartbeat.** The host's `drm_sched` per-job timeout is the watchdog; a
+  job that doesn't raise its completion event in time is declared hung and recovered
+  (devcoredump + reset). No heartbeat store.
+- **A value that must flow microkernel → host mid-job** (e.g. a tag disambiguating
+  which of several in-flight jobs completed): put it in a REGISTER the host reads over
+  MMIO, via `str` (gated on the limmwr result) — `EVENT_TIMER` (0xacc) or an unused
+  scratch `EUR_CR` as a one-word mailbox. A single-context, one-job-at-a-time path does
+  not need even this.
+
+So the EDM-with-host-memory path needs: **loads retire** (sgx530_ldret), **temps
+retire** (xorr5, C), and **`str`** to program registers and, if ever needed, post a
+one-word mailbox (limmwr). It needs **no committing `st.a.d`** and **no pa-ALU writes**.
+Committed stores (stor_sa) only matter for the fuller, DDK-like path (multi-render,
+in-microkernel bookkeeping).
+
+**`sgx530_ldret`** (load-retire check): ld a driver-placed sentinel from [ctlblk+0x200]
+into r5, then fault-read r5 — fault at the sentinel ⇒ loads retire (C); fault at
+0x0fa93000 ⇒ they don't. img
+`da0f5462483fdde37bc96af1b7aa19b57c8188d1534f713e3fbe1db3f4377b62`, pkg
+`4b669b8d154c7aab373861d053a7a3ed1b21e41ce5a05992f1ced4631ff780ad` (crc 0x558044f1).
+The driver writes a distinctive unmapped sentinel (e.g. 0x0dddd000) at ctlblk+0x200.
