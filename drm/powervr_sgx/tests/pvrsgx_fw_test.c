@@ -2,7 +2,7 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * KUnit tests of the open microkernel's file checks (docs/UKERNEL.md 4a),
+ * KUnit tests of the microkernel file's checks,
  * included from pvrsgx_fw.c so they reach its static functions.
  */
 

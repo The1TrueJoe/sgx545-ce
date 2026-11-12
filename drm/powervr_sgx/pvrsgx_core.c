@@ -10,6 +10,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
+#include "pvrsgx_cmd_defs.h"
 #include "pvrsgx_core.h"
 #include "pvrsgx_hw.h"
 
@@ -65,6 +66,7 @@ static const struct pvrsgx_core_family families[] = {
 		.isa = PVRSGX_ISA_SGX545,
 		.num_dir_lists = 16,
 		.va_bits = 32,
+		.cmds = &pvrsgx_cmd_core_sgx545,
 		.init_regs = sgx545_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx545_init_regs),
 	},
@@ -80,8 +82,7 @@ static const struct pvrsgx_core_info cores[] = {
 	},
 	{
 		/*
-		 * The same core one revision earlier (docs/UKERNEL.md, "SGX545
-		 * core revisions"): same features and instruction set, the same
+		 * The same core one revision earlier: same features and instruction set, the same
 		 * microkernel. Its clock depends on the part (400 or 640 MHz);
 		 * the microkernel's timer only needs the order of magnitude.
 		 */

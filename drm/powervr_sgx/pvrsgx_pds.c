@@ -2,8 +2,7 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * The PDS programs that enter the microkernel, assembled at load
- * (docs/PDS.md for the encoding, docs/SRVINIT.md for the programs).
+ * The PDS programs that enter the microkernel, assembled at load.
  */
 
 #include "pvrsgx_fw.h"

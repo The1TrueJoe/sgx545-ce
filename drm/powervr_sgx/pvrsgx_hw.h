@@ -17,8 +17,8 @@
 
 /*
  * SGX545 registers not in the GPL header; the names are ours, from what the
- * microkernel and the vendor init script do with them (docs/SRVINIT.md,
- * docs/UKERNEL.md). Code reaches them through the core table.
+ * microkernel and the vendor init script do with them. Code reaches them
+ * through the core table.
  */
 #define SGX545_CR_EVENT_PDS_ENABLE		0x0a58	/* host events start the event program */
 #define   SGX545_CR_EVENT_PDS_ENABLE_ALL	0x2204b00f

@@ -9,7 +9,7 @@
 #include "pvrsgx_device.h"
 
 /*
- * PDS assembly (docs/PDS.md). A program is its data segment in 16-byte rows of
+ * PDS assembly. A program is its data segment in 16-byte rows of
  * DS0 DS0 DS1 DS1, then code. Operands are unified register numbers: DS0 words
  * 0x00-0x3f, DS1 words 0x40-0x7f, inputs from 0x80 (DS0 words 0x40 on).
  */

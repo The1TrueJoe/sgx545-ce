@@ -14,7 +14,7 @@ DRM=$2
 shift 2
 
 # KIT=1: also the test-kit-only patches (drm/ci/kit), never in the upstream check.
-for p in "$DRM"/gma500/*.patch $([ "${KIT:-0}" = 1 ] && echo "$DRM"/ci/kit/*.patch); do
+for p in "$DRM"/shmem/*.patch "$DRM"/gma500/*.patch $([ "${KIT:-0}" = 1 ] && echo "$DRM"/ci/kit/*.patch); do
 	echo ">> patch $(basename "$p")"
 	patch -d "$SRC" -p1 --forward --batch < "$p"
 done

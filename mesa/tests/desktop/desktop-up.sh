@@ -23,6 +23,16 @@ LIBGL_DRIVERS_PATH=/opt/sgx/lib/dri"
 [ -d "$R/opt/sgx/lib" ] || env_mesa=
 # XENV: more environment for Xorg only (SGX_DEBUG=..., MESA_SHADER_CAPTURE_PATH=...)
 XENV=${XENV:-}
+# XARGS: more Xorg arguments (-dumbSched, ...)
+XARGS=${XARGS:-}
+# CORES=1: Xorg dumps core on a fatal error, into ROOT/var/crash (the
+# pattern resolves in the chroot; on disk, not tmpfs)
+if [ -n "${CORES:-}" ]; then
+	ulimit -c unlimited
+	mkdir -p "$R/var/crash"
+	echo /var/crash/core.%e.%p > /proc/sys/kernel/core_pattern
+	XARGS="$XARGS -core"
+fi
 binds="dev proc sys tmp run"
 mounts() {
 	for d in $binds; do
@@ -42,7 +52,7 @@ start)
 	mounts
 	mkdir -p "$R/etc/X11" "$R/var/log"
 	cp "$here/xorg.conf" "$R/etc/X11/xorg.conf"
-	chroot "$R" /usr/bin/env $env_mesa $XENV /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp -noreset \
+	chroot "$R" /usr/bin/env $env_mesa $XENV /usr/lib/xorg/Xorg :0 vt1 -nolisten tcp -noreset $XARGS \
 		-config /etc/X11/xorg.conf -logfile /var/log/Xorg.0.log > "$R/var/log/xorg.out" 2>&1 &
 	for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && break; sleep 1; done
 	[ -S /tmp/.X11-unix/X0 ] || {

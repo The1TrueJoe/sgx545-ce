@@ -678,7 +678,21 @@ a running X server.
   | RepeatFix + Normal | the same, repeating | 88-212 → 1-20 |
 
   Corpus c1-c3, glmark2, Minecraft, loops: byte-identical (no existing program has such an
-  `if`). `SGX_COMPILER_DEBUG=flattenuniform` restores the selects.
+  `if`). `SGX_COMPILER_DEBUG=flattenuniform` restores the selects. On the desktop
+  (the lag rig, `tests/desktop/lag`, `flatten` against `default`, EA1 720x480, 2026-11-12,
+  one run each; X's draw + flush+wait time from `SGX_DEBUG=stats`), flattening costs more
+  than it saves, so branches stay the default:
+
+  | workload | X draw+flush ms/s, branches | flattened | X flushes/s, branches | flattened |
+  |---|---|---|---|---|
+  | `term` (glyphs) | 71 | 223 | 19.8 | 36.0 |
+  | `drag` | 96 | 83 | 30.7 | 21.5 |
+  | `drag-gl` | 646 | 732 | 88.9 | 77.0 |
+  | `menus`, `firefox` | 34, 44 | 31, 44 | 11.6, 16.8 | 9.5, 15.7 |
+
+  Xorg's CPU share is within a few points either way (`drag-gl` 27 % branches, 21 %
+  flattened). `nolevers` (no lazy clears or depth discards) is within noise of `default`
+  on every workload.
 - `nir_opt_preamble` (measure only, ALU cost 1): on the uniform program it lifts 35 of
   131 ALU ops (comp_tex_tex_n), but those are mostly the repeat-mode tests, which still
   cost a test into a predicate per branch when the result comes from the preamble. With the

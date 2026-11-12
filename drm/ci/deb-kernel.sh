@@ -23,7 +23,7 @@ release) kit= ;;
 kit) kit=$(ls "$DRM"/ci/kit/*.patch) ;;
 *) echo "deb-kernel: flavor release or kit, not '$FLAVOR'" >&2; exit 2 ;;
 esac
-for p in "$DRM"/gma500/*.patch $kit; do
+for p in "$DRM"/shmem/*.patch "$DRM"/gma500/*.patch $kit; do
 	echo ">> patch $(basename "$p")"
 	patch -d "$SRC" -p1 --forward --batch < "$p"
 done

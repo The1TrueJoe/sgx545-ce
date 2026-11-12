@@ -6,18 +6,23 @@
 # drives input with xdotool at 60 Hz, the way a person would, and prints one
 # "metric NAME VALUE" line where the workload has a throughput of its own.
 #
-#   lag-wl.sh idle|drag|term|firefox|menus|drag-gl
+#   lag-wl.sh idle|drag|term|firefox|menus|drag-gl|glstress
 set -u
 W=${1:?workload}
 DT=0.016
 
 term_window() {   # an 80x24 terminal at a known place; prints its window id
-	xfce4-terminal --geometry=80x24+120+120 --title=lagterm --hold -x sh -c 'echo lag; exec sleep 600' &
-	for i in $(seq 1 40); do
+	# (its output away from the $(...) this runs in, or that waits for it)
+	xfce4-terminal --geometry=80x24+120+120 --title=lagterm --hold -x sh -c 'echo lag; exec sleep 600' \
+		> /dev/null 2>&1 &
+	# (the first terminal of a session takes a while to map on these Atoms)
+	for i in $(seq 1 120); do
 		id=$(xdotool search --name '^lagterm$' 2>/dev/null | head -1)
 		[ -n "$id" ] && { sleep 1; echo "$id"; return; }
-		sleep 0.25
+		sleep 0.5
 	done
+	echo "lag-wl.sh: no terminal window in 60 s" >&2
+	exit 1
 }
 
 drag() {   # the window by its title bar: 300 steps of (3, 2) and back
@@ -36,7 +41,7 @@ idle)
 	sleep 15
 	;;
 drag)
-	id=$(term_window)
+	id=$(term_window) || exit 1
 	t0=$(date +%s.%N)
 	drag "$id"
 	echo "metric drag_s $(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN { print b - a }')"
@@ -46,8 +51,23 @@ drag-gl)   # the same drag while a GL client draws in its own window
 	glmark2 --size 400x300 -b build:use-vbo=true --run-forever > /dev/null 2>&1 &
 	g=$!
 	sleep 8
-	id=$(term_window)
+	id=$(term_window) || { kill $g; exit 1; }
 	drag "$id"
+	xdotool windowkill "$id"
+	kill $g
+	;;
+glstress)   # drag-gl over and over, the GL client's window resized between
+	# drags (its buffers reallocated): a reproducer, not a timing
+	glmark2 --size 400x300 -b build:use-vbo=true --run-forever > /dev/null 2>&1 &
+	g=$!
+	sleep 8
+	gw=$(xdotool search --name glmark2 2>/dev/null | head -1)
+	id=$(term_window) || { kill $g; exit 1; }
+	for i in 1 2 3 4 5 6 7; do
+		drag "$id"
+		[ -n "$gw" ] && xdotool windowsize "$gw" $((300 + 40 * i)) $((220 + 30 * i)) 2>/dev/null
+		sleep 1
+	done
 	xdotool windowkill "$id"
 	kill $g
 	;;
