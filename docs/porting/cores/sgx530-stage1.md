@@ -1126,6 +1126,33 @@ If the load addressing is wrong, it is likely an ISA difference in `ld.a.d`/`st.
 offset scaling or the `[moe]` mode; document it C and hand the encoding to cleanroom-isa per
 the clean-room rule.
 
+## After the twenty-seventh attempt: [moe] addressing
+
+Attempt 27 (log 2026-11-12-0332): the mirror probe reproduced the real image's fault
+exactly — b1 at 0x0fd79000, on `ld.a.d r3, r17, #42 [moe]`, with no marker. r17 (ctlblk) is
+0x0f003000, so the effective address 0x0fd79xxx is not `r17 + 42 × any clean unit`
+(0x0fd79000 − 0x0f003000 = 0x00d76000, not a multiple of 42). So the load's address isn't a
+plain base-plus-scaled-offset; `[moe]` is pulling in the USSE's MOE state.
+
+The SGX545 image uses `[moe]` on 409 loads/stores and never runs an explicit MOE setup: it
+relies on the default MOE state at program start, which hwt_p1 confirms is increment 1 on
+the SGX545. The SGX530's default is untested. If it differs, every `[moe]` access is
+corrupt, which is exactly the first `ld.a.d` failing.
+
+**Attempt 28: the same load without `[moe]`** (`cores/sgx530_usse_nomoe.py`): the attempt-27
+mirror with `[moe]` dropped from the `ld.a.d` and `st.a.d`.
+- Build: `python3 ukernel/build.py sgx530_usse_nomoe …`, then mkukfw. Image 0x60 (96 B),
+  sha256 410484bb…, same through asm.py and `sgx-asm`; `--check` crc 0x3e0a1c92; packaged
+  911f1f0a….
+- **The load now lands** (ctlblk 0x28 = 0, `EVENT_TIMER` 0xa5a, self-loop, no fault):
+  `[moe]` is the cause — the SGX530's default MOE/address state differs from the SGX545's.
+  The fix is a SGX530 MOE setup at task start (a `setfc`/MOE-control instruction), a
+  530-only image change that leaves the SGX545 golden untouched. Decode the needed state
+  from the hwt_* MOE suites, document it C, and the encoding goes to cleanroom-isa.
+- **It still faults at 0x0fd79000**: `[moe]` isn't it; the base r17 or the `ld.a.d` offset
+  encoding differs. Next is an offset sweep (vary #42) to read the effective-address
+  formula, as the USE_CODE_BASE bits were read.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
