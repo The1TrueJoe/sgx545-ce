@@ -1174,6 +1174,39 @@ static void t_upload_code_mapped(int fd)
 }
 
 /*
+ * An unmap holds the code until the jobs before it are done and the BIF
+ * invalidate has run; that goes out with a later command, so send some.
+ */
+static void t_upload_code_unmap_busy(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER), s = syncobj(fd);
+	struct drm_powervr_sgx_sync_op op = SIGNAL(s);
+	struct drm_powervr_sgx_job j = null_job(ctx, &op, 1);
+	uint64_t w[32] = { 0 };
+	int r;
+
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), 0);
+	assert_eq(upload(fd, bo, 0, w, sizeof(w), NULL), 0);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	assert_eq(vm_unmap(fd, vm, 0x37000000, PAGE), 0);
+	r = upload(fd, bo, 0, w, sizeof(w), NULL);
+	if (r != -EBUSY && r != 0)
+		fail("upload right after the unmap: %d", r);
+	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
+	for (int i = 0; i < 100 && r; i++) {
+		j = null_job(ctx, &op, 1);
+		assert_eq(submit(fd, &j, 1, NULL), 0);
+		assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
+		usleep(10000);
+		r = upload(fd, bo, 0, w, sizeof(w), NULL);
+		if (r != -EBUSY && r != 0)
+			fail("upload after the jobs: %d", r);
+	}
+	assert_eq(r, 0);
+}
+
+/*
  * phas.i's target counts from the USSE heap's base: it must land in the
  * object where it is mapped, and the object then stays there.
  */
@@ -1678,6 +1711,7 @@ static const struct {
 	{ "upload-code-phas-window", t_upload_code_phas_window },
 	{ "upload-code-invalid", t_upload_code_invalid },
 	{ "upload-code-mapped", t_upload_code_mapped },
+	{ "upload-code-unmap-busy", t_upload_code_unmap_busy },
 	{ "submit-other-vm", t_submit_other_vm },
 };
 

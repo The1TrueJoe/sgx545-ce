@@ -432,7 +432,9 @@ struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args {
  * Bytes no upload wrote are zero, which is a harmless instruction. While a VM
  * maps the object an upload may only write past every byte an earlier upload
  * wrote, so code the GPU may be running never changes under it; otherwise
- * -EBUSY. Once no VM maps the object it can be uploaded anywhere again.
+ * -EBUSY. Once no VM maps the object and the GPU has finished every job that
+ * could use those mappings, it can be uploaded anywhere again; until then a
+ * lower write fails with -EBUSY.
  */
 
 /**
