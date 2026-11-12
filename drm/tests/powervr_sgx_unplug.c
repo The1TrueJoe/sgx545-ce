@@ -15,6 +15,7 @@
  * Needs root. Exit 0 on success, 1 on a failure, 77 when there is no
  * powervr_sgx device.
  */
+#define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -25,11 +26,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
+
+/* Not <sys/ioctl.h>: musl redefines the kernel's _IOC macros there. */
+int ioctl(int fd, unsigned long req, ...);
 
 #include <drm/drm.h>
 #include "powervr_sgx_drm.h"
@@ -99,11 +102,12 @@ int main(void)
 		.size = BO_SIZE, .flags = DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
-	char link[PATH_MAX], drv[PATH_MAX], path[PATH_MAX + 8], *dev;
+	char sys[64], link[PATH_MAX], tmp[PATH_MAX + 16], drv[PATH_MAX], path[PATH_MAX + 16], *dev;
 	volatile uint32_t *p;
 	struct stat st;
-	int fd, err, fails = 0;
-	uint32_t sum = 0;
+	int fd, err;
+	volatile int fails = 0;
+	volatile uint32_t sum = 0;
 
 	fd = open_dev();
 	if (fd < 0) {
@@ -112,16 +116,16 @@ int main(void)
 	}
 	if (fstat(fd, &st))
 		return 1;
-	snprintf(link, sizeof(link), "/sys/dev/char/%u:%u/device", major(st.st_rdev),
+	snprintf(sys, sizeof(sys), "/sys/dev/char/%u:%u/device", major(st.st_rdev),
 		 minor(st.st_rdev));
-	if (!realpath(link, link)) {
-		printf("FAIL: %s: %s\n", link, strerror(errno));
+	if (!realpath(sys, link)) {
+		printf("FAIL: %s: %s\n", sys, strerror(errno));
 		return 1;
 	}
 	dev = strrchr(link, '/') + 1;
-	snprintf(drv, sizeof(drv), "%s/driver", link);
-	if (!realpath(drv, drv)) {
-		printf("FAIL: %s: %s\n", drv, strerror(errno));
+	snprintf(tmp, sizeof(tmp), "%s/driver", link);
+	if (!realpath(tmp, drv)) {
+		printf("FAIL: %s: %s\n", tmp, strerror(errno));
 		return 1;
 	}
 
