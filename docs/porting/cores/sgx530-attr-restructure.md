@@ -115,17 +115,20 @@ likely to fit.
   source's leftover (o0 0x0055d000 .. o9 0x0d04f000), so **o0..o9 are ten distinct task-writable
   registers** — the scratch gate is green and covers the budget of 10. (`odist10`, the margin-1
   check, is folded into attempt 45.)
-- **Can the task store to the control block at all? — a third gate (attempt 44).** This is the
-  one that bites. `stout_o0`'s `st.a.d pa0, #0, o0` with PA0 = a mapped ctlblk scratch address
-  **faulted** (BIF 0x4004 at the control block's mapped page). The likely cause is **EDM_PROTECT**:
-  UAPI.md P2 shows a 545 *client* task's `st` into EDM_PROTECT kernel memory wedges the GPU, while
-  the microkernel — as the EDM data master — writes its control block normally. If the SGX530
-  numbers its data masters differently from the 545's (code base 15 = the microkernel/EDM), the
-  task is not recognised as the EDM and its stores fault, which blocks **every** microkernel store
-  to the control block. Check: `BIF_FAULT` CID (b0-3) = 0xf for an EDM fault; a non-0xf CID on this
-  store confirms it. Attempt 45: the code-base-15 data-master field at 0/1/2, then the arena
-  without EDM_PROTECT (530 only). **Until a task store lands, the restructure cannot make the
-  microkernel run, whatever the register files do.**
+- **Can the task store to the control block at all? — the third gate (attempts 44-45).** The
+  store `st.a.d pa0, #0, o0` **faulted** (BIF 0x4004, control-block page). Attempt 45 found the
+  cause: **EDM_PROTECT (C).** The code-base-15 data-master field at 3/0/1/2 made no difference, but
+  mapping the arena **CACHECONSISTENT only (no EDM_PROTECT)** stopped the fault. So the driver fix
+  is clean: the SGX530 maps the microkernel's writable structures without EDM_PROTECT. (This fits
+  UAPI.md P2 — a 545 client `st` into EDM_PROTECT memory wedges the GPU — the 530 task simply is
+  not treated as the EDM, and the DM field does not change that.)
+- **Does the store reach memory? — still open (attempt 45).** With EDM_PROTECT off the store no
+  longer faults, but the target word still read 0. Either `st` cannot read an **output** as its
+  data source, or `idf`/`wdf` does not flush the USE data cache to memory (the DDK uses op0x100).
+  The control `sgx530_stout_r5` (store a temp through the same path) tells which. **This is
+  load-bearing for the restructure:** scratch lives in outputs, and the microkernel must *store*
+  that scratch to the control block. If `st` cannot read outputs, the restructure needs another
+  path from an output to memory (e.g. the emit mechanism), which would enlarge it.
 - **Emit-at-end semantics.** Outputs are normally emitted to the output buffer when a task
   ends. Every output probe self-loops, so emit is untested. If the microkernel's EDM-style task
   emits outputs on completion, using them as scratch could write scratch to memory. Confirm the

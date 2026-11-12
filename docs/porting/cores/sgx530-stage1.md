@@ -1736,6 +1736,31 @@ DOUTA-then-DOUTU: the microkernel cannot run if its stores fault, whatever the r
 Attempt 45 (approved): the code-base-15 data-master field at 0/1/2, then the data arena mapped
 without EDM_PROTECT on the 530. Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
 
+## After the forty-fifth attempt (5ee84d86): EDM_PROTECT is the store gate (C); margin one (C)
+
+**The store gate is EDM_PROTECT, not the data master (C).** `stout_o0` (PA0 = ctlblk+0x60) was
+run with the code-base-15 data-master field at 3/0/1/2: **every one faulted** BIF 0x4004 at the
+control-block page, so the DM field does not change it. Then with the kernel data arena mapped
+**CACHECONSISTENT only (no EDM_PROTECT)**: **no fault at all** (BIF int 0, the USE busy in its
+loop). So EDM_PROTECT is what blocks the task's stores, whatever the data master. The fix is
+driver-side and clean: the SGX530 maps the microkernel's writable structures without EDM_PROTECT.
+(The 545's `BIF_FAULT` CID-in-b0-3 does not show on the 530 — its low 12 bits read 0 — so the
+EDM-vs-not question can't be read off the fault there; the EDM_PROTECT result settles it anyway.)
+
+**Margin one (C).** `odist10` faulted b1 at 0x0fd79000 = r17's leftover, so o10 is distinct too:
+**eleven distinct task-writable outputs**, one more than the peak of 10.
+
+**Open: the store does not reach host-visible memory yet.** With EDM_PROTECT off the store no
+longer faults, but the version word (t[0x18], where PA0 points) still read **0**. Two candidates:
+(1) `st` cannot read an **output** as its data source; or (2) `idf`/`wdf` fences but does not
+flush the USE data cache to memory (the DDK uses the op0x100 data-cache flush). `stout_o0`
+already carries `st; idf; wdf`, so a missing fence is not it. The control `sgx530_stout_r5`
+stores a **temp** (r5's leftover 0x0c004000) through the same path: reads 0x0c004000 → `st`
+reaches memory and (2) is wrong, so the failure is (1) st-from-output; reads 0 → (2), a
+cache-flush problem for any source. This matters for the restructure: the microkernel must store
+its output-scratch to the control block. Analysis:
+[sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
