@@ -140,6 +140,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_EXEC0_HALT		BIT(13)	/* ... or its data row and a HALT */
 #define PVRSGX_SWEEP_EXEC0_BRA		BIT(14)	/* ... or rows 0 and 1 a branch 64 KiB on */
 #define PVRSGX_SWEEP_EXEC0_ALIAS	BIT(15)	/* ... or the code arena's page 0 aliased */
+#define PVRSGX_SWEEP_CB15		BIT(16)	/* code base 15's address = @sweep_cb15 */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4
@@ -230,6 +231,8 @@ struct pvrsgx_device {
 	u32 sweep_doutu0;
 	/** @sweep_doutu_set: Whether @sweep_doutu0 applies. */
 	bool sweep_doutu_set;
+	/** @sweep_cb15: The sweep's code base 15 address field, with PVRSGX_SWEEP_CB15. */
+	u32 sweep_cb15;
 	/** @sweep_saved: Registers the sweep wrote, with their values before. */
 	struct pvrsgx_core_init_reg sweep_saved[8];
 	/** @sweep_nsaved: Entries in @sweep_saved. */

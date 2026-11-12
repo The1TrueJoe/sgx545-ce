@@ -664,7 +664,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 			       USE_CODE_BASE_ADDR_SHIFT);
 	}
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
-	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
+	       (sdev->sweep_flags & PVRSGX_SWEEP_CB15 ? sdev->sweep_cb15 :
+		(u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
@@ -868,27 +869,29 @@ MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unname
  * 0xa6c and 0xa70; or flags.
  */
 struct sweep_variant {
-	u32 flags, enable, doutu0;
+	u32 flags, enable, doutu0, cb15;
 	bool doutu_set;
 	u16 data0;
 	u8 dest, cc, data1, prog, a68_low, vendor, doutu_bit;
 };
 
 /*
- * DOUTU word 0 against the fetch's fault page (stage 1, log 2026-11-12-0214):
- * one of b0-3 or b19-23 gave PDS_EXEC_BASE + 0x8000, the normal word (0xf and
- * b27) + 0. The baseline; word 0 = the temporaries alone, with 0xf, b27, or
- * both; then the base indices 1, 2, 4 and 8 and b19-b23 again.
+ * Where does the DDK's reach to the kernel code heap come from? The fetch's
+ * fault page for DOUTU word 0 segment guesses for an offset of 0x01400000
+ * (nibble 8 with b19-20 = 2; the SGX545's (40 + 15) & 15; 0xf8 << 16); then
+ * code base 15's address field at 0 and at 0x08000000 >> 7, the normal word
+ * otherwise (the baseline has kernel code >> 7).
  */
 #define W0(v)	{ .doutu_set = true, .doutu0 = (v) }
+#define CB15(v)	{ .flags = PVRSGX_SWEEP_CB15, .cb15 = (v) }
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	W0(0), W0(0xf), W0(BIT(27)), W0(0xf | BIT(27)),
-	W0(1), W0(2), W0(4), W0(8),
-	W0(BIT(19)), W0(BIT(20)), W0(BIT(21)), W0(BIT(22)), W0(BIT(23)),
+	W0(0x100008), W0(0x7), W0(0xf80000),
+	CB15(0), CB15(0x08000000 >> USE_CODE_BASE_ADDR_SHIFT),
 };
 
+#undef CB15
 #undef W0
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
@@ -935,7 +938,7 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 
 #define EXEC0_FLAGS	(PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT | \
 			 PVRSGX_SWEEP_EXEC0_BRA)
-#define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS)
+#define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1021,6 +1024,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " exec base: bra");
 	if (sv->flags & PVRSGX_SWEEP_EXEC0_ALIAS)
 		n += scnprintf(buf + n, len - n, " exec base: code page 0");
+	if (sv->flags & PVRSGX_SWEEP_CB15)
+		n += scnprintf(buf + n, len - n, " code base 15 0x%x", sv->cb15);
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
@@ -1238,6 +1243,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_doutu_bit = sv->doutu_bit;
 			sdev->sweep_doutu0 = sv->doutu0;
 			sdev->sweep_doutu_set = sv->doutu_set;
+			sdev->sweep_cb15 = sv->cb15;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			err = exec0_fill(sdev);
 			if (err)
