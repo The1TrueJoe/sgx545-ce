@@ -200,6 +200,26 @@ def test_probes():
           f"{P.PROBE_TIMER:#x}+k each, image {man['bytes']} B  OK")
 
 
+def test_bases():
+    """stage 1's code-base pad build (cores/sgx530_bases.py): the ladder as in
+    sgx530_diag, and each pad, on a 128 B boundary, writes its own EVENT_TIMER value"""
+    from cores import sgx530_bases as B
+    test_diag_entry("sgx530_bases")
+    code, man = load("sgx530_bases")
+    offs = []
+    for n in B.BASE_PADS:
+        off = man["entries"][f"pad_{n}"]
+        assert off % 128 == 0 and off >= man["entries"]["raise_host_irq"], f"pad {n} at {off:#x}"
+        u, mem, regs = machine(code, initialised=False)
+        u.task(off // 8, max_steps=100)
+        w = [(a, v) for (op, a, v, pc) in regs.log if op == "str"]
+        assert w == [(C.CR_EVENT_TIMER, B.PAD_TIMER + n)], (n, w)
+        offs.append(off)
+    assert len(set(offs)) == 15 and not (B.PAD_TIMER + 14) & 0x1000000
+    print(f"  code-base pads: 15 pads {offs[0]:#x}-{offs[-1]:#x}, EVENT_TIMER "
+          f"{B.PAD_TIMER:#x}+n, image {man['bytes']} B  OK")
+
+
 def man_text(core):
     """a diagnostic image's instruction texts, by index"""
     os.environ["SGX_CORE"] = core
@@ -372,6 +392,7 @@ def main():
     test_diag_entry()
     test_diag_entry("sgx530_diag_nophas")
     test_probes()
+    test_bases()
     test_getmiscinfo(code, man)
     test_restore_pd(code, man)
     test_bounded_wait(code, man)

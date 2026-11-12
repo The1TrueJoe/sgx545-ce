@@ -346,6 +346,180 @@ Their values before and after the kick are new facts whatever attempt 5 shows.
 If attempt 5 is still all zero, 0xa6c/0xa70 is next, then DOUTU word 1, then the MOVS
 selects.
 
+## After the sixth attempt: one slot, several variables
+
+Attempt 6 (log 2026-11-11-2154) wrote 0xa68 as an offset from `PDS_EXEC_BASE`
+(0x01404340, read back whole). It ran with the SGX530 DDK's heap layout and the
+24-temporary DOUTU, and still gave all zero: `EVENT_TIMER` 0, `PDS_PC_BASE` and `PDS` 0,
+`USE_CLKS` on, reads 2/0/1/2/2, no fault.
+
+Every remaining suspect is a host-side setting. The image can't split them, because none
+of its code runs until a task starts. One board slot can still test several if the driver
+**sweeps them in one load**. For each variant:
+1. hold the cores in reset and run the normal start sequence;
+2. apply that one change;
+3. kick, and poll `EVENT_TIMER` for about 100 ms;
+4. log the variant and what it read.
+
+The sweep stops at the first variant whose `EVENT_TIMER` leaves 0, and carries on with the
+normal init poll from there. Each variant is one change from attempt 6's baseline:
+
+| # | Change | Why |
+|---|---|---|
+| 0 | none (attempt 6) | the control |
+| 1 | 0xa6c/0xa70 = 2, 6 | if 0xa6c counts data rows and an SGX530 row is 2 dwords (no 2-dword interleave), the entry's 4 data words are 2 rows |
+| 2 | 0xa6c/0xa70 = 4, 6 | 0xa6c in dwords |
+| 3 | 0xa6c/0xa70 = 1, 2 | 0xa70 as the code's dwords (MOVS + HALT), not the whole program's |
+| 4 | 0xa6c/0xa70 = 0, 0 | the reset values: the PDS's defaults, if it has any |
+| 5 | DOUTU word 1 = 0 | 2 comes from the SGX545 microkernel templates; vertex and state tasks have 0 |
+| 6 | the entry's data in the SGX545's 2-dword interleave | the other layout, if both MOVS readings were wrong |
+| 7 | `USE_CODE_BASE_15` DM = 2 | DM 3 for the EDM is the SGX545 vendor's value. The field is 2 bits on every core, and no GPL source numbers the data masters |
+| 8 | `PDS` (0x0abc) b6, `DOUT_TIMEOUT_DISABLE` (K) | if a DOUT the USSE doesn't take times out and the PDS reruns the program, that fits reads that come and go with nothing started |
+| 9 | 0xa58 = 0x7fffffff | the enable value is the SGX545's (G) and leaves out b14 and others. It is unclear whether the kick needs an enabled bit at all. b31 (master interrupt) stays out. |
+
+All of it uses registers the start already writes or the SGX530 header names. Each
+variant costs a soft reset and about 100 ms.
+
+The image stays `sgx530_diag`: the first marker to land, `EVENT_TIMER` 0xa5a, names
+the variant. If none lands, the result still rules out each single change. The next
+step would then be pairs, starting with 1 or 2 combined with 5.
+
+## After the seventh attempt: the kicker word
+
+None of attempt 7's ten variants started a task (log 2026-11-11-2238). Each started clean:
+`CLKGATESTATUS` was back to 0x00010000 after every reset.
+
+**`PDS_PC_BASE` is probably a status register.** The GPL DDK 1.7 kernel (in-repo
+`sgxinit.c:1039`) never writes it. It reads it only in its hang dump, next to
+`EVENT_STATUS` and the BIF status registers. Read as the PDS's current program (G), its
+0 at every sample means the PDS never started a program. The kick never reached it.
+
+**The likely cause (K).** The same `sgxinit.c` (lines 373-384) handles a core without
+`SGX_FEATURE_MULTI_EVENT_KICK`, which includes the SGX530. Its init kick sets the
+event-kicker word to `(kicker + 1) & 0xff`, with a write barrier and the PDump comment
+"First increment of the SGX event kicker value", and only then writes `EVENT_KICK`. The
+CCB doorbell does the same. Our start zeroed the kicker and kicked without incrementing
+it.
+
+That fits all seven attempts, if the hardware dispatches a kick only when the word at
+`EVENT_KICKER` has changed:
+- the USE domain wakes;
+- the BIF reads a mapped word, with no fault;
+- the PDS never runs.
+
+The SGX545 starts on `EVENT_KICK2`, which doesn't go through the kicker, so it never
+showed.
+
+**Attempt 8:**
+- the init kick increments the kicker word first;
+- attempt 6's settings (TI layout, 0xa68 as an offset from `PDS_EXEC_BASE`, 24
+  temporaries);
+- the `sgx530_diag` image, unchanged.
+
+If that is still all zero, the next test comes from TI's DDK 1.4 `SGXInitialise`. It has
+no init kick: after part 2 it starts `EVENT_TIMER` (enable plus the period), so init runs
+on the first timer event (0x2204b00f enables b29).
+
+## After the eighth attempt: the PDS reaches the DOUTU
+
+Attempt 8 (log 2026-11-11-2300) added the kicker increment, and the PDS started.
+- **`PDS_PC_BASE` is the PDS's program counter** (C). Writes don't stick. It reads dwords
+  relative to `PDS_EXEC_BASE`.
+- **Baseline: 0x005010d4.** ×4 = 0x01404350, the event program's offset + 0x10: its first
+  code word, the MOVS to DOUTU. The PDS sits there.
+- **Variant 1 (0xa6c = 2): 0x005010d8**, the HALT after it.
+- **Variants 5, 6 and 7 (DOUTU word 1 = 0, the 2-dword interleave, DM 2): 0x0000f75c**,
+  which doesn't point into our program.
+- The ladder never ran: no 0xa5a, no marker, heartbeat 0.
+
+So the kick reaches the PDS, and the PDS runs our entry program. In the baseline it stops
+at the DOUT that hands the task to the USSE, as if the USSE doesn't take it.
+- A DOUTU the USSE doesn't accept fits a PC stuck on the MOVS.
+- A PC at the HALT (variant 1) suggests the MOVS went out. The task still didn't run our
+  code, or ran it elsewhere.
+- The three variants that move the PC to the same unexplained value all change something
+  the USSE sees.
+
+**Attempt 9:**
+- **Image:** `sgx530_probe` with `code_base_probes=1`. Now that a task may start, a
+  probe landing would show where it started. The kernel maps only the probes that fit
+  the TI layout (1-64 B units).
+- **Logging:** `PDS_PC_BASE` sampled about every 10 ms in each variant, to tell a PC that
+  moves from one that sits.
+- **Variants,** from attempt 8's baseline:
+
+| # | Change | What it tests |
+|---|---|---|
+| 0 | none | the control |
+| 1 | 0xa6c = 2 | the PC went on to the HALT |
+| 5, 6, 7 | as before | the PC left our program |
+| 1+5, 1+6, 1+7 | together | the HALT reading with each USSE-side change |
+| 5+7, 1+5+7 | together | the two changes nearest the task's start |
+| T4 | DOUTU temporaries field = 1 (4 temps) | a task that asks for little. Step 1 needs only r0 |
+| 1+T4 | together | |
+| T0 | temporaries field 0 | the SGX545's vertex and state programs use 0 |
+
+A probe marker (`EVENT_TIMER` 0xb0k) in any variant means the task started at another
+code-base unit. 0xa5a means it started at our image.
+
+## After the ninth attempt: which code base does the task use?
+
+Attempt 9 (log 2026-11-11-2324) ran 13 variants with the probes mapped. No ladder, no
+probe. Within every variant, `PDS_PC_BASE` cycled through:
+- our event program's MOVS and HALT;
+- 0xf35c (0xf75c with `sgx530_diag`);
+- 0.
+
+So the PDS keeps re-running our program and never starts a task.
+
+0xf35c and 0xf75c aren't in anything we build. As dwords from `PDS_EXEC_BASE` they
+are 0x0d83cd70 and 0x0d83dd70, in the PDS pixel heap, where nothing is mapped; our image
+starts at dword 0x500000. Their 0x1000 shift between images is unexplained.
+
+**Code-base pads.** If the DOUTU's code-base index is read differently on the SGX530
+(field position or width), the task goes through a base other than 15. `cores/sgx530_bases.py`
+is the ladder at offset 0 plus a pad per code base 0-14 past the image, on 128 B
+boundaries. Pad n writes `EVENT_TIMER` = 0xc00 + n and ends.
+- Offsets: pad n at 0x4380 + 0x80·n (pad 14 at 0x4a80).
+- The image is 19096 B (0x4a98), sha256 7b51cdce…, the same through asm.py and `sgx-asm`.
+- `--check`: crc 0x465944e3, features 0x4, the same entry and patches. The packaged file is f7de7b95….
+
+For the sweep, the host points `USE_CODE_BASE_n` (n 0-14) at kernel code + pad n,
+>> 7, in two passes:
+- every DM 3, as base 15;
+- the usual DMs: 1 for 0-9, 0 for 10-14.
+
+Base 15 stays as it is. 0xc0n means the task went through base n. 0xa5a means base 15
+after all.
+
+**Calibrate the fault path (K registers only).** Every "no fault, so not that address"
+inference so far assumes the SGX530 reports BIF faults as we read them, and it never has.
+As the last step of the sweep:
+1. point `EVENT_KICKER` at an unmapped address, such as 0x0e800000, the empty reserved
+   code heap;
+2. increment the kicker word and kick;
+3. sample `BIF_INT_STAT`, `BIF_FAULT` and `BIF_MEM_REQ_STAT`.
+
+A fault at 0x0e800000 confirms the path. None means the earlier "would fault" arguments
+don't hold, and the probes and pads are the only evidence of where a task went.
+
+**Order and recovery.** The board has no remote power switch, so a wedge costs a manual
+power cycle. The calibration therefore runs last, after every pad pass is logged, and
+recovers like this:
+1. Write `EVENT_KICKER` back to the kicker buffer and `EVENT_KICK` nothing more.
+2. Run the driver's recovery reset, `pvrsgx_reset(recovery = true)`. With list 0 on the
+   scratch directory, it maps the scratch page at each faulting address, so the held
+   request completes, then resets the BIF and the cores again (up to 32 rounds). That path is
+   proven on the SGX545's hang recovery but not yet on the SGX530.
+3. Read `BIF_INT_STAT` once more. It must be 0 before the normal failed-probe teardown.
+4. If it isn't 0 after the 32 rounds: log it, hold the cores and the BIF in reset
+   (`SOFT_RESET` = BIF | cores), and unload without any further register access.
+   That leaves nothing for a pending request to complete into. Expect to need the
+   board owner for a power cycle only if the board stops answering.
+
+If the kernel side can't do steps 2-4 for this start, it should skip the calibration.
+The pad passes don't need it.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

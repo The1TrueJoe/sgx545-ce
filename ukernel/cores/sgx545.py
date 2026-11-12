@@ -332,6 +332,7 @@ DIAG_ENTRY = None            # a bring-up marker: the event entry stores markers
                              # phas.i (cores/sgx530_diag.py); None = the normal entry
 DIAG_PHAS = True             # False drops the event entry's phas.i (diagnostic builds only)
 PROBES = None                # code-base-unit probes past the image (cores/sgx530_probe.py)
+BASE_PADS = None             # code-base pads past the image (cores/sgx530_bases.py)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
