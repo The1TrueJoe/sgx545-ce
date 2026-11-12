@@ -1917,3 +1917,56 @@ commit to DRAM without faulting on an `EDM_PROTECT` page (gates 3/4)?
 re-run one DOUTA-then-DOUTU under the 8-word interleave to close gate 2. If the store still does not
 commit with `EDM_PROTECT` on, vary word 1 bit 26 alone. Same board rules and lock turn-taking as
 H-A/H-B; batch into one slot if those have not run yet.
+
+## H-A resolved; the vendor-launch test, H-B and T2 batched in one slot
+
+The kernel session answered H-A from the existing attempts, so no new run was needed, and
+reports the state of the rest.
+
+- **H-A — resolved. The store is not blocked by `EDM_PROTECT`.** The page the 46/47 and the T1
+  control stores targeted is `0x0f003000` (`PA0` = `TA3DCTL` + 0x60, inside the kernel data arena).
+  That arena was mapped `CACHECONSISTENT | valid` with `EDMPROTECT` (b4) **clear** — the SGX530
+  default (`data_no_edmprotect`) since d8160ba2 — so the stores were not landing on a protected page.
+  The control run T1 mapped that same page `READONLY`, and the store then **faulted** (fault code
+  0x4 at `0x0f003000`). So the store reaches the MMU **with the correct address**, and the gate that
+  stops it from committing is **downstream of address translation**, not `EDM_PROTECT` and not a
+  misplaced target. This is consistent with gate 3 (46-47): the store commits to neither arena even
+  though it is addressed and routed correctly. The write-retire blocker is therefore a property of
+  the launch/write context (H-C), not of the memory map.
+- **H-B — ran with T2; negative (see the results below).** The kernel session adds a **host** BIF flush
+  (`BIF_CTRL` FLUSH b2) and directory-cache invalidate (INVALDC b3), both named in the SGX530 GPL
+  header, plus an `EVENT_STATUS` readout, before the DRAM scan. If the stored value then appears,
+  stores do commit and the gate is a flush, not a missing write context. It shares the slot with the
+  gap-19 **T2** probe `sgx530_ldloop_pa0` (`phas.i; L: ld.a.d r3, pa0, #0; wdf; ba L`). The kernel
+  session holds the board lock for this slot.
+- **The vendor-launch test (§9) is cleared and batches with T2 and H-B.** Its launch values come
+  from the analysis side's static read of the vendor's closed user space; the coordinator confirmed
+  this falls under [CLEANROOM.md](../../CLEANROOM.md) — a static fact must be confirmed on hardware
+  before shipping code depends on it, and the board run **is** that confirmation. §9 therefore stays
+  a probe variant, off by default, until its result is recorded as `C`. So T2, H-B and §9 run in one
+  board slot. H-C stays designed as the black-box fallback in case §9 does not make writes retire.
+
+## T2 and H-B results (board run, 20:21–20:22 UTC): both cheap hypotheses negative
+
+The kernel session ran T2 and H-B in one slot (no hang, 75–77 °C, clean release). Of the cheap set,
+none moves the store, so the write-retire blocker is the launch/write context — §9 (now cleared, see
+above) is the lead, with H-C the black-box fallback.
+
+- **H-B — negative. The store is not held in the BIF.** With a host `BIF_CTRL` FLUSH + INVALDC
+  before the DRAM scan, the stored value is still in neither arena, and `EVENT_STATUS` and
+  `BIF_MEM_REQ_STAT` read **0 both before and after** the flush — nothing outstanding to drain. So
+  the store genuinely does **not** commit; it is not a missing flush. Together with H-A (the store
+  reaches the MMU with the correct address), this leaves "no write context" as the explanation — not
+  the memory map, not a cache/flush gate.
+- **T2 (gap 7) — confirmed. A list-0 switch plus BIF directory-cache invalidate isolates a running
+  task.** The `ldloop` task looped on `ld.a.d r3, pa0` (PA0 = control block in the kernel data
+  arena). Mapping code+data and invalidating: the load succeeds, **no fault**. Remapping to
+  code-only **without** INVALDC: still no fault — the BIF holds the stale translation. Remapping to
+  code-only **with** INVALDC: **fault 0x4002 at `0x0f003000`** — the now-unmapped page faults. Back
+  on the firmware PD the fault persists (task still looping). So a per-kick list-0 switch, paired
+  with the directory-cache invalidate, leaves no stale translation, and the invalidate is necessary
+  (the without-INVALDC step showed the stale one surviving). The gap-19 design's directory handling
+  is sound.
+
+Net: H-A and H-B are both negative. The store reaches the MMU and is not held in the BIF, yet does
+not commit. The remaining lead is the launch/write context that §9 programs; H-C stays the fallback.
