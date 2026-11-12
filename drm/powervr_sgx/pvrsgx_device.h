@@ -145,6 +145,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_TEMPS_FIELD	BIT(18)	/* its temporaries field (b24-31) = @sweep_doutu0 */
 #define PVRSGX_SWEEP_DOUTA_PA0		BIT(19)	/* a DOUTA of @sweep_doutu0 to PA0 first */
 #define PVRSGX_SWEEP_DOUTA_1ROW		BIT(20)	/* ... with one data row, DOUTU word 1 = 0 */
+#define PVRSGX_SWEEP_DOUTA_X2		BIT(21)	/* ... and that DOUTA in the .x2.s27 form */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4
