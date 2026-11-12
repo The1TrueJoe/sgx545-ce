@@ -10,7 +10,8 @@
  * whole after each and compared with the half-planes it should keep.  The
  * piglit test fails now and then once ARB_framebuffer_object puts it in an
  * FBO (docs/GL3.md); this prints where: the wrong pixels' count and bounding
- * box per combination, over 20 rounds.
+ * box per combination, over 20 rounds.  Before each whole read, piglit's
+ * own probes: twelve 1x1 reads as floats.
  *
  *   sgx_clipfbo
  *
@@ -180,6 +181,29 @@ main(void)
          glVertex2f_(1, 1);
          glVertex2f_(-1, 1);
          glEnd_();
+         /* first piglit's probes, one pixel each as floats (its relative
+          * probes: the six inside points, then the six outside ones) */
+         static const float pr[12][2] = {
+            {0.3f, 0.4f}, {0.5f, 0.3f}, {0.7f, 0.4f}, {0.7f, 0.6f},
+            {0.5f, 0.7f}, {0.3f, 0.6f}, {0.5f, 0.2f}, {0.8f, 0.3f},
+            {0.8f, 0.7f}, {0.5f, 0.8f}, {0.2f, 0.7f}, {0.2f, 0.3f}};
+         for (unsigned q = 0; q < 12; q++) {
+            int x = (int)(pr[q][0] * S), y = (int)(pr[q][1] * S);
+            float f[4];
+            double fx = (x + 0.5) / S * 2 - 1, fy = (y + 0.5) / S * 2 - 1;
+            int keep = 1;
+
+            glReadPixels_(x, y, 1, 1, GL_RGBA, GL_FLOAT, f);
+            for (unsigned i = 0; i < 6; i++)
+               if (combos[k] >> i & 1 &&
+                   planes[i][0] * fx + planes[i][1] * fy + planes[i][3] < 0)
+                  keep = 0;
+            if ((f[0] > 0.5f) != keep) {
+               printf("round %d combo %u: 1x1 probe (%d,%d) read %.0f, want %d\n",
+                      round, k, x, y, f[0], keep);
+               round_bad = 1;
+            }
+         }
          glReadPixels_(0, 0, S, S, GL_RGBA, GL_UNSIGNED_BYTE, px);
          unsigned wrong = 0, x0 = S, y0 = S, x1 = 0, y1 = 0, white_wrong = 0;
          for (unsigned y = 0; y < S; y++)
