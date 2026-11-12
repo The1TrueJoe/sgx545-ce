@@ -343,11 +343,6 @@ void pvrsgx_vm_put(struct pvrsgx_vm *vm)
 		kref_put(&vm->ref, vm_release);
 }
 
-void pvrsgx_vm_user_get(struct pvrsgx_vm *vm)
-{
-	atomic_inc(&vm->users);
-}
-
 /*
  * The handle or a context is gone. With neither left, nothing can submit to
  * the VM again: once its jobs are done, unmap and release every object. The
@@ -436,14 +431,21 @@ u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm)
 	return vm->pd_slot ?: pvrsgx_mmu_pd_addr(vm->mmu);
 }
 
-struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)
+/*
+ * A VM by handle, with a reference and a user (pvrsgx_vm_user_put()). Taken
+ * under the lock DESTROY_VM_CONTEXT erases under, while the handle's own user
+ * still holds the VM, so a VM torn down is never taken up again.
+ */
+struct pvrsgx_vm *pvrsgx_vm_lookup_user(struct pvrsgx_file *sfile, u32 handle)
 {
 	struct pvrsgx_vm *vm;
 
 	xa_lock(&sfile->vms);
 	vm = xa_load(&sfile->vms, handle);
-	if (vm)
+	if (vm) {
 		pvrsgx_vm_get(vm);
+		atomic_inc(&vm->users);
+	}
 	xa_unlock(&sfile->vms);
 	return vm;
 }
@@ -709,7 +711,8 @@ int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *fi
 	if (args->flags != DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC || !n || args->sync_ops.count)
 		return -EINVAL;
 
-	vm = pvrsgx_vm_lookup(to_pvrsgx_file(file), args->vm_context_handle);
+	/* A user for the call: a concurrent destroy tears the VM down after it. */
+	vm = pvrsgx_vm_lookup_user(to_pvrsgx_file(file), args->vm_context_handle);
 	if (!vm)
 		return -ENOENT;
 	in = pvrsgx_obj_array_get(&args->ops, sizeof(*in), PVRSGX_MAX_BIND_OPS);
@@ -794,6 +797,7 @@ out:
 	kfree(f);
 	kvfree(in);
 out_vm:
+	pvrsgx_vm_user_put(vm);
 	pvrsgx_vm_put(vm);
 	return err;
 }

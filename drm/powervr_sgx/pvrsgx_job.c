@@ -633,7 +633,7 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	ctx = kzalloc_obj(*ctx);
 	if (!ctx)
 		return -ENOMEM;
-	ctx->vm = pvrsgx_vm_lookup(sfile, args->vm_context_handle);
+	ctx->vm = pvrsgx_vm_lookup_user(sfile, args->vm_context_handle);
 	if (!ctx->vm) {
 		kfree(ctx);
 		return -ENOENT;
@@ -650,7 +650,6 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	err = drm_sched_entity_init(&ctx->entity, sched_priority(args->priority), &sched, 1, NULL);
 	if (err)
 		goto err_put;
-	pvrsgx_vm_user_get(ctx->vm);
 	err = xa_alloc(&sfile->contexts, &args->handle, ctx,
 		       XA_LIMIT(1, PVRSGX_MAX_FILE_CONTEXTS), GFP_KERNEL);
 	if (err) {
@@ -661,8 +660,8 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 
 err_entity:
 	drm_sched_entity_destroy(&ctx->entity);
-	pvrsgx_vm_user_put(ctx->vm);
 err_put:
+	pvrsgx_vm_user_put(ctx->vm);
 	context_put(ctx);
 	return err;
 }
