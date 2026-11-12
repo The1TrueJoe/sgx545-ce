@@ -510,6 +510,22 @@ def build(a):
             a.i("ba usse_loop")
             a.end()
             return a
+        if USSE_ODIST is not None:
+            # are the outputs distinct physical registers, or aliases? Attempt 42 showed
+            # o0..o10 all writable but each got the SAME value (0x0fd7d000), which can't
+            # tell aliasing apart. Write o0..o9 each a DISTINCT value -- rN's own leftover
+            # via `or oK, rN, rN` (no r17, whose bits would mask the difference) -- then
+            # ld through the one output USSE_ODIST names. It must read its own source's
+            # leftover (o0 -> r0 0x0055d000, o9 -> r31 0x0d04f000); any other page means a
+            # later write clobbered it == the outputs alias. Bring-up only.
+            srcs = [0, 1, 2, 3, 4, 5, 6, 8, 16, 31]   # ten distinct confirmed leftovers
+            for k, s in enumerate(srcs):
+                a.i(f"or o{k}, r{s}, r{s}")
+            a.i(f"ld.a.d r3, o{USSE_ODIST}, #0")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_LIMMTEST is not None:
             # does limm write its destination on the 530? limm rK, #0xa5a then
             # str rK to EVENT_TIMER (str reads the register). EVENT_TIMER = 0xa5a =>

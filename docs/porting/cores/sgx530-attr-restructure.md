@@ -70,19 +70,17 @@ the control-block base and `r14` the PD table — §2(A) puts both in primary at
 read directly as `pa0`/`pa1` (an attribute works as an `ld`/`st` base; `ld.a.d r3, pa0` is
 confirmed). They leave the scratch budget entirely. So **peak OUTPUT pressure = 12 − 2 = 10.**
 
-Against the usable-output count from attempt 42 (architectural ceiling ~11, **U**; `o0`
-confirmed):
+**Attempt 42 (C): all of o0..o10 are writable** — every one faults at 0x0fd7d000. So ≥10 usable
+outputs holds, and the restructure is **a per-core reallocation, no spill:** a 530 register remap
+in `ukernel.py`'s emit layer (scratch → `o0..o9`), plus the §2(A) attribute change for the two
+bases (r17, r14 → PA0, PA1), plus per-core gating. Contained — it changes the register
+convention, not each path's logic. The `<10 usable` spill case does not arise.
 
-- **≥10 usable outputs → a per-core reallocation, no spill.** A 530 register remap in
-  `ukernel.py`'s emit layer (scratch → `o0..o9`), plus the §2(A) attribute change for the two
-  bases, plus per-core gating. Contained: it changes the register convention, not each path's
-  logic. This is the likely case if the bank is ~11.
-- **<10 usable outputs → reallocation + a little spill**, only in the one hot region that
-  exceeds the count (store/reload the overflow to a scratch word). Not a full spilling allocator
-  — most of the program fits, so only the ~8-instruction peak needs it. Bigger than the clean
-  case but still bounded.
-
-So the one number still pending is attempt 42's usable-output count; the pressure side is done.
+**One caveat gates it (G):** attempt 42 wrote the *same* value to every output, so the outputs
+are not yet shown to be **distinct** physical registers. A reallocation needs 10 distinct scratch
+slots; if the "11 outputs" are aliases of fewer physical registers, the budget collapses. The
+distinctness probe (`sgx530_odist0/9`: write o0..o9 ten distinct values, read the endpoints)
+settles it. **Go/no-go: GO for the clean reallocation, conditional on the distinctness check.**
 
 ## 4. Which microkernel paths change
 
@@ -105,12 +103,14 @@ likely to fit.
 
 ## 5. What still needs confirming before code
 
-- **Usable output count** (§3) — peak output pressure is measured at 10, so the question is
-  whether ≥10 outputs are writable. Tested by the per-output fault-readout sweep (`or oN, r5,
-  r17; ld.a.d r3, oN`: the fault page is the readout, 0x0fd7d000 = writable). The earlier
-  store-based sweep was wrong — it used `r17` (through a `limm` that does not retire on the 530)
-  as the store base, so nothing would reach memory; **on the 530 there is no `limm`-loaded temp
-  base to store through.** The fault-readout needs no base.
+- **Usable output count — done (C, attempt 42):** all o0..o10 writable, ≥10 holds. The
+  per-output fault-readout (`or oN, r5, r17; ld.a.d r3, oN`: fault page is the readout, 0x0fd7d000
+  = writable) was the right shape; the earlier store-based sweep was wrong (it used `r17`, a
+  non-retiring `limm`, as the store base — there is no `limm`-loaded temp base on the 530).
+- **Output distinctness — pending.** Attempt 42 wrote the same value to every output, so they are
+  not yet shown to be distinct physical registers (a reallocation needs 10 distinct slots). Probe
+  `sgx530_odist0/9` writes o0..o9 ten distinct leftovers and reads the endpoints; own value =
+  distinct, other page = aliasing.
 - **`st.a.d` reading an output as its source.** Needs a *mapped* store base, which `limm` cannot
   provide. Use PA0: a **standalone DOUTA** (driver-set, persists — this does not need
   DOUTA-then-DOUTU) puts a mapped control-block scratch address in PA0, then the task does

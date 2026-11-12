@@ -1659,6 +1659,28 @@ the restructure's attribute setup needs. This is an open problem, analysed in
 (DOUTA writes PA0, and it persists), but DOUTA-then-launch in one program is unproven on the
 530 and is the next PDS problem to solve (or to sidestep via the observed persistence).
 
+## After the forty-second attempt (11:06-11:08 UTC, f85c22d9's driver): all outputs writable (C)
+
+The first attempt-42 build (the store-based `outsweep`, 5729e2bd) was never run: its stores used
+`r17` as the base through `a.patch(17, "ctlblk")`, a `limm` that does not retire on the 530, so
+`r17` stays its unmapped leftover and the stores would fault before reaching the scratch words —
+and the `or` needs that same leftover to make 0x0fd7d000, so the two uses of `r17` contradict
+(caught before board time). It was replaced with the per-output fault-readout
+`or oN, r5, r17; ld.a.d r3, oN`, eleven images o0..o10 (all 22 hashes verified against the
+build).
+
+**Result (C):** every output o0 through o10 faulted b1 at **exactly 0x0fd7d000** = r5's leftover
+0x0c004000 | r17's 0x0fd79000. Each `or oN` landed and the `ld` through `oN` read it, so
+**o0..o10 are all task-writable** — covering the restructure's measured peak output pressure of
+10 (`ukernel/pressure.py`).
+
+**Caveat (G, flagged by the board session):** every probe wrote the **same** value, so this does
+not rule out the outputs *aliasing* one physical register. The restructure needs 10 *distinct*
+scratch registers, so a follow-up (`cores/sgx530_odist0.py`, `_odist9.py`) writes o0..o9 ten
+**distinct** values (rN's own leftover, via `or oK, rN, rN` — no `r17`, whose bits would mask the
+difference) and reads o0 (expect 0x0055d000) and o9 (expect 0x0d04f000); its own source's value =
+distinct, any other page = a later write clobbered it = aliasing. Pending a board slot.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
