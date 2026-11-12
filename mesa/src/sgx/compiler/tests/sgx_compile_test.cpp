@@ -1029,6 +1029,68 @@ TEST_F(sgx_compile_test, fragment_discard_one_phase)
    EXPECT_TRUE(feedback);
 }
 
+/* an alpha test a uniform gates, between the sample and the colour math (an
+ * alias-model shader's): phase 0 ends in the feedback nop */
+TEST_F(sgx_compile_test, fragment_uniform_gated_discard_ends_in_feedback)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec4_type(), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   nir_variable *on = var(nir_var_uniform, glsl_float_type(), "on", -1);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_trim_vector(&b, nir_load_var(&b, uv), 2);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_def *keep =
+      nir_fmul(&b, nir_sne(&b, nir_load_var(&b, on), nir_imm_float(&b, 0.0)),
+               nir_slt(&b, nir_channel(&b, t, 3), nir_imm_float(&b, 0.666)));
+   nir_discard_if(&b, nir_fneu_imm(&b, keep, 0.0));
+   nir_def *v = nir_fmul(&b, t, nir_load_var(&b, c4));
+   nir_store_var(&b, col, nir_fsat(&b, nir_fmul_imm(&b, v, 2.0)), 0xf);
+
+   for (int split = 0; split < 2; split++) {
+      split_phases = split;
+      ASSERT_TRUE(compile()) << out.log;
+      EXPECT_TRUE(out.discards);
+      ASSERT_GT(out.n_code, 0u);
+      EXPECT_EQ(out.code[out.n_code - 1], (uint64_t)0xf8000140u << 32)
+         << disasm();
+   }
+}
+
+/* a discard on a condition that folds to false (an RGB texture's alpha, 1,
+ * tested < 0.666): no discard left, no feedback point, drawn as opaque */
+TEST_F(sgx_compile_test, fragment_folded_discard_has_no_feedback)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_discard_if(&b, nir_flt_imm(&b, nir_imm_float(&b, 1.0), 0.666));
+   nir_store_var(&b, col, v, 0xf);
+
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_FALSE(out.discards);
+   EXPECT_EQ(out.n_code1, 0u);
+   for (unsigned i = 0; i < out.n_blocks; i++)
+      EXPECT_NE(out.blocks[i].kind, SGX_BLOCK_FEEDBACK);
+}
+
 /* more constants than SA holds: the rest are loaded from memory (ld.a.d) */
 TEST_F(sgx_compile_test, vertex_constants_in_memory)
 {

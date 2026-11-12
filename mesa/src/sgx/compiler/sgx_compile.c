@@ -3086,7 +3086,7 @@ iter_reg(const struct sgx_iter *it)
 static unsigned
 iter_regs(const struct sgx_iter *it)
 {
-   return it->sample ? (it->f16 ? 2 : 1)
+   return it->sample   ? (it->f16 ? 2 : 1)
           : it->colour ? 1
           : it->f16    ? (it->comps + 1) / 2
                        : it->comps;
@@ -5699,9 +5699,7 @@ place_in_pa(struct sgx_ctx *c, const BITSET_WORD *six, unsigned nins,
             const struct sgx_iter *it = &c->iters[n];
             if (it->sample || (int)it->pa != i->smp->coord_pa)
                continue;
-            for (unsigned j = it->pa;
-                 j < it->pa + iter_regs(it) &&
-                 j < 128;
+            for (unsigned j = it->pa; j < it->pa + iter_regs(it) && j < 128;
                  j++)
                last[j] = MAX2(last[j], (int)(2 * i->ip));
          }
@@ -6985,6 +6983,15 @@ sgx_compile(nir_shader *nir, const struct sgx_compile_options *opts,
       ret = sgx_finish_program(c, out);
       if (ret == 0 && split)
          split_output(out);
+      /* a program that discards (phase 0 of a split one) ends in its
+       * feedback point, where the driver puts the visibility test */
+      if (ret == 0 && out->discards &&
+          (!out->n_blocks ||
+           out->blocks[out->n_blocks - 1].kind != SGX_BLOCK_FEEDBACK ||
+           out->blocks[out->n_blocks - 1].at != out->n_code - 1)) {
+         sgx_fail(c, "discard: the feedback point isn't the last instruction");
+         ret = -1;
+      }
    }
    out->stage = c->stage;
    out->log = c->log;
