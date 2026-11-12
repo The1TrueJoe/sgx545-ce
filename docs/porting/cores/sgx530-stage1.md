@@ -889,6 +889,51 @@ is the BIF fault page (calibrated), and the markers for a start that lands on ma
 measured field, for the SGX530 only. The alias goes away. Recording the field as C finishes
 the open question of what the SGX530's DOUTU word 0 holds.
 
+## After the twenty-first attempt: a 512 KiB window, and the selector
+
+Attempt 21 (log 2026-11-12-0214): every DOUTU word-0 bit faulted with requestor b2, none
+started the image. The address weights:
+
+| word 0 bit | fault offset | address weight | offset bit |
+|---|---|---|---|
+| b16 | +0x9000 | 0x1000 | 12 |
+| b17 | +0xa000 | 0x2000 | 13 |
+| b18 | +0xc000 | 0x4000 | 14 |
+| b4 | +0x10000 | 0x8000 | 15 |
+| b5 | +0x18000 | 0x10000 | 16 |
+| b6 | +0x28000 | 0x20000 | 17 |
+| b7 | +0x48000 | 0x40000 | 18 |
+
+(each minus the +0x8000 the selector adds)
+
+**Reading (C for the weights, G for the rest):**
+- b16-b18 and b4-b7 are the task's code offset, bits 12-18. That is a **512 KiB window**
+  from `PDS_EXEC_BASE`, the SGX545's window size.
+- b8-b15 are offset bits below 4 KiB, which the fault page can't show.
+- b0-b3 and b19-b23 each add 0x8000 and aren't linear address bits. They are the
+  base/segment selector that moves the 512 KiB window, the SGX545's `(off>>19) + base`
+  mechanism. Our normal word 0 has base index 15 and offset 0, so it fetched the window at
+  `PDS_EXEC_BASE` + 0.
+
+The kernel code heap at `PDS_EXEC_BASE` + 0x01400000 is 40 windows away, past a 4-bit
+selector. The SGX530 resolves the task's code address against `PDS_EXEC_BASE`, not against
+`USE_CODE_BASE_15`, which it ignores. So the fix is to place the kernel code heap where the
+selector reaches and set word 0 to point there, not to encode +0x01400000.
+
+**Attempt 22: the selector's stride and reach.** No alias. At offset 0, one variant each:
+- b0-b3 as the base index 0, 1, 2, 4, 8 (the normal word uses 15);
+- b19, b20, b21, b22, b23 alone.
+
+Each logs the fault page. The stride is a window per step for a base index, and larger for
+the segment bits. The reach is the largest in-range fault before it wraps or faults at
+`PDS_EXEC_BASE` + 0.
+
+**Then the fix.** Within the selector's reach of `PDS_EXEC_BASE`, give the SGX530 a kernel
+code heap at an offset the selector names exactly, and set the EDM DOUTU word 0 to that
+selector with offset 0. For example, if the base index steps 512 KiB, the heap one window up
+(`PDS_EXEC_BASE` + 0x80000, base index 1) starts the image. The alias of attempt 20 goes
+away, and the heap layout's kernel-code placement becomes the SGX530's rule, recorded as C.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
