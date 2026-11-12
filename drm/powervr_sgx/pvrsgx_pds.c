@@ -174,7 +174,9 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		 * place under either interleave (the 1- and 2-dword layouts swap
 		 * only 1 and 2), so DOUTA gets (value, 0) and DOUTU (doutu, 0, 0).
 		 */
-		pvrsgx_pds_ds(&p, PDS_D0(0), sdev->sweep_doutu0);
+		/* Or the address of the control block's version word, t[0x18]. */
+		pvrsgx_pds_ds(&p, PDS_D0(0), sw & PVRSGX_SWEEP_DOUTA_CTLBLK ?
+			      sdev->fw.addr[PVRSGX_FW_TA3DCTL] + 0x18 * 4 : sdev->sweep_doutu0);
 		pvrsgx_pds_ds(&p, PDS_D0(1), 0);
 		pvrsgx_pds_ds(&p, PDS_D1(0), 0);
 		pvrsgx_pds_ds(&p, PDS_D1(1), doutu);
