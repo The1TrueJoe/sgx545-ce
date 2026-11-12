@@ -15,7 +15,6 @@
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 
-#include "util/u_atomic.h"
 #include "sgx_context.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
@@ -158,12 +157,10 @@ sgx_stats_report(struct sgx_context *ctx)
    fprintf(
       stderr,
       "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
-      "%u vertices, %u texture writes (spare copies %llu KiB); ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
+      "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
       dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes,
       ctx->stats.tex_flushes, ws.room_flushes, ctx->stats.draws,
-      ctx->stats.verts, ctx->stats.tex_writes,
-      (unsigned long long)(p_atomic_read(&sgx_screen(ctx->base.screen)->spare_bytes) >> 10),
-      ctx->stats.draw_ns * ms,
+      ctx->stats.verts, ctx->stats.tex_writes, ctx->stats.draw_ns * ms,
       ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
       ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));

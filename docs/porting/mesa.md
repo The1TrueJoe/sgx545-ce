@@ -71,11 +71,6 @@ assumes a kernel that reports the core id and revision and runs a render job.
     driver constants). Compositors bind their screen pixmap that way:
     without it, xfwm4's GLX compositor showed one flat color. Test:
     `mesa/tests/x11/glxtfp.c -s 720x480 -r`.
-  - A frame renders all its draws at its end, so a texture updated between
-    draws of one frame (GL1 games' lightmaps) needs a copy per version, not an
-    upload in the command stream. Test on hardware: `mesa/tests/sgx_texupdates.c`
-    (every column its own version; `SGX_DEBUG=stats` counts the flushes for
-    texture writes and the spare copies' memory).
 
 ### 5. The compiler (NIR to USSE)
 

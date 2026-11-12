@@ -13,19 +13,6 @@
 struct sgx_context;
 struct sgx_screen;
 
-/* A spare device copy of a texture: it lacks what was written since it was
- * current, the dirty boxes or everything (SGX_ALT_ALL) */
-struct sgx_tex_copy {
-   struct sgxws_bo bo;
-   uint32_t use_seq;
-   unsigned n_dirty;
-   struct {
-      uint16_t level, layer, x0, y0, x1, y1;
-   } dirty[32];
-};
-
-#define SGX_TEX_SPARES_MAX 15
-
 struct sgx_resource {
    struct pipe_resource base;
 
@@ -64,12 +51,15 @@ struct sgx_resource {
    uint32_t pitch;    /* pixels per row of a render target (a multiple of 32) */
 
    /* A texture written while a render may still sample it: the write goes to
-    * a spare copy, which takes over (the DDK's ghosting).  A frame that
-    * updates one texture between draws needs a copy per update in flight,
-    * so a texture has up to sgx_tex_spares_max spares (sgx_resource.c). */
+    * a second copy, which takes over (the DDK's ghosting).  alt lacks what
+    * was written since it was current: alt_dirty boxes, or everything. */
    uint32_t use_seq; /* the last kick that samples bo */
-   struct sgx_tex_copy *spare; /* SGX_TEX_SPARES_MAX, on the first spare */
-   unsigned n_spares;
+   struct sgxws_bo alt;
+   uint32_t alt_use_seq;
+   unsigned n_alt_dirty; /* SGX_ALT_ALL: re-encode everything */
+   struct {
+      uint16_t level, layer, x0, y0, x1, y1;
+   } alt_dirty[32];
 
    /* A cube map with mip levels sampled without mipmapping: the TPU then
     * spaces the faces by level 0 alone, so it samples a copy of the six
