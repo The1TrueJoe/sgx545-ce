@@ -94,7 +94,7 @@ struct pvrsgx_job {
 
 	/** @hw_fence: Signalled when the firmware has finished the job. */
 	struct dma_fence *hw_fence;
-	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initialises it. */
+	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initializes it. */
 	struct dma_fence *hw_fence_mem;
 	/** @ccb_seq: Kernel CCB command that carries the job. */
 	/** @start_ns: When run_job sent it to the microkernel. */

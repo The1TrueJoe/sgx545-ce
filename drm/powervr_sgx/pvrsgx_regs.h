@@ -14,7 +14,7 @@
 #include <linux/bits.h>
 
 /*
- * SGX5xx core registers, from BAR offset 0. On a core nobody has initialised
+ * SGX5xx core registers, from BAR offset 0. On a core nobody has initialized
  * only CLKGATECTL, CLKGATESTATUS, SOFT_RESET, EVENT_STATUS, EVENT_HOST_ENABLE,
  * BIF_CTRL, CORE_ID and CORE_REVISION are safe to read; some others hang the
  * bus until the reset sequence has run.

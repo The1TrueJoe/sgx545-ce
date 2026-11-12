@@ -64,7 +64,7 @@ struct drm_gem_object *pvrsgx_gem_create_object(struct drm_device *drm, size_t s
 	if (!bo)
 		return ERR_PTR(-ENOMEM);
 	bo->base.base.funcs = &pvrsgx_gem_funcs;
-	/* Whether the GPU snoops the CPU caches is not known. */
+	/* The GPU doesn't snoop the CPU caches. */
 	bo->base.map_wc = true;
 	return &bo->base.base;
 }

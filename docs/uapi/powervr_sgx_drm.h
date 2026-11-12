@@ -200,7 +200,7 @@ struct drm_powervr_sgx_dev_query_quirks {
 	/**
 	 * @quirks: User pointer to a __u32 array of quirk numbers. The first
 	 * @musthave_count entries are mandatory: a client that does not
-	 * implement them must fail to initialise. The rest are opt-in.
+	 * implement them must fail to initialize. The rest are opt-in.
 	 */
 	__u64 quirks;
 
@@ -1094,7 +1094,7 @@ enum drm_powervr_sgx_job_type {
 	 * @DRM_POWERVR_SGX_JOB_TYPE_NULL: No GPU work. The firmware takes it in
 	 * queue order with the context's other jobs, and its out-fences signal
 	 * once it has. Runs on a context of either type; no command, no flags,
-	 * no TA kicks, no RT dataset. For testing synchronisation (and for a
+	 * no TA kicks, no RT dataset. For testing synchronization (and for a
 	 * fence that follows everything queued before it).
 	 */
 	DRM_POWERVR_SGX_JOB_TYPE_NULL,

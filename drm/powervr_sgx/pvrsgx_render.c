@@ -583,7 +583,8 @@ int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct dr
 	pvrsgx_context_put(ctx);
 	if (IS_ERR(s))
 		return PTR_ERR(s);
-	err = xa_alloc(&sfile->rtds, &args->handle, s, XA_LIMIT(1, PVRSGX_MAX_FILE_RTDS), GFP_KERNEL);
+	err = xa_alloc(&sfile->rtds, &args->handle, s, XA_LIMIT(1, PVRSGX_MAX_FILE_RTDS),
+		       GFP_KERNEL);
 	if (err) {
 		pvrsgx_rtds_put(s);
 		return err == -EBUSY ? -ENOSPC : err;
