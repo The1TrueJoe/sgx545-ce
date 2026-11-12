@@ -74,8 +74,8 @@ static const struct pvrsgx_heap_layout sgx545_heaps = {
 };
 
 /*
- * Init script part 2, in the vendor script's order. Most of these registers
- * have no name in the GPL header; the values are the vendor script's.
+ * Init script part 2, written in this order. Most of these registers have no
+ * name in the GPL header.
  */
 static const struct pvrsgx_core_init_reg sgx545_init_regs[] = {
 	{ 0x818, 0x7ff }, { 0x810, 1 }, { 0x814, 0xffff },
@@ -128,9 +128,9 @@ static const struct pvrsgx_core_init_reg sgx530_init_regs[] = {
 
 /*
  * 256 MiB, every heap on a 4 MiB directory entry. From PDS pixel up, the
- * bases of TI's GPL SGX530 DDK (sgxconfig.h): kernel code above both PDS
+ * bases of the GPL SGX530 sgxconfig.h: kernel code above both PDS
  * heaps, within the 64 MiB the EDM reaches past PDS_EXEC_BASE. The texture
- * heap, which that DDK lacks, is the top of its general heap.
+ * heap, which that layout lacks, is the top of its general heap.
  */
 static const struct pvrsgx_heap_layout sgx530_heaps = {
 	.general = { 0x01800000, 0x05000000 },
@@ -224,7 +224,7 @@ MODULE_FIRMWARE("powervr_sgx/sgx530_ukernel.bin");
 
 /*
  * Without EDM_VERTEX_PDSADDR_FULL_RANGE, a heap the EDM runs PDS code from
- * lies within 64 MiB above the PDS pixel heap (the GPL DDK's sgxconfig.h).
+ * lies within 64 MiB above the PDS pixel heap (the GPL sgxconfig.h).
  */
 static bool pds_reach(const struct pvrsgx_core_family *f, const struct pvrsgx_va_range *r)
 {

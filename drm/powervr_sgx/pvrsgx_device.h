@@ -62,7 +62,7 @@ struct pvrsgx_kmem {
 	void *cpu;
 };
 
-/* Firmware-visible buffers, in the vendor init's allocation order. */
+/* Firmware-visible buffers, in allocation order. */
 enum pvrsgx_fw_buf {
 	PVRSGX_FW_CCB,		/* kernel CCB: 256 commands */
 	PVRSGX_FW_CCBCTL,	/* its write and read offsets */
@@ -105,13 +105,13 @@ struct pvrsgx_fw {
 	u8 *image;
 	/** @image_size: Bytes of USSE code in @image. */
 	u32 image_size;
-	/** @features: PVRSGX_UKFW_* of an open microkernel; 0 for the DDK's. */
+	/** @features: PVRSGX_UKFW_* the microkernel's file header declares. */
 	u32 features;
-	/** @entries: An open microkernel's entry table (PDS program, offset), or NULL. */
+	/** @entries: The microkernel's entry table (PDS program, offset), or NULL. */
 	u32 (*entries)[2];
 	/** @n_entries: Entries in @entries. */
 	u32 n_entries;
-	/** @patches: An open microkernel's patch table (offset, value), or NULL. */
+	/** @patches: The microkernel's patch table (offset, value), or NULL. */
 	u32 (*patches)[2];
 	/** @n_patches: Entries in @patches. */
 	u32 n_patches;

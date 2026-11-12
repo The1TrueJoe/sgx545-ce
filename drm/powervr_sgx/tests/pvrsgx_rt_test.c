@@ -3,8 +3,8 @@
 
 /*
  * KUnit tests of a render target's tiling numbers, included from
- * pvrsgx_render.c: 720x480 at 1 and 4 samples, as the vendor stack's renders
- * of that window set them.
+ * pvrsgx_render.c: 720x480 at 1 and 4 samples, against the numbers that
+ * render that window correctly.
  */
 
 #include <kunit/test.h>

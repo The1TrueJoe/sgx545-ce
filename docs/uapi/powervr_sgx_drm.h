@@ -128,10 +128,10 @@ struct drm_powervr_sgx_dev_query_gpu_info {
 };
 
 /*
- * The microkernel speaks the host interface of the vendor's SGXMKIF, as of its
- * DDK 1.7: the command buffer, control blocks and command layouts.
+ * Version 1 of the open microkernel's own host interface: its command buffer,
+ * control blocks and command layouts.
  */
-#define DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7 1
+#define DRM_POWERVR_SGX_FW_IF_V1 1
 
 /**
  * struct drm_powervr_sgx_dev_query_limits - Limits of the object-creating ioctls

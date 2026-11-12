@@ -110,9 +110,8 @@ static void context_release(struct kref *ref)
 	pvrsgx_render_ctx_fini(sdev, ctx);
 	pvrsgx_transfer_ctx_fini(sdev, ctx);
 	/*
-	 * As the vendor's GPL kernel services after a cleanup (sgxutils.c): the
-	 * next command flushes the GPU's
-	 * data caches, or a later client at the same addresses reads this one's.
+	 * The next command flushes the GPU's data caches, or a later client at
+	 * the same addresses reads this one's.
 	 */
 	mutex_lock(&sdev->ccb_lock);
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
@@ -351,7 +350,7 @@ fail:
 /*
  * A job ran too long. Blame its context, fail what was on the GPU, and start
  * the microkernel again from a clean control block and an empty CCB, rather
- * than rescan the old one as the vendor driver does.
+ * than rescan the old one.
  */
 static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_job)
 {
@@ -398,9 +397,9 @@ fail:
 		goto out;
 
 	/*
-	 * As the vendor driver's hardware recovery: no power-off handshake with a
-	 * hung microkernel, straight into the full start (clocks, scripts, a reset
-	 * that drains pending faults, the first kick).
+	 * No power-off handshake with a hung microkernel, which cannot answer:
+	 * straight into the full start (clocks, scripts, a reset that drains
+	 * pending faults, the first kick).
 	 */
 	sdev->reset_count++;
 	sdev->fw_running = false;

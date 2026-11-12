@@ -280,8 +280,7 @@ static_assert(sizeof(struct pvrsgx_fw_pb_desc) == 0x3c);
 /**
  * struct pvrsgx_fw_render_details - Per-dataset render details
  *
- * Fields named unk_* hold values captured from the
- * vendor stack whose meaning isn't known.
+ * Fields named unk_* hold values a render needs whose meaning isn't known.
  */
 struct pvrsgx_fw_render_details {
 	/** @req_base_3d: 3D request base: the PB's 1 MiB-aligned base. */
