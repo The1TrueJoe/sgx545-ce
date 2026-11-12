@@ -274,6 +274,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	}
 
 	pvrsgx_prime_flush(job, false);
+	WRITE_ONCE(job->ctx->vm->ran_gen, sdev->fw_gen + 1);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 		mutex_lock(&sdev->kobj_lock);
 		sdev->renders_submitted++;

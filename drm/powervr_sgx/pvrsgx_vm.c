@@ -215,16 +215,25 @@ static void vm_free_done(struct pvrsgx_inval_wait *w)
 static void vm_free_work(struct work_struct *work)
 {
 	struct pvrsgx_vm_free *f = container_of(work, struct pvrsgx_vm_free, work);
+	struct pvrsgx_device *sdev = to_pvrsgx_device(f->drm);
 
+	f->inval.done = vm_free_done;
 	if (f->vm) {
 		mutex_lock(&f->vm->lock);
 		vm_unmap_all(f->vm, &f->vas);
 		mutex_unlock(&f->vm->lock);
+		/*
+		 * The BIF caches walks only of a directory a job ran on, and a
+		 * restart or power-off drops them: then there is nothing to wait for.
+		 */
+		if (!READ_ONCE(sdev->powered) ||
+		    READ_ONCE(f->vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1) {
+			vm_free_done(&f->inval);
+			return;
+		}
 	}
-	f->inval.done = vm_free_done;
-	pvrsgx_ccb_after_invalidate(to_pvrsgx_device(f->drm), &f->inval,
-				    PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD |
-				    PVRSGX_CC_INVAL_DATA);
+	pvrsgx_ccb_after_invalidate(sdev, &f->inval, PVRSGX_CC_INVAL_BIF_PT |
+				    PVRSGX_CC_INVAL_BIF_PD | PVRSGX_CC_INVAL_DATA);
 }
 
 static void vm_free_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
