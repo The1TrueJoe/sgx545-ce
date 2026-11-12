@@ -458,6 +458,27 @@ static int stage1_ld_sentinel = -1;
 module_param(stage1_ld_sentinel, int, 0444);
 MODULE_PARM_DESC(stage1_ld_sentinel, "sgx530_ldret: unmapped sentinel written at ctlblk+0x200 before the kick (-1 = off)");
 
+/*
+ * Real EDM init (docs/porting/cores/sgx530-edm-path.md §2/§6): start the open
+ * microkernel on a single-context core through the §9 bare-DOUTU launch folded
+ * into the real init, not the stage-1 probe. The §9 event program and the
+ * EDMPROTECT data mapping are the same as the probe (confirmed on hardware:
+ * str/limm, loads and temps all retire); the difference is that the launched
+ * task is the real init entry and the host does not wait on ui32InitStatus
+ * (that store drops on the 530; the host owns the firmware structures). Off by
+ * default, so the SGX545 and the existing SGX530 DDK path stay byte-identical.
+ */
+bool pvrsgx_edm_init;
+module_param_named(edm_init, pvrsgx_edm_init, bool, 0444);
+MODULE_PARM_DESC(edm_init, "Start the open microkernel via the §9 launch folded into real init (single-context cores; no init-status wait)");
+
+/* The §9 bare-DOUTU launch is shared by the stage-1 probe and real EDM init. */
+bool pvrsgx_use_vlaunch9(struct pvrsgx_device *sdev)
+{
+	return pvrsgx_stage1_vlaunch ||
+	       (pvrsgx_edm_init && sdev->family->event_pds_guessed);
+}
+
 static u32 data_pte_flags(struct pvrsgx_device *sdev)
 {
 	if (!sdev->family->event_pds_guessed)
@@ -465,8 +486,8 @@ static u32 data_pte_flags(struct pvrsgx_device *sdev)
 		       (sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT);
 	if (stage1_data_ro)
 		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_READONLY;
-	/* §9 maps it with EDMPROTECT, undoing data_no_edmprotect for the probe. */
-	if (pvrsgx_stage1_vlaunch)
+	/* §9 maps it with EDMPROTECT, undoing data_no_edmprotect (probe or real init). */
+	if (pvrsgx_use_vlaunch9(sdev))
 		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT;
 	return SGX_MMU_PTE_CACHECONSISTENT |
 	       (sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT);
@@ -724,8 +745,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
 
-	/* §9: the vendor's event control words. */
-	if (pvrsgx_stage1_vlaunch) {
+	/* §9: the vendor's event control words (probe or real EDM init). */
+	if (pvrsgx_use_vlaunch9(sdev)) {
 		data0 = 3;
 		data1 = pvrsgx_vl_a70 >= 0 ? (u32)pvrsgx_vl_a70 : 0x00013d01;
 	}
@@ -1674,8 +1695,26 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	err = 0;
 	if (first && stage1_sweep && sdev->family->event_pds_guessed)
 		err = start_sweep(sdev, hc, clk_idle);
-	if (!err)
+	if (!err && pvrsgx_edm_init && sdev->family->event_pds_guessed) {
+		/*
+		 * EDM real init (edm-path.md §2/§6): the init task runs under the §9
+		 * bare-DOUTU launch, does its init work, and ends. The one event entry
+		 * dispatches on ui32InitStatus (HOSTCTL_INIT_STATUS) — 0 means "run
+		 * init", non-zero means "dispatch to the handlers". The microkernel
+		 * normally sets it, but that st.a.d drops on the 530, so without the
+		 * host writing it every event would re-enter init forever. So give the
+		 * init task time to run, log the state, then the host sets the flag
+		 * itself (host-owned, like the rest of the firmware structures); the
+		 * next event dispatches to the handlers.
+		 */
+		msleep(20);
+		bringup_diag(sdev, "after EDM init");
+		WRITE_ONCE(hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE);
+		/* Visible to the GPU before the next event reads it. */
+		wmb();
+	} else if (!err) {
 		err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
+	}
 	if (first && probes_wanted(sdev))
 		probes_unmap(sdev, ARRAY_SIZE(code_base_probe));
 	if (err && sdev->lost)

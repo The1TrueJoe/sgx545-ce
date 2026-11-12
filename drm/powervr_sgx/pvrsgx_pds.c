@@ -155,7 +155,7 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	 * puts DS1[0]), a 12-word data segment so 0xa6c = 3 rows. The event entry
 	 * is at offset 0, so word 0 is code base 15 | bit 21 (0x0020000f).
 	 */
-	if (b == PVRSGX_FW_PDS0 && pvrsgx_stage1_vlaunch) {
+	if (b == PVRSGX_FW_PDS0 && pvrsgx_use_vlaunch9(sdev)) {
 		p = pvrsgx_pds_prog(sdev, b, 12);
 		p.w[0] = pvrsgx_vl_w0 >= 0 ? (u32)pvrsgx_vl_w0 : 0x0020000f;	/* DS0[0] */
 		p.w[1] = pvrsgx_vl_w1 >= 0 ? (u32)pvrsgx_vl_w1 : 0x04000000;	/* DS0[1] */
