@@ -446,6 +446,18 @@ module_param_named(vl_w2, pvrsgx_vl_w2, int, 0444);
 module_param_named(vl_a70, pvrsgx_vl_a70, int, 0444);
 MODULE_PARM_DESC(vl_w2, "stage1_vlaunch DOUTU word 2 override (-1 = vendor's 1; bisect toward the open value)");
 
+/*
+ * §9 load-retire check (sgx530_ldret): a distinctive UNMAPPED sentinel written
+ * at ctlblk + 0x200 (the mapped scratch word stor5 used) before the kick. The
+ * task loads that word into r5, then fault-reads r5; BIF_FAULT reads back the
+ * sentinel if loads retire into the temp, or r5's leftover if they don't. -1 =
+ * no seed (every other probe). The value is chosen unmapped so the fault-read
+ * faults at it; the driver only writes it, the task only reads it.
+ */
+static int stage1_ld_sentinel = -1;
+module_param(stage1_ld_sentinel, int, 0444);
+MODULE_PARM_DESC(stage1_ld_sentinel, "sgx530_ldret: unmapped sentinel written at ctlblk+0x200 before the kick (-1 = off)");
+
 static u32 data_pte_flags(struct pvrsgx_device *sdev)
 {
 	if (!sdev->family->event_pds_guessed)
@@ -1646,6 +1658,15 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		clk_idle = sgx_rd(sdev, cr->clkgatestatus);
 		bringup_diag(sdev, "before the kick");
 	}
+	/*
+	 * §9 load-retire check: seed the unmapped sentinel at ctlblk + 0x200
+	 * (= data arena + 0x3200), the word the ldret task loads into r5. Nothing
+	 * else writes there (the control block fills 0x3000-0x30ff, MISC ends at
+	 * 0x31b3); the barrier below makes it visible before the kick.
+	 */
+	if (pvrsgx_stage1_vlaunch && stage1_ld_sentinel >= 0)
+		WRITE_ONCE(*(u32 *)((u8 *)sdev->fw.data.cpu + 0x3200),
+			   (u32)stage1_ld_sentinel);
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
 	init_kick(sdev);
