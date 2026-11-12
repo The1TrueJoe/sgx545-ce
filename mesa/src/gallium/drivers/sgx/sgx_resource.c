@@ -773,6 +773,11 @@ spare_get(struct sgx_context *ctx, struct sgx_resource *res, uint32_t done)
     * it): never swapped for a spare (none is a texture today) */
    if (res->shared)
       return NULL;
+   /* a texture rendered into and not read back (an unsynchronized map
+    * skips the catch-up): its device copy has what the CPU copy lacks, and
+    * the frame recording into it holds &res->bo (sgxws_target_bo) */
+   if (res->rendered || sgx_recording(ctx) == res)
+      return NULL;
    for (unsigned i = 0; i < res->n_spares; i++)
       if (!sgxws_seq_after(res->spare[i].use_seq, done))
          return &res->spare[i];
