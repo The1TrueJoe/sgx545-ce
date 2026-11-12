@@ -79,7 +79,8 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool reg
 	seq_buf_printf(sb, "firmware running: %d lost: %d resets: %u irqs: %d\n", sdev->fw_running,
 		       sdev->lost, sdev->reset_count, atomic_read(&sdev->irq_count));
 	seq_buf_printf(sb, "kernel PD 0x%08x idle PD 0x%08x\n",
-		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu), pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu),
+		       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
 	seq_buf_printf(sb, "ccb wo %u ro %u issued %llu consumed %llu\n", READ_ONCE(ctl[0]),
 		       READ_ONCE(ctl[1]), sdev->ccb_issued, pvrsgx_ccb_consumed(sdev));
 	seq_buf_printf(sb, "hostctl init 0x%x power 0x%x uk-lockups %u ",
@@ -148,7 +149,8 @@ static void dump_bif(struct seq_buf *sb, struct pvrsgx_device *sdev, struct pvrs
 		       field_get(cr->bif_int_stat_fault_type, stat));
 	dump_lookup(sb, "job's", bad->ctx->vm->mmu, addr);
 	dump_lookup(sb, "firmware's", sdev->kernel_mmu, addr);
-	dump_lookup(sb, "idle", sdev->idle_mmu, addr);
+	if (!pvrsgx_core_single_context(sdev->family))
+		dump_lookup(sb, "idle", sdev->idle_mmu, addr);
 }
 
 /*

@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/seq_buf.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -40,7 +41,8 @@
 #define UKFW_MAGIC1		0x4e524b55	/* "UKRN" */
 #define UKFW_HEADER_MIN		0x60
 #define UKFW_IF_MAJOR		1
-#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | PVRSGX_UKFW_DONE_SEQ)
+#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | \
+				 PVRSGX_UKFW_DONE_SEQ | PVRSGX_UKFW_SINGLE_CONTEXT)
 /* Bits 16-31: the microkernel's own build variants, nothing the host must know. */
 #define UKFW_FEATURES_PRIVATE	GENMASK(31, 16)
 #define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
@@ -71,6 +73,7 @@ enum ukfw_patch_value {
 	UKFW_CCBCTL,
 	UKFW_CCB,
 	UKFW_MISC,
+	UKFW_PDTABLE,	/* single-context cores only */
 };
 
 /* The POWER command: data word 1. */
@@ -202,8 +205,17 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 	for (u32 p = 0; p < ARRAY_SIZE(entry); p++)
 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
 
-	for (u32 i = 0; i < f->n_patches && !err; i++)
-		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+	for (u32 i = 0; i < f->n_patches && !err; i++) {
+		u32 v = f->patches[i][1];
+
+		if (v == UKFW_PDTABLE && !f->pdtable.pages) {
+			drm_err(&sdev->base, "%s: a PD table patch on a multi-context core\n",
+				f->name);
+			return -EINVAL;
+		}
+		err = fw_limm(sdev, f->patches[i][0],
+			      v == UKFW_PDTABLE ? f->pdtable.dev_addr : f->addr[value_buf[v]]);
+	}
 	if (err)
 		return err;
 	return 0;
@@ -283,7 +295,7 @@ static int ukfw_parse(const u8 *data, size_t size, struct pvrsgx_fw *f, const ch
 	}
 	for (u32 i = 0; i < f->n_patches; i++) {
 		if (f->patches[i][0] > isize - 8 || !IS_ALIGNED(f->patches[i][0], 8) ||
-		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_MISC)
+		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_PDTABLE)
 			return -EINVAL;
 	}
 	if (!entry0)
@@ -307,7 +319,21 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
 	if (err)
 		return err;
-	if (!(f->features & PVRSGX_UKFW_SECURE)) {
+	/*
+	 * Secure mode keeps the firmware out of every client directory, which a
+	 * single-context core can't do: there the image must not claim it.
+	 */
+	if (pvrsgx_core_single_context(sdev->family)) {
+		if ((f->features & (PVRSGX_UKFW_SECURE | PVRSGX_UKFW_SINGLE_CONTEXT)) !=
+		    PVRSGX_UKFW_SINGLE_CONTEXT) {
+			drm_err(&sdev->base, "%s: not an image for a single-context core\n",
+				f->name);
+			return -EINVAL;
+		}
+	} else if (f->features & PVRSGX_UKFW_SINGLE_CONTEXT) {
+		drm_err(&sdev->base, "%s: an image for a single-context core\n", f->name);
+		return -EINVAL;
+	} else if (!(f->features & PVRSGX_UKFW_SECURE)) {
 		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
 			f->name);
 		return -EINVAL;
@@ -319,6 +345,57 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 	drm_info(&sdev->base, "%s: open microkernel %.32s, interface %u.%u, features 0x%x\n",
 		 f->name, h->build_id, iface >> 16, iface & 0xffff, f->features);
 	return 0;
+}
+
+/*
+ * Single-context cores: the microkernel loads list 0 from this table, by the
+ * slot a HW context names, so no directory address it loads is GPU-writable.
+ * Read-only on the GPU, between the code arena and the kernel code objects.
+ * Every slot no VM holds names the firmware's directory.
+ */
+#define PDTABLE_OFFSET	0xf000
+#define PDTABLE_SLOTS	(PAGE_SIZE / sizeof(u32))
+
+/* The PD table sits past the code arena, inside the kernel code heap's first 64 KiB. */
+static_assert(PDTABLE_OFFSET >= CODE_ARENA_SIZE);
+static_assert(SZ_64K - PAGE_SIZE >= PDTABLE_OFFSET);
+
+static int pdtable_init(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_fw *f = &sdev->fw;
+	int err;
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return 0;
+	err = pvrsgx_kmem_alloc(sdev, &f->pdtable,
+				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET, PAGE_SIZE,
+				SGX_MMU_PTE_READONLY, 0);
+	if (err)
+		return err;
+	memset32(f->pdtable.cpu, pvrsgx_mmu_pd_addr(sdev->kernel_mmu), PDTABLE_SLOTS);
+	return 0;
+}
+
+/* A slot naming directory pd, for a new VM; its HW contexts carry the slot. */
+int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd)
+{
+	int slot = ida_alloc_range(&sdev->fw.pd_slots, 1, PDTABLE_SLOTS - 1, GFP_KERNEL);
+
+	if (slot < 0)
+		return slot;
+	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pd);
+	/* In memory before any command names the slot. */
+	wmb();
+	return slot;
+}
+
+/* The VM is gone: its slot names the firmware's directory again. */
+void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
+{
+	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	/* The slot names the firmware's directory before another VM can take it. */
+	wmb();
+	ida_free(&sdev->fw.pd_slots, slot);
 }
 
 /* The arenas and the built image, once the file is loaded. */
@@ -344,6 +421,9 @@ static int fw_arenas(struct pvrsgx_device *sdev)
 				SGX_MMU_PTE_READONLY, 0);
 	if (err)
 		return err;
+	err = pdtable_init(sdev);
+	if (err)
+		return err;
 
 	pds_base = ALIGN(f->image_size, 0x10);
 	for (int b = 0; b < PVRSGX_FW_NBUF; b++) {
@@ -364,6 +444,7 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 	const struct firmware *fw;
 	int err;
 
+	ida_init(&f->pd_slots);
 	f->name = sdev->core->fw_name;
 	err = request_firmware(&fw, f->name, sdev->base.dev);
 	if (err) {
@@ -387,8 +468,10 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	sdev->fw.patches = NULL;
 	kfree(sdev->fw.image);
 	sdev->fw.image = NULL;
+	pvrsgx_kmem_free(sdev, &sdev->fw.pdtable);
 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
+	ida_destroy(&sdev->fw.pd_slots);
 }
 
 /* USE_CODE_BASE's data master for the pixel windows and for the microkernel's. */

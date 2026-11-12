@@ -310,6 +310,7 @@ static struct eq_fx *eq_device(struct kunit *test, unsigned int core, u32 core_r
 	file = eq_file(test);
 	fw.data = (const u8 *)file;
 	fw.size = sizeof(*file);
+	ida_init(&sdev->fw.pd_slots);
 	sdev->fw.name = "equiv";
 	KUNIT_ASSERT_EQ(test, ukfw_load(sdev, &fw), 0);
 	KUNIT_ASSERT_EQ(test, fw_arenas(sdev), 0);
