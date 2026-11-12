@@ -150,11 +150,12 @@ sgx_stats_report(struct sgx_context *ctx)
       ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
    fprintf(
       stderr,
-      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped\n",
+      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped; "
+      "buffers %u allocated, %u from the cache (%u cached still in use)\n",
       (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
       ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
       ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0,
-      ws.state_sent, ws.state_skipped);
+      ws.state_sent, ws.state_skipped, ws.bo_allocs, ws.bo_cached, ws.bo_busy);
    fprintf(
       stderr,
       "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "

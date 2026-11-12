@@ -375,8 +375,10 @@ cache_take(struct psgx_dev *dd, enum sgx_heap heap, uint64_t bytes,
          dd->done = timeline_value(dd);
          read = true;
       }
-      if (c->point > dd->done)
+      if (c->point > dd->done) {
+         dd->base.bo_busy++;
          continue;
+      }
       dd->cache_bytes -= bytes;
       memmove(c, c + 1, (dd->n_cache - i - 1) * sizeof(*c));
       dd->n_cache--;
@@ -480,12 +482,14 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
       heap = SGX_HEAP_GENERAL;
    if (heap >= 16 || !dd->has_heap[heap])
       return -EINVAL;
+   d->bo_allocs++;
    if (!code) {
       bytes = bucket_size(bytes);
       simple_mtx_lock(&dd->lock);
       impl = cache_take(dd, heap, bytes, align > 0x1000 ? align : 0x1000);
       simple_mtx_unlock(&dd->lock);
       if (impl) {
+         d->bo_cached++;
          impl->write_point = 0;
          impl->base.cpu_dirty = false;
          /* zero as new pages are, but textures: their contents are

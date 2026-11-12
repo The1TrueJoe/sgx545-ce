@@ -2793,7 +2793,11 @@ sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
    st->gpu_verts = c->gpu_verts;
    st->state_sent = c->state_sent;
    st->state_skipped = c->state_skipped;
+   st->bo_allocs = c->dev->bo_allocs;
+   st->bo_cached = c->dev->bo_cached;
+   st->bo_busy = c->dev->bo_busy;
    if (reset) {
+      c->dev->bo_allocs = c->dev->bo_cached = c->dev->bo_busy = 0;
       c->state_sent = c->state_skipped = 0;
       c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait =
          c->ns_slot_wait = 0;
