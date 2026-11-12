@@ -2521,26 +2521,30 @@ The image uses no float, F16, C10, `efo`, `fdual`, `smp`, `pck`, `setfc` or MOE 
 form. Those are compiler questions for the SGX530 ("What needs the ISA first" in
 porting/cores/sgx530.md).
 
-### ld.a.d reads its source operand differently (C, hardware)
+### phas.i first, pairing, and the register-write blocker (C, hardware)
 
-**RETRACTED: the earlier `limm` claim here was wrong.** Attempt 29 read a `limm` value
-difference, but attempt 30 (docs/porting/cores/sgx530-stage1.md) overturned it: the seven
-`sgx530_limm_b21..b27` probes, each `limm`ing a *different* single bit into r5 and then
-`ld.a.d r3, r5, #0`, **all faulted at the same 0x0c004000** — independent of the `limm`
-value. So `limm` is not the problem; the fault address does not depend on the loaded value
-at all.
+Stage 1 (docs/porting/cores/sgx530-stage1.md) got the microkernel's USSE code executing on
+the SGX530 and then hit a register-write blocker. The ISA-relevant confirmed findings:
 
-What it depends on (C, hardware) is **which register `ld.a.d` names**:
-- `ld.a.d r3, r17, #0` → 0x0fd79000 (attempts 27-29, stable);
-- `ld.a.d r3, r5, #0` → 0x0c004000 (attempts 29-30), whatever value is in r5.
+- **`phas.i` must be the first instruction of a task (C, attempt 26).** The SGX530 lacks
+  `USE_UNLIMITED_PHASES`; starting a task with other work before `phas.i` gives an
+  image-dependent garbage fetch. The real entry has `phas.i` first.
+- **The SGX530 pairs/schedules adjacent instructions** — it lacks
+  `SGX_FEATURE_USE_NO_INSTRUCTION_PAIRING` (K; the SGX545 has it). This was tested as the
+  write blocker and **ruled out** (attempt 38), but code generation for the SGX530 may still
+  need `nosched` where the SGX545 doesn't.
+- **`ld.a.d` reads the named register's contents correctly (C, attempt 31).** The register
+  sweep found no pattern — each `ld.a.d rN` faults at register N's own stable leftover, so
+  the source operand decodes as on the SGX545. (An earlier reading here, that the base came
+  from the operand field, was wrong; attempt 31 corrected it. The `limm` value-field claim
+  before that was also retracted — attempt 30 showed every `limm`-bit probe faults at the
+  same leftover, so `limm`'s value is irrelevant: `limm` simply never wrote the register.)
 
-So the SGX530 does not dereference the register's contents for `ld.a.d`'s base — it derives
-the address from the source-operand *field* (the register number), by a register-bank or
-field-position difference, or by taking the operand as an immediate/address. The offset
-(`#0` vs `#42`) doesn't matter either (attempt 29). The SGX545 loads from `[register
-contents + offset]`; the SGX530 does something else. The exact decode is **U**; attempt 31
-sweeps the register number to read it. Nothing about `limm` moves for `sgx.xml` on this
-evidence.
+**The open blocker:** no register write (`limm`, ALU `or`, `str`, or an `ld` destination)
+retires to where a read sees it; reads return stable power-on leftovers. Ruled out: the DOUTU
+temp field, `phas.i` temps4, host init-regs, and pairing. It is a register-file / write-back
+difference, **U**, still open. Nothing here moves for `sgx.xml` yet; the leftover-register
+table and the chronology are in the fact sheet and the runbook.
 
 ### What sgx.xml can take, and when
 

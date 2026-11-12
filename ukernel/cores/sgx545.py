@@ -347,6 +347,7 @@ USSE_ALUWRITE = False        # or r5,r5,r17 then ld r5: does a non-limm ALU writ
 USSE_PHAS_TEMPS4 = 0         # phas.i temps4 field (temporaries/4); 0 = the normal phas.i #0,#0
 USSE_ALU_NOPS = 0            # aluwr: nops between the or and the ld (pairing/latency test)
 USSE_ALU_DST = 5             # aluwr: the register the or writes and the ld reads back
+USSE_PA_READ = False         # read pa0 as the ld base: are PDS-set attributes visible? (cores/sgx530_pa0.py)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000

@@ -1543,6 +1543,14 @@ Ruled out: the DOUTU word-0 temp field (35), `phas.i` temps4 (36), host init-reg
 several unimplemented), and instruction pairing (38). This is a register-file / write-back
 difference, and the cheap single-variable hypotheses are exhausted.
 
+**Attempt 39 result (cheap, low registers) — flat.** `aluwr_dst0-3` all faulted at the
+destination's own leftover (r0 0x0055d000, r1 0x0722a000, r2 0x003e1000, r3 0x08439000),
+never the `or` result. So no low range of registers is writable either; the cheap register
+probes are closed. The `pa0` primary-attribute probe below (the USSE reader `sgx530_pa0.py`,
+image d69730f4…, packaged f59ce697…, built and verified; `ld.a.d r3, pa0, #0`) pairs with the
+driver's `pds0` DOUTA of 0x0e850000 into PA0: a fault at 0x0e850000 = PDS-set attributes are
+visible where temporaries aren't. The probes:
+
 **Attempt 39 (cheap, the kernel session's angle): low registers.** `cores/sgx530_aluwr_dst{0,1,2,3}.py`:
 `or rD, rD, r17` then `ld rD` for D = 0-3, to check whether a low register is a writable
 temporary where r5 isn't. Expected `or` result (fault page) if it writes: r0 0x0fd7d000, r1
@@ -1559,6 +1567,25 @@ fd6a024d…, dst3 854e77b8… (packaged 43860788…, abc1853a…, be8af3a4…, a
 2. **An AM335x vendor capture.** TI's DDK SGX530 microkernel works; a capture of how it sets
    up the EDM task (temps, phases, register file) would show the answer directly, the way the
    SGX545 capture did. If Joseph can get a board, capture beats continued probing here.
+
+## After the fortieth attempt: probe (c) was malformed, not answered
+
+Attempt 40 (log 5730ea81), the `pa0` primary-attribute probe with the kernel session's
+`pds0` DOUTA:
+- Baseline (normal `pds0`): `ld.a.d r3, pa0, #0` faulted b1 at **0x0f2d9000** — PA0's own
+  stable leftover (C). So `pa0` reads work; PA0 just holds a leftover with no DOUTA.
+- DOUTA variant (2 data rows, 0xa6c = 2, 0xa70 left at 6): faulted b2 at **0x0f400000** =
+  the usse_pixel heap base = code base 0 under `>> 8`. So this variant's DOUTU issued with
+  word 0 ≈ 0 (code base 0, offset 0) — the task never fetched our image. **The probe was
+  malformed, not answered:** the PDS didn't build a valid DOUTU word.
+
+Likely cause (G, the kernel session): 0xa70 is the program/data length in dwords and stayed
+6, so the row holding the DOUTU word 0 wasn't loaded and the MOVS sourced 0. The fix is the
+same probe with **0xa70 = 8** (enough for the 2 data rows plus the code), which also tests
+whether 0xa70 is the data size. The `sgx530_pa0` reader (image d69730f4…) is correct and
+unchanged; only the driver's `pds0` data length changes. A fault at 0x0e850000 would then be
+the real "attributes are visible" result; another code-base-0 fault would mean the DOUTU is
+still malformed.
 
 ## Abort conditions
 
