@@ -22,7 +22,9 @@
 
 #include <xf86drm.h>
 
+#include "util/log.h"
 #include "util/macros.h"
+#include "util/u_debug.h"
 #include "util/u_math.h"
 
 #include "sgx_csb.h"
@@ -255,6 +257,18 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
 /* ------------------------------------------------------------------ USSE */
 
+/* A USSE heap is cut into 512 KiB code base windows: a task runs from the
+ * window its DOUTU names, and its absolute targets (phas.i, ba) count from
+ * that window's start, not the heap's (ISA.md) */
+#define USSE_WINDOW_SHIFT 19
+#define USSE_WINDOW_MASK ((1u << USSE_WINDOW_SHIFT) - 1)
+
+static uint32_t
+usse_heap_off(const struct sgxws_ctx *c, uint32_t va, bool vertex)
+{
+   return va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
+}
+
 static bool
 code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
                 enum sgx_heap heap, uint32_t size)
@@ -264,6 +278,14 @@ code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
 
    if (sgxws_bo_alloc_heap(d, &k->r.bo, heap, 0x1, size, al))
       return false;
+   if ((k->r.bo.va - d->heap_base[heap]) >> USSE_WINDOW_SHIFT) {
+      static bool once;
+
+      if (!once)
+         mesa_logi("sgx: program code past the first 512 KiB window (%s heap)",
+                   heap == H_VTXSHADER ? "vertex" : "pixel");
+      once = true;
+   }
    k->r.size = size;
    /* nothing at a heap's first byte: a DOUTU word of 0 would name it */
    k->r.used = 0x100;
@@ -346,7 +368,8 @@ sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
    }
    k->live++;
    p = ring_alloc(&k->r, n * 8, USSE_ALIGN);
-   pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+   /* from the start of the program's code base window (doutu_w0) */
+   pc0 = (usse_heap_off(c, p.va, vertex) & USSE_WINDOW_MASK) / 8;
    memcpy(p.p, w, n * 8);
    /* phas.i targets are absolute, in instructions (ISA.md) */
    for (unsigned i = 0; i < nreloc; i++)
@@ -399,11 +422,11 @@ usse_load(struct sgxws_ctx *c, const struct sgx_fixed_prog *pr, bool vertex)
 static uint32_t
 doutu_w0(struct sgxws_ctx *c, uint32_t va, bool vertex, uint32_t temps)
 {
-   uint32_t off = va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
+   uint32_t off = usse_heap_off(c, va, vertex);
 
    return sgx_pds_doutu_w0(&(struct sgx_pds_doutu){
-      .base = (off >> 19) + c->dev->usse_base_index[vertex],
-      .offset = off & 0x7ffff,
+      .base = (off >> USSE_WINDOW_SHIFT) + c->dev->usse_base_index[vertex],
+      .offset = off & USSE_WINDOW_MASK,
       .temps4 = (temps + 3) >> 2,
    });
 }
@@ -837,6 +860,8 @@ ctx_free(struct sgxws_ctx *c)
       sgxws_bo_free(c->dev, &rings[i]->bo);
    code_fini(c, &c->usse[0]);
    code_fini(c, &c->usse[1]);
+   for (unsigned v = 0; v < 2; v++)
+      sgxws_bo_free(c->dev, &c->code_hold[v]);
    free(c->pds_pix.memo);
    free(c->last_u);
    c->dev->kif->ctx_fini(c);
@@ -880,6 +905,18 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    /* (without it, every draw's pixel programs anew) */
    if (!d->state_always)
       c->pds_pix.memo = calloc(1, sizeof(*c->pds_pix.memo));
+
+   /* SGX_CODE_WINDOW=n: program code starts in window n of each USSE heap,
+    * to test code past the first window (the space below it is held) */
+   unsigned skip = debug_get_num_option("SGX_CODE_WINDOW", 0);
+   for (unsigned v = 0; skip && v < 2; v++) {
+      enum sgx_heap heap = v ? H_VTXSHADER : H_PIXSHADER;
+
+      if (sgxws_bo_alloc_heap(d, &c->code_hold[v], heap, 0x1,
+                              (skip << USSE_WINDOW_SHIFT) - SGXWS_CODE_CHUNK,
+                              SGXWS_CODE_CHUNK))
+         mesa_logw("sgx: SGX_CODE_WINDOW=%u: no room to hold", skip);
+   }
 
    /* fixed USSE programs */
    char err[160];
