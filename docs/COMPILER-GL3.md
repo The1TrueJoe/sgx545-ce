@@ -201,14 +201,16 @@ form in the table is now **hardware** (log in `tools/isa/hwt_out/open/`).
 What is not yet run on hardware is the compiled programs themselves
 (piglit's GLSL 1.30 tests, once the driver exposes integers).
 
-Flat varyings (planned with gl3-driver, GL3.md "Flat varyings"): only the TA's
-vertex-colour source iterates flat. The compiler will choose, in
-`sgx_assign_varyings` where both stages see the same order, the first flat
-varying that fits one vec4 (a split int or ivec2 counts as four floats), place
-it in the colour source and report it. The driver then makes every other flat
-varying's three vertices equal (a vertex-program variant over copied inputs),
-so they iterate in their sets. Built on usse-compiler's colour-source path once
-it lands; not done yet.
+Flat varyings: the TA's vertex-colour source iterates flat, but into one
+register as BGRA8 unorm (clamped to [0, 1], 8 bits), so it carries only st's
+flat legacy primary colour (usse-compiler's `sgx_varyings.colour`). Every
+other flat varying iterates in its sets like a smooth one, and the driver makes
+its three vertices equal (provoking-vertex replication, a vertex-program variant
+over copied inputs). The compiler does nothing extra for them. Equal vertices
+still pass through the perspective-correct iteration, so a float can come out a
+rounding step off; a split integer's halves are exact floats below 2^16, and
+`pck.u16.f32` rounds them back to the exact value (to nearest, as hwt_p4
+measured for s16; u16 is assumed the same).
 
 Not done here: integer and float textures wider than RGBA8 (the texel
 formats are GL3.md's H2), MRT and packed render-target outputs (H1),
