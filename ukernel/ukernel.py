@@ -470,7 +470,9 @@ def build(a):
             # base: None = the patched r17 (ctlblk); an int = limm that value into r5.
             a.patch(14, "pdtable")
             base = "r17"
-            if USSE_LDBASE is not None:
+            if USSE_LDREG is not None:
+                base = f"r{USSE_LDREG}"             # name this register; its value is unused
+            elif USSE_LDBASE is not None:
                 a.i(f"limm r5, #{USSE_LDBASE}")
                 base = "r5"
             moe = " [moe]" if USSE_MOE else ""
