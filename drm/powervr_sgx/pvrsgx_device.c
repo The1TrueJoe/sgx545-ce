@@ -258,6 +258,24 @@ static int identify(struct pvrsgx_device *sdev)
 	sdev->core_id = sgx_rd(sdev, sdev->cr->core_id);
 	sdev->core_rev = sgx_rd(sdev, sdev->cr->core_revision);
 
+	if (!pvrsgx_core_family_usable(sdev->family)) {
+		drm_info(&sdev->base,
+			 "%s core id 0x%08x revision 0x%08x: this driver can't run an %s yet; not touching it further\n",
+			 sdev->family->name, sdev->core_id, sdev->core_rev, sdev->family->name);
+		return -ENODEV;
+	}
+	if (pvrsgx_core_single_context(sdev->family)) {
+		if (!pvrsgx_allow_unisolated) {
+			drm_err(&sdev->base,
+				"%s has one memory context: every client could reach the firmware and the other clients' commands. Not running it; powervr_sgx.allow_unisolated=1 runs it anyway.\n",
+				sdev->family->name);
+			return -ENODEV;
+		}
+		drm_warn(&sdev->base,
+			 "%s has one memory context: clients are not isolated from the firmware or from each other (allow_unisolated=1)\n",
+			 sdev->family->name);
+	}
+
 	sdev->core = pvrsgx_core_lookup(sdev->family, sdev->core_id, sdev->core_rev);
 	if (!sdev->core) {
 		drm_err(&sdev->base,

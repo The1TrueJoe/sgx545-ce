@@ -414,7 +414,8 @@ static int fw_arenas(struct pvrsgx_device *sdev)
 	 * code read-only.
 	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, h->kernel_data.base, DATA_ARENA_SIZE,
-				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
+				SGX_MMU_PTE_CACHECONSISTENT |
+				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT), 0);
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, h->kernel_code.base, CODE_ARENA_SIZE,
