@@ -17,7 +17,7 @@
  * Each phase's record is checked against pvrsgx_equiv_golden.h: its line
  * count and CRC32. A change meant to leave the SGX545 alone must leave every
  * record as it is. On a mismatch the whole record is printed, one "EQ|" line
- * per entry, for a diff against tests/pvrsgx_equiv_545.txt.
+ * per entry, to diff against the same test on a known-good tree.
  */
 
 #include <kunit/test.h>
