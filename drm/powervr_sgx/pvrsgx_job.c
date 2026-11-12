@@ -329,6 +329,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	if (pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not restart: device lost\n");
 		sdev->lost = true;
+		/* Stopped: nothing translates any more, so unmapped memory can go. */
+		queue_work(system_dfl_wq, &sdev->reap_work);
 	}
 	drm_sched_start(&sdev->sched, 0);
 	pvrsgx_power_put(sdev, failed);
