@@ -22,7 +22,7 @@
 #include "pvrsgx_drv.h"
 #include "pvrsgx_fw.h"
 #include "pvrsgx_pm.h"
-#include "pvrsgx_regs.h"
+#include "pvrsgx_hw.h"
 
 static int pvrsgx_of_probe(struct platform_device *pdev)
 {

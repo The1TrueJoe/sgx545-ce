@@ -70,16 +70,4 @@
 #define SGX_CR_BIF_MEM_REQ_STAT			0x0ca8
 #define   SGX_CR_BIF_MEM_REQ_STAT_READS		GENMASK(10, 0)
 
-/*
- * The OMAP SGX's OCP wrapper, at 0xfe00 in the GPU window (TI's GPL OMAP3
- * services, ocpdefs.h). Offsets are from the block. Readable on the 36xx
- * while the module is enabled; not on the 34xx (mainline commit 3b72fc895a2e).
- */
-#define SGX_OCP_BASE				0xfe00
-#define SGX_OCP_SIZE				0x110
-#define SGX_OCP_REVISION			0x000
-#define SGX_OCP_SYSCONFIG			0x010
-#define SGX_OCP_DEBUG_CONFIG			0x108
-#define SGX_OCP_DEBUG_STATUS			0x10c
-
 #endif /* PVRSGX_REGS_H */
