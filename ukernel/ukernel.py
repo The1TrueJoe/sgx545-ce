@@ -467,6 +467,15 @@ def build(a):
                 a.i(f"phas.i #0, #{USSE_PHAS_TEMPS4} [wait=7]")
             else:
                 a.phas()
+        if USSE_PA_READ:
+            # does the task see a primary attribute the PDS wrote (DOUTA)? read pa0 as the
+            # ld base. A fault at the PDS-written value means attributes are visible where
+            # USSE-written temporaries are not (probe (c), attempt 39).
+            a.i("ld.a.d r3, pa0, #0")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_ALUWRITE:
             # does a non-limm ALU write land? or r5, r5, r17 = r5's leftover (0x0c004000)
             # | r17's (0x0fd79000) = 0x0fd7d000, then ld.a.d r3, r5, #0. Fault at
