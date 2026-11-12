@@ -26,7 +26,7 @@ import re
 import struct
 import sys
 
-NAME = re.compile(r"sgx-zls-(\d+)-(\d+)x(\d+)-([A-Z0-9_]+)-s(\d+)\.bin$")
+NAME = re.compile(r"sgx-zls-(\d+)-(\d+)x(\d+)-([A-Za-z0-9_]+)-s(\d+)\.bin$")
 
 
 def align(v, a):
@@ -112,7 +112,7 @@ def report(path):
     if not m:
         print(f"{path}: not a zlsdump name")
         return
-    w, h, fmt, s = int(m[2]), int(m[3]), m[4], int(m[5])
+    w, h, fmt, s = int(m[2]), int(m[3]), m[4].upper(), int(m[5])
     data = open(path, "rb").read()
     W, H = align(w, 32), align(h, 16)
     n = W * H * s

@@ -590,9 +590,9 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
  * sample a tile is 32 x 16 pixels, word bits y0 x0 y1 x1 y2 x2 y3 x3 x4.  At
  * 4 the samples form one surface twice as wide and high (X = 2x + sx,
  * Y = 2y + sy, 2 * align(w, 32) wide), with tile bits y0 x1 y1 x2 y2 x3 y3
- * x0 x4.  Its stencil byte is taken to be at the same index, after the last
- * depth (sgxws_zls_pixels(w, h) * samples * 4 bytes in): the doc covers
- * depth only, and test H9 checks the stencil. */
+ * x0 x4.  Its stencil byte is at the same index, after the last depth
+ * (sgxws_zls_pixels(w, h) * samples * 4 bytes in); FBOs and 16-bit depth
+ * (stored as float32) use the same order (TEX.md section 7, H9). */
 static uint32_t
 zls_index(uint32_t w, uint32_t h, unsigned samples, uint32_t x, uint32_t y,
           unsigned s)

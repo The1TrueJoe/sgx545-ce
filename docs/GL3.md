@@ -357,7 +357,7 @@ five crashes (`getteximage-depth`, `texsubimage-depth-formats`,
 `fbo-alphatest-nocolor` and its `-ff` variant, now start and fail: a
 framebuffer with no colour buffer wasn't drawn (`begin_frame`).
 
-Since then, not yet on a board:
+Run 3 (a CE5300 board, 2026-11-12, 2fca2ad9; `docs/log/entries/2026-11-12-0130-gl3-driver.md`):
 
 - A framebuffer with only a depth buffer renders into a colour buffer of
   the context's own (`dummy_cb`, made in `set_framebuffer_state` at the
@@ -371,14 +371,38 @@ Since then, not yet on a board:
   a write goes into the ZLS buffer, which the next render of the buffer's
   size loads. So glReadPixels, CopyPixels and DrawPixels of depth and
   stencil, copies, and depth/stencil blits and 4x resolves (`sgx_blit_zs`,
-  nearest, any scale) all go through it. The stencil bytes are taken to be
-  in the depth's order, which no capture shows; H9 checks it.
-- Not yet: a sampled depth texture rendered into (`fbo-depthtex`), whose
-  sampler copy isn't brought up from the ZLS buffer.
+  nearest, any scale) all go through it.
+- **H9 passes**: the order holds for FBOs, 16-bit depth (stored as float32),
+  depth-only FBOs and the stencil (one byte per sample after the depth, in
+  the depth's order), at 1 and 4 samples, every word (TEX.md section 7).
+- dEQP-GLES2 78 F / 16638 P, 0 differences from run 2. The ff list has 4
+  differences, all `copyteximage 1d/2d` fail → pass. The GL 2.1 list has 26,
+  all fail → pass: the 12 `depthstencil-default_fb` `blit`, `drawpixels-24_8`,
+  `readpixels-24_8` and `readpixels-float-and-ushort` cases at 1, 2 and 4
+  samples, and `gl-2.0-two-sided-stencil`. No regressions, no GPU resets.
+- `sgx_msaa` passes all six cases, the scaled resolve
+  (`GL_SCALED_RESOLVE_FASTEST_EXT`) included.
 
-`mixed_framebuffer_sizes` stays off until H9 and the depth/stencil gate pass:
-the 12 `depthstencil-default_fb … samples=2/4` tests, their single-sample
-versions and `fbo-depthtex`.
+The depth/stencil gate, per test at 1, 2 and 4 samples:
+
+| `depthstencil-default_fb-` | run 2 | run 3 |
+|---|---|---|
+| `blit`, `drawpixels-24_8`, `readpixels-24_8`, `readpixels-float-and-ushort` | fail | **pass** |
+| `clear` | pass | pass |
+| `copypixels`, `drawpixels-float-and-ushort` | fail | fail: st draws the depth with a gl_FragDepth shader, which isn't written (ISA.md, `depthf` a guess) |
+| `drawpixels-32f_24_8_rev`, `readpixels-32f_24_8_rev` | skip | skip (no ARB_depth_buffer_float) |
+
+Still failing: `fbo-depthtex` (a sampled depth texture rendered into: its
+sampler copy isn't brought up from the ZLS buffer), `fbo-alphatest-nocolor`
+and `-ff`, `glsl-1.10-fragdepth`. 63 of the 157 gate tests didn't run: the
+FBO depth tests (`fbo-depth-*`, `fbo-depthstencil-*` under
+`arb_depth_texture`, `ext_packed_depth_stencil`, `arb_depth_buffer_float`,
+`ext_texture_array@fbo-depth-array`) were in a chunk where `piglit-runner`
+panicked (`lib.rs:1163`, an unwrap of `None`, not a box fault).
+
+`mixed_framebuffer_sizes` stays off until the gate passes: `copypixels` and
+`drawpixels-float-and-ushort` need gl_FragDepth (a `depthf` hardware test
+first), and `fbo-depthtex` the sampler refresh.
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
