@@ -7,13 +7,13 @@
  * Integer textures and integer render targets (docs/GL3.md), under
  * SGX_DEBUG=glsl130 (GLSL 1.30, EXT_texture_integer):
  *
- *   sample  a 16x8 texture of each integer format (RGBA8UI, RGBA8I, RG8UI,
+ *   sample  a 16x16 texture of each integer format (RGBA8UI, RGBA8I, RG8UI,
  *           R8UI, R32UI, R32I, RG32UI, RGBA32UI, RGBA32I) whose every
  *           texel differs, read with
  *           texelFetch into an RGBA8 framebuffer as bytes (an R32 value's
  *           four bytes; an 8-bit channel's byte): every texel against what
  *           was uploaded, the missing channels as (0, 0, 1)
- *   render  a 16x8 integer colour buffer (RGBA8UI, RG8UI, R8UI, R32UI,
+ *   render  a 16x16 integer colour buffer (RGBA8UI, RG8UI, R8UI, R32UI,
  *           RG32UI, RGBA32UI: the last two a pass a channel)
  *           cleared with glClearColorIuiEXT, then a draw over its left half
  *           writing values made from the pixel's position; read back with
@@ -87,7 +87,7 @@ G(glDrawArrays);
 G(glClearColorIuiEXT);
 
 #define W 16
-#define H 8
+#define H 16
 
 static int failures;
 
