@@ -281,3 +281,11 @@ with `--core`, and `test_sgx530.py` next to `test_emu.py`.
     diagnostic image put a 32-bit marker in the heartbeat and lost its high half at the
     first increment. The emulator caught it, since it models imae's source width. Put
     32-bit markers in words that nothing increments.
+25. **A task's register count belongs to the image, not to the host.** The entry DOUTU's
+    temporary count is a constant in the kernel's DOUTU builder, `0x8000000`, copied from
+    the SGX545 microkernel's templates. Nothing tied it to what our image uses: 24
+    registers, not 32. On a core with fewer temporaries per task, a too-large request
+    can leave the task unscheduled, with no fault and no instruction run, and that is
+    what attempt 3 saw. The manifest now records `temps`. A port should have the host
+    size the entry DOUTU from it. A third core then can't inherit a request it can't
+    meet.

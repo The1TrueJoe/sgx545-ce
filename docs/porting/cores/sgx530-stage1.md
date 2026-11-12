@@ -178,6 +178,42 @@ entry falls through. It is the follow-up if the diagnostic entry stops at heartb
 - The same patches, and the packaged file is 8d1a634f….
 - A pass gives the same results as the last row above.
 
+## After the third attempt
+
+Attempt 3 (log 2026-11-11-2053) landed in the all-zero row with no BIF fault: `EVENT_TIMER`
+stayed 0 at every sample. So the USSE ran none of the image. `USE_CLKS` stayed on,
+`BIF_MEM_REQ_STAT` read 2 throughout, and nothing faulted.
+
+**Why not a sled of markers at other offsets.** At start, the firmware directory maps
+only the code arena (0x02000000-0x0200dfff), the PD table (0x0200f000) and the data arena
+(0x02400000-0x0240dfff). Every misreading I can construct lands outside them:
+- a code-base unit of 16, 32, 64 or 256 B puts base 15 at 0x00400000, 0x00800000,
+  0x01000000 or 0x04000000;
+- a narrower base-index field sends the task through a pixel or vertex code base, none
+  programmed into a mapped page;
+- bit 27 read as part of the offset puts the task megabytes past the arena.
+
+Each would fault, and three attempts saw no fault. So copies of step 1 elsewhere only
+help if the SGX530's fault reporting itself doesn't work. Nothing so far shows that.
+
+**What fits instead: the task is never scheduled.** The DOUTU's word 0 has `0x8000000` in
+the field PDS.md reads as the temporary count in fours (bits 24-31): 8, or 32
+temporaries. That reading is a guess even on the SGX545. The image uses r0-r17 and r23
+(r23 only in the TA kick's link save), so 24 temporaries. Stage 1 needs only r0-r17. The
+manifest now records `"temps": 24` (build.py: the image's highest rN plus 1). The SGX530's
+per-task limit is U. If it can't give one task 32, the task waits forever: no
+instruction, no fault, the clocks on. That is attempt 3.
+
+**Attempt 4, one variable:** the same `sgx530_diag` image, with the entry DOUTU's bits
+24-31 = 6 (24 temporaries, the manifest's `temps`) instead of 8. Everything else stays.
+The runbook's ladder table reads the same.
+
+If it lands in the all-zero row again, the next variables are, in order:
+1. the event data registers 0xa6c/0xa70 (1 and 6, a guess on the SGX545 too: probably
+   the data size and something else);
+2. DOUTU word 1 (2, the microkernel templates' value);
+3. the MOVS selects under a one-word interleave.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
