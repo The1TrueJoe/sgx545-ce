@@ -8,7 +8,8 @@
  * SGX_DEBUG=glsl130 (GLSL 1.30, EXT_texture_integer):
  *
  *   sample  a 16x8 texture of each integer format (RGBA8UI, RGBA8I, RG8UI,
- *           R8UI, R32UI, R32I) whose every texel differs, read with
+ *           R8UI, R32UI, R32I, RG32UI, RGBA32UI, RGBA32I) whose every
+ *           texel differs, read with
  *           texelFetch into an RGBA8 framebuffer as bytes (an R32 value's
  *           four bytes; an 8-bit channel's byte): every texel against what
  *           was uploaded, the missing channels as (0, 0, 1)
@@ -196,8 +197,9 @@ sample_case(const struct sfmt *f)
       snprintf(fs, sizeof(fs),
                "#version 130\n"
                "uniform %s t;\n"
+               "uniform int c;\n"
                "void main() {\n"
-               "   uint v = uint(texelFetch(t, ivec2(gl_FragCoord.xy), 0).x);\n"
+               "   uint v = uint(texelFetch(t, ivec2(gl_FragCoord.xy), 0)[c]);\n"
                "   gl_FragColor = vec4(uvec4(v, v >> 8u, v >> 16u, v >> 24u) & 255u) / 255.0;\n"
                "}\n",
                s);
@@ -225,27 +227,32 @@ sample_case(const struct sfmt *f)
    glBindTexture_(GL_TEXTURE_2D, tex);
    glUseProgram_(p);
    glUniform1i_(glGetUniformLocation_(p, "t"), 0);
-   glClearColor_(0.5f, 0.5f, 0.5f, 0.5f);
-   glClear_(GL_COLOR_BUFFER_BIT);
-   quad(1.0f);
-   glReadPixels_(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px);
-   unsigned ok = 0;
-   for (unsigned i = 0; i < W * H; i++) {
-      uint8_t want[4];
-      if (f->bytes == 4) {
-         uint32_t v = pattern(i, 0);
-         memcpy(want, &v, 4);
-      } else {
-         for (unsigned c = 0; c < 4; c++)
-            want[c] = c < f->comps ? (uint8_t)pattern(i, c) : c == 3 ? 1 : 0;
+   /* a 32-bit format: one pass a channel (its word's four bytes) */
+   unsigned passes = f->bytes == 4 ? f->comps : 1, ok = 0;
+   for (unsigned ch = 0; ch < passes; ch++) {
+      if (f->bytes == 4)
+         glUniform1i_(glGetUniformLocation_(p, "c"), ch);
+      glClearColor_(0.5f, 0.5f, 0.5f, 0.5f);
+      glClear_(GL_COLOR_BUFFER_BIT);
+      quad(1.0f);
+      glReadPixels_(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px);
+      for (unsigned i = 0; i < W * H; i++) {
+         uint8_t want[4];
+         if (f->bytes == 4) {
+            uint32_t v = pattern(i, ch);
+            memcpy(want, &v, 4);
+         } else {
+            for (unsigned c = 0; c < 4; c++)
+               want[c] = c < f->comps ? (uint8_t)pattern(i, c) : c == 3 ? 1 : 0;
+         }
+         ok += !memcmp(px + 4 * i, want, 4);
       }
-      ok += !memcmp(px + 4 * i, want, 4);
    }
    GLenum e = glGetError_();
-   printf("%s sample %s: %u/%u texels; texel 1 %02x%02x%02x%02x; glerror %#x %#x\n",
-          ok == W * H && !e && !e0 ? "PASS" : "FAIL", f->name, ok, W * H,
-          px[4], px[5], px[6], px[7], e0, e);
-   failures += !(ok == W * H && !e && !e0);
+   printf("%s sample %s: %u/%u texel channels; last texel 1 %02x%02x%02x%02x; glerror %#x %#x\n",
+          ok == W * H * passes && !e && !e0 ? "PASS" : "FAIL", f->name, ok,
+          W * H * passes, px[4], px[5], px[6], px[7], e0, e);
+   failures += !(ok == W * H * passes && !e && !e0);
    glBindFramebuffer_(GL_FRAMEBUFFER, 0);
    glDeleteFramebuffers_(1, &fb);
    glDeleteTextures_(1, &tex);
@@ -430,6 +437,10 @@ main(void)
       {"R8UI", GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, 1, 1, 0},
       {"R32UI", GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, 1, 4, 0},
       {"R32I", GL_R32I, GL_RED_INTEGER, GL_INT, 1, 4, 1},
+      /* word by word (the compiler's tex_r32x2 / x4) */
+      {"RG32UI", GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT, 2, 4, 0},
+      {"RGBA32UI", GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT, 4, 4, 0},
+      {"RGBA32I", GL_RGBA32I, GL_RGBA_INTEGER, GL_INT, 4, 4, 1},
    };
    static const struct rfmt rf[] = {
       {"RGBA8UI", GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, 4, 0},
