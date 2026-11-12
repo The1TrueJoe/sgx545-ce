@@ -803,34 +803,46 @@ struct sweep_variant {
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
+	/* First: does the PDS execute the MOVS? With cc 0 it skips to the HALT. */
+	{ .cc = 0 + 1 },
 	D1(0), D1(1), D1(2), D1(3), D1(4), D1(8), D1(16),
 	{ .dest = 4 + 1 }, { .dest = 6 + 1 }, { .dest = 7 + 1 }, { .dest = 1 + 1 },
-	{ .dest = 0 + 1 }, { .dest = 2 + 1 }, { .cc = 3 + 1 }, { .cc = 0 + 1 },
+	{ .dest = 0 + 1 }, { .dest = 2 + 1 }, { .cc = 3 + 1 },
 	F(PVRSGX_SWEEP_DOUTU_W1_0), F(PVRSGX_SWEEP_INTERLEAVE), F(PVRSGX_SWEEP_ALL_SLOTS),
 	F(PVRSGX_SWEEP_TEMPS4), F(PVRSGX_SWEEP_TEMPS0), F(PVRSGX_SWEEP_DM2),
 	F(PVRSGX_SWEEP_DOUTU_W1_0 | PVRSGX_SWEEP_DM2),
 	F(PVRSGX_SWEEP_ALL_SLOTS | PVRSGX_SWEEP_TEMPS4),
+	/* Crossed with 0xa70 = 4 (the data segment). */
+	{ .data1 = 4 + 1, .cc = 0 + 1 }, { .data1 = 4 + 1, .dest = 4 + 1 },
+	{ .data1 = 4 + 1, .dest = 6 + 1 }, { .data1 = 4 + 1, .dest = 7 + 1 },
+	{ .data1 = 4 + 1, .dest = 1 + 1 }, { .data1 = 4 + 1, .dest = 0 + 1 },
+	{ .data1 = 4 + 1, .dest = 2 + 1 },
+	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_DOUTU_W1_0 },
+	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_ALL_SLOTS },
+	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_TEMPS4 },
+	/* 0xa70 = 6, the whole program, is the baseline's: the single variants above. */
 };
 
 #undef D1
 #undef F
 
-#undef DATA
-
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
+	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
+			  sv->data1 ? "" : "baseline");
+
 	if (sv->data0)
-		snprintf(buf, len, "event data %d, %d", sv->data0 - 1, sv->data1 - 1);
-	else if (sv->data1)
-		snprintf(buf, len, "event data 1 = %d", sv->data1 - 1);
-	else if (sv->flags & PVRSGX_SWEEP_ENABLE)
-		snprintf(buf, len, "event PDS enable 0x%08x", sv->enable);
-	else if (sv->dest || sv->cc)
-		snprintf(buf, len, "MOVS dest %d cc %d", sv->dest - 1, sv->cc - 1);
-	else if (sv->flags)
-		snprintf(buf, len, "flags 0x%x", sv->flags);
-	else
-		snprintf(buf, len, "baseline");
+		n += scnprintf(buf + n, len - n, " data0 %d", sv->data0 - 1);
+	if (sv->data1)
+		n += scnprintf(buf + n, len - n, " data1 %d", sv->data1 - 1);
+	if (sv->dest)
+		n += scnprintf(buf + n, len - n, " dest %d", sv->dest - 1);
+	if (sv->cc)
+		n += scnprintf(buf + n, len - n, " cc %d", sv->cc - 1);
+	if (sv->flags & PVRSGX_SWEEP_ENABLE)
+		n += scnprintf(buf + n, len - n, " enable 0x%x", sv->enable);
+	if (sv->flags & ~PVRSGX_SWEEP_ENABLE)
+		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~PVRSGX_SWEEP_ENABLE);
 }
 
 /*
