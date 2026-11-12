@@ -1,4 +1,4 @@
-From 064ebef098ec4db254b6a780db9ad15ee94a8103 Mon Sep 17 00:00:00 2001
+From d4820d977a9c212fff1ef00cc126f5c605467836 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Tue, 10 Nov 2026 23:37:45 -0500
 Subject: [PATCH 2/5] drm/gma500: Export GEM objects as dma-bufs
@@ -9,11 +9,15 @@ device, renders while gma500 scans out. Mesa's kmsro allocates the
 buffers on the display device and imports them into the render device,
 which needs gma500 to export them.
 
-Add the pin, unpin and get_sg_table hooks the PRIME helpers need. An
-export pins the object's pages, write-combined as for a framebuffer, but
-takes no slot in the small GTT aperture: the importer maps the pages
-itself. A use count shares the pages between GTT pins and exports.
-Objects in stolen memory have no struct pages and can't be exported.
+Add the pin, unpin, get_sg_table, vmap and vunmap hooks the PRIME
+helpers need. An export pins the object's pages, write-combined as for a
+framebuffer, but doesn't insert them into the GTT: the importer maps the
+pages itself, and powervr_sgx takes a write-combined kernel mapping of
+an import for its cache maintenance. (A CPU mmap through
+dma_buf_mmap() still goes through psb_gem_fault(), which pins the object
+into the GTT.) A use count shares the pages between GTT pins, exports
+and kernel mappings. Objects in stolen memory have no struct pages and
+can't be exported.
 
 The PRIME helpers call pin and unpin with the object's reservation lock
 held, and psb_gem_pin() and psb_gem_unpin() take that lock themselves.
@@ -24,15 +28,22 @@ fake mmap offset, which a dumb buffer only gets from MAP_DUMB, and Mesa's
 kmsro never calls that for the buffers it exports. Create the offset at
 export.
 ---
- drivers/gpu/drm/gma500/gem.c | 146 ++++++++++++++++++++++++++++-------
+ drivers/gpu/drm/gma500/gem.c | 182 +++++++++++++++++++++++++++++------
  drivers/gpu/drm/gma500/gem.h |   1 +
- 2 files changed, 117 insertions(+), 30 deletions(-)
+ 2 files changed, 153 insertions(+), 30 deletions(-)
 
 diff --git a/drivers/gpu/drm/gma500/gem.c b/drivers/gpu/drm/gma500/gem.c
-index 4a4ecfb..aaed7d2 100644
+index 4a4ecfb7b..9eff7a739 100644
 --- a/drivers/gpu/drm/gma500/gem.c
 +++ b/drivers/gpu/drm/gma500/gem.c
-@@ -16,6 +16,7 @@
+@@ -11,11 +11,14 @@
+  *		accelerated operations on a GEM object)
+  */
+ 
++#include <linux/iosys-map.h>
+ #include <linux/pagemap.h>
++#include <linux/vmalloc.h>
+ 
  #include <asm/set_memory.h>
  
  #include <drm/drm.h>
@@ -40,7 +51,7 @@ index 4a4ecfb..aaed7d2 100644
  #include <drm/drm_print.h>
  #include <drm/drm_vma_manager.h>
  
-@@ -26,71 +27,104 @@
+@@ -26,71 +29,104 @@
   * PSB GEM object
   */
  
@@ -170,7 +181,7 @@ index 4a4ecfb..aaed7d2 100644
  
  	npages = obj->size / PAGE_SIZE;
  
-@@ -99,13 +133,18 @@ void psb_gem_unpin(struct psb_gem_object *pobj)
+@@ -99,13 +135,18 @@ void psb_gem_unpin(struct psb_gem_object *pobj)
  				     (gpu_base + pobj->offset), npages, 0, 0);
  	psb_gtt_remove_pages(dev_priv, &pobj->resource);
  
@@ -194,15 +205,15 @@ index 4a4ecfb..aaed7d2 100644
  	dma_resv_unlock(obj->resv);
  }
  
-@@ -133,8 +172,55 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
+@@ -133,8 +174,89 @@ static const struct vm_operations_struct psb_gem_vm_ops = {
  	.close = drm_gem_vm_close,
  };
  
 +/*
 + * PRIME export, for a render GPU to draw into scanout buffers. Only objects
 + * with pages can be shared: stolen memory has none. An export pins the pages,
-+ * write-combined, without a GTT slot. The PRIME helpers call pin and unpin
-+ * with the reservation lock held.
++ * write-combined, and doesn't insert them into the GTT. The PRIME helpers
++ * call pin and unpin with the reservation lock held.
 + */
 +static int psb_gem_prime_pin(struct drm_gem_object *obj)
 +{
@@ -228,6 +239,38 @@ index 4a4ecfb..aaed7d2 100644
 +}
 +
 +/*
++ * A kernel mapping for an importer, write-combined like the pages. It holds
++ * the pages as a PRIME pin does. The PRIME helpers call it with the
++ * reservation lock held.
++ */
++static int psb_gem_prime_vmap(struct drm_gem_object *obj, struct iosys_map *map)
++{
++	struct psb_gem_object *pobj = to_psb_gem_object(obj);
++	void *vaddr;
++	int ret;
++
++	if (pobj->stolen)
++		return -EINVAL;
++	ret = psb_gem_get_pages_locked(pobj);
++	if (ret)
++		return ret;
++	vaddr = vmap(pobj->pages, obj->size >> PAGE_SHIFT, VM_MAP,
++		     pgprot_writecombine(PAGE_KERNEL));
++	if (!vaddr) {
++		psb_gem_put_pages_locked(pobj);
++		return -ENOMEM;
++	}
++	iosys_map_set_vaddr(map, vaddr);
++	return 0;
++}
++
++static void psb_gem_prime_vunmap(struct drm_gem_object *obj, struct iosys_map *map)
++{
++	vunmap(map->vaddr);
++	psb_gem_put_pages_locked(to_psb_gem_object(obj));
++}
++
++/*
 + * dma_buf_mmap() maps through the object's fake offset (drm_gem_prime_mmap()),
 + * which a dumb buffer only gets from MAP_DUMB: make sure it has one.
 + */
@@ -247,11 +290,13 @@ index 4a4ecfb..aaed7d2 100644
 +	.pin = psb_gem_prime_pin,
 +	.unpin = psb_gem_prime_unpin,
 +	.get_sg_table = psb_gem_prime_get_sg_table,
++	.vmap = psb_gem_prime_vmap,
++	.vunmap = psb_gem_prime_vunmap,
  	.vm_ops = &psb_gem_vm_ops,
  };
  
 diff --git a/drivers/gpu/drm/gma500/gem.h b/drivers/gpu/drm/gma500/gem.h
-index 27df6ff..539f8f2 100644
+index 27df6ff4e..539f8f20a 100644
 --- a/drivers/gpu/drm/gma500/gem.h
 +++ b/drivers/gpu/drm/gma500/gem.h
 @@ -27,6 +27,7 @@ struct psb_gem_object {
