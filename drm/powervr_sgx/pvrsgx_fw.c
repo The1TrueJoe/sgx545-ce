@@ -529,8 +529,12 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	u32 dm = cr->use_code_base_dm_shift;
 	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	u32 enable = cr->event_pds_enable_all;
-	/* The SGX530's PDS_PC_BASE: G, the base the event offset is added to. */
-	u32 pc_base = h->pds_pixel.base;
+	/*
+	 * The SGX530's PDS_PC_BASE: the DDK never writes it and reads it in its
+	 * hang dump, so likely the PDS's program counter. Only variants 10 and 11
+	 * write it, to test the other reading: a base for the event offset.
+	 */
+	u32 pc_base = 0;
 	int err;
 
 	/* The bring-up sweep's variants (sweep_name[]); 0 is the normal start. */
@@ -576,7 +580,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
-	sgx_wr_opt(sdev, cr->pds_pc_base, pc_base);
+	if (pc_base)
+		sgx_wr_opt(sdev, cr->pds_pc_base, pc_base);
 	/* Variant 8 sets DOUT_TIMEOUT_DISABLE (b6); later ones clear it again. */
 	if (cr->pds_ctrl && sdev->sweep_variant >= 8)
 		sgx_wr(sdev, cr->pds_ctrl, sdev->sweep_variant == 8 ? BIT(6) : 0);
@@ -736,14 +741,24 @@ static void clocks_on(struct pvrsgx_device *sdev)
 }
 
 /* The init kick; a core with one kick register (BRN_22934) starts on EVENT_KICK. */
+/*
+ * The init kick. With one kick register, the event-kicker word goes up by one
+ * first, as for every CCB kick: the GPL DDK's SGXInitialise does exactly this
+ * without MULTI_EVENT_KICK.
+ */
 static void init_kick(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 *kicker = sdev->fw.cpu[PVRSGX_FW_KICKER];
 
-	if (cr->event_kick2)
+	if (cr->event_kick2) {
 		sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
-	else
-		sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
+		return;
+	}
+	*kicker = (*kicker + 1) & 0xff;
+	/* The kicker word is in memory before the kick. */
+	wmb();
+	sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 }
 
 /*
@@ -762,21 +777,28 @@ static const char *const sweep_name[] = {
 	"event data 0, 0", "DOUTU word 1 = 0", "2-dword data interleave",
 	"USE_CODE_BASE_15 data master 2", "PDS DOUT_TIMEOUT_DISABLE",
 	"event PDS enable 0x7fffffff", "PDS_PC_BASE the event program",
-	"PDS_PC_BASE the kernel code heap",
+	"PDS_PC_BASE the kernel code heap", "timer start, no kick",
 };
 
-static bool timer_moved(struct pvrsgx_device *sdev)
+/* Variant 12 starts the event timer instead of kicking, as TI's SGX530 DDK does. */
+#define SWEEP_TIMER_START	12
+/* EVENT_TIMER's enable bit (both GPL headers); the period is in b0-23. */
+#define EVENT_TIMER_ENABLE	BIT(24)
+
+/* Whether EVENT_TIMER leaves the value the host left there within 100 ms. */
+static bool timer_moved(struct pvrsgx_device *sdev, u32 host)
 {
 	u32 t;
 
-	return !read_poll_timeout(sgx_rd, t, t, 1000, 100000, false, sdev, SGX_CR_EVENT_TIMER);
+	return !read_poll_timeout(sgx_rd, t, t != host, 1000, 100000, false, sdev,
+				  SGX_CR_EVENT_TIMER);
 }
 
 static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	/* The clock status before the first kick, what a reset should return to. */
-	u32 idle = clk_idle, clk;
+	u32 idle = clk_idle, clk, host = 0;
 	char when[64];
 	int err;
 
@@ -803,9 +825,14 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			hc[HOSTCTL_INIT_STATUS] = 0;
 			/* The rebuilt program is in memory before the kick. */
 			wmb();
-			init_kick(sdev);
+			if (v == SWEEP_TIMER_START) {
+				host = EVENT_TIMER_ENABLE | hc[HOSTCTL_UK_TIMER_CLOCK];
+				sgx_wr(sdev, SGX_CR_EVENT_TIMER, host);
+			} else {
+				init_kick(sdev);
+			}
 		}
-		if (timer_moved(sdev)) {
+		if (timer_moved(sdev, host)) {
 			drm_info(&sdev->base, "sweep: variant %u (%s) starts the event program\n",
 				 v, sweep_name[v]);
 			return 0;
