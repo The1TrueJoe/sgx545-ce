@@ -747,6 +747,43 @@ Reading:
 - **Both fault:** the PDS fetches our code and doesn't execute it as the SGX545's
   encoding. The PDS ISA itself is then the question.
 
+## After the seventeenth attempt: the PDS stops before it fetches
+
+Attempt 17 (log 2026-11-12-0138):
+- **P1:** with 0xa68 pointed at an empty page, `PDS_PC_BASE` showed that page + 0x10 (the
+  computed start), and no BIF fault came. So the PDS forms the start address and stops
+  before fetching anything through the BIF (C, as far as faults show).
+- **P3:** the PDS cache invalidates changed nothing.
+- **P2:** 0xa6c holds at most 12 bits (0x1000 read back 0).
+- **The third PC value** changes per boot (0x136500 this time), not per image. It isn't ours.
+
+So something the PDS needs before its first fetch is missing. Candidates: a data-store
+or attribute allocation, or some other resource the setup didn't give it.
+
+**Setup the SGX545 does and we skip.** Its vendor init script part 2 (SRVINIT.md) also writes
+0xa00 = 0x7c000, 0xa74 = 0x208200, 0xa78 = 0x2c, 0xa7c = 0, 0xa80 = 0, 0xaac = 0x45 and
+0xabc = 0xe. Those offsets sit in the same block as the event-PDS registers, which turned
+out to be at the SGX545's offsets on the SGX530. Our SGX530 init writes none of them.
+
+**Attempt 18, approved** (the coordinator, under Joseph's standing go and with the board on
+the smart plug). Seven offsets inside the SGX register block, each with its known SGX545
+value: no ranges, no sweeps, no other offsets.
+
+| # | Variant | Writes |
+|---|---|---|
+| 1 | `PDS` alone | 0xabc = 0xe (named on the SGX530: `PDS`; 0xe sets its unnamed bits 1-3) |
+| 2 | one at a time, each read once before the write and logged | 0xa00 = 0x7c000; 0xa74 = 0x208200; 0xa78 = 0x2c; 0xaac = 0x45 |
+| 3 | the four together | as in 2 |
+| 4 | only if 2 and 3 change nothing, by the same rule | 0xa7c = 0, then 0xa80 = 0 |
+
+- Each variant runs the baseline and F1 (a fault at 0x0e840000 means the PDS now fetches).
+  Success is a task starting or that fault.
+- The recovery reset comes first, as always.
+- The sweep stops at the first variant that hangs the bus or the board. A power cycle is
+  only for recovery: it's logged, and the board's owner session is told first.
+- Each offset's read-back goes in the fact sheet, tagged C for the value read on the
+  SGX530 and G for what the register does.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
