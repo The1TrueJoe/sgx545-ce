@@ -3,8 +3,8 @@
 
 /*
  * The SGX545 records of pvrsgx_equiv_test.c: each phase's line count and
- * CRC32. Change these only for a change meant to change the SGX545's behavior, and say so in the
- * commit message.
+ * CRC32. Change these only for a change meant to change the SGX545's
+ * behavior, and say so in the commit message.
  */
 
 #ifndef PVRSGX_EQUIV_GOLDEN_H
