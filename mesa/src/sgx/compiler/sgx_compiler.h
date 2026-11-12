@@ -83,8 +83,9 @@ struct sgx_compile_options {
     * byte 0 is blue, 2 red, the colour output's order. A texel that is the
     * colour as it is then needs no instruction; other reads unpack zyxw */
    uint32_t tex_bgra;
-   /* fragment shader: bit n set, texture unit n's texel is one F32 value in
-    * the first register (a depth texture), read as (d, 0, 0, 1) */
+   /* bit n set, texture unit n's texel is one 32-bit value in the first
+    * register (a depth texture, R32F, R32UI, R32I), read as (d, 0, 0, 1),
+    * an integer 1 for an integer sampler */
    uint32_t tex_f32;
    /* fragment shader: the driver's PDS samples a non-dependent texture from
     * the coordinate set itself, so a varying only such samples read needs no

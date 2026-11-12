@@ -2983,7 +2983,7 @@ front_face(struct sgx_ctx *c, struct sgx_val *v, nir_def *def)
 
 /* A vertex attribute in a raw format (opts.vtx_fmt): the components the
  * shader reads, unpacked from PA[4i] into f32; those the format lacks are
- * 0, 0, 1 */
+ * 0, 0, 1 (an integer 1 for an integer attribute) */
 static void
 vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
 {
@@ -2993,12 +2993,14 @@ vtx_unpack(struct sgx_ctx *c, nir_intrinsic_instr *in, int r, unsigned fmt)
                    : fmt == SGX_VF_F32_3                              ? 3
                                                                       : 4;
    nir_component_mask_t rd = nir_def_components_read(&in->def);
+   bool int_attr = nir_alu_type_get_base_type(nir_intrinsic_dest_type(in)) !=
+                   nir_type_float;
    unsigned t = fmt >= SGX_VF_UNORM8_4 ? new_vreg(c, nc) : 0;
    struct sgx_ref x[4] = {0};
    for (unsigned k = 0; k < nc; k++) {
       unsigned comp = (r & 3) + k;
       if (comp >= held) {
-         x[k] = ref(SGX_F_K, comp == 3 ? 0x3f800000 : 0);
+         x[k] = ref(SGX_F_K, comp != 3 ? 0 : int_attr ? 1 : 0x3f800000);
          continue;
       }
       if (fmt < SGX_VF_UNORM8_4) {

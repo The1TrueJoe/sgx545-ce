@@ -1972,4 +1972,36 @@ TEST_F(sgx_compile_test, fragment_packed_render_target)
    EXPECT_TRUE(has(", o0, ")) << disasm();
 }
 
+/* tex_f32 on an integer sampler (R32UI): the missing w is an integer 1 */
+TEST_F(sgx_compile_test, fragment_r32ui_texel_integer_one)
+{
+   native = true;
+   rt_packed = 1;
+   tex_f32 = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_uint_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_uint32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_ixor(&b, nir_channel(&b, t, 0), nir_channel(&b, t, 3)),
+                 0x1);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("3f80")) << disasm();
+   EXPECT_FALSE(has(".u8")) << disasm();
+   EXPECT_TRUE(has(", #1 ")) << disasm();
+}
+
 } /* namespace */
