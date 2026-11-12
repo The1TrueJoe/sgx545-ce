@@ -152,7 +152,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		reset_sleep(sdev);
 		inval_dc(sdev);
 
-		/* Let each faulting request complete on the scratch page, which every address maps. */
+		/* Each faulting request completes on the scratch page every address maps. */
 		for (int n = 0; n < 32; n++) {
 			u32 stat = sgx_rd(sdev, SGX_CR_BIF_INT_STAT), addr;
 
