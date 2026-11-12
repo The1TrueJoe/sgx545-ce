@@ -934,6 +934,47 @@ selector with offset 0. For example, if the base index steps 512 KiB, the heap o
 (`PDS_EXEC_BASE` + 0x80000, base index 1) starts the image. The alias of attempt 20 goes
 away, and the heap layout's kernel-code placement becomes the SGX530's rule, recorded as C.
 
+## After the twenty-first attempt, re-read: no selector in word 0
+
+The attempt-21 data, reread with the kernel session: base index 1/2/4/8 (word 0 b0-b3) and
+each of b19-b23 fault at `PDS_EXEC_BASE` + 0x8000, a flat shift, not a 512 KiB stride. The
+normal word (b0-3 = 0xf, b27, offset 0) faults at + 0. So:
+- The address bits b4-b7 and b16-b18 reach a **512 KiB window** (offset bits 12-18), and
+  b8-b15 the sub-4 KiB bits.
+- Nothing in word 0 strides by a window. A linear field with no striding bit has no
+  striding combination, so **word 0 as we set it carries no working segment**: the reach is
+  512 KiB above `PDS_EXEC_BASE`.
+
+**The tension with the DDK (K).** The SGX530's kernel code heap is at `PDS_EXEC_BASE` +
+0x01400000 (0x0ec00000), matching TI's `sgxconfig.h` exactly. A flat 512 KiB reach can't
+touch it. Yet the DDK runs the SGX530 with kernel code there. So the segment must come from
+somewhere we haven't set, or the EDM's code address isn't `PDS_EXEC_BASE`-relative the way
+word 0 alone suggests. Candidates: a `USE_CODE_BASE` the SGX530 EDM does use (attempts 10
+and 19 say the pixel/vertex ones are ignored, but index 15 at a different encoding is
+untested here), or `PDS_PC_BASE`/another base the EDM adds.
+
+**Attempt 22 (ran as kernel b49aaf7c):** the repeatability sweep of the attempt-21 selector
+cells (temps alone, temps|0xf, temps|b27, temps|0xf|b27, and the single selector bits), to
+confirm the flat +0x8000 vs +0 split.
+
+**Attempt 23, in one load, no alias, on top of attempt 22:**
+1. **A real segment, if word 0 has one:** the computed words for segment 40 (offset
+   0x01400000): 0x06100008 (nibble 8, high 2 in b19-b20), 0x06000007 (the SGX545
+   `(seg+15)&15`), 0x06f80000-style. A fault at or near 0x0ec00000 names the fix.
+2. **Does the EDM use `USE_CODE_BASE_15`?** With the normal word, set `USE_CODE_BASE_15` to
+   three values (0, kernel code >> 7 = 0x1d8000, 0x08000000 >> 7 = 0x100000) and read where
+   the fetch faults. If it moves, the EDM uses the register and the earlier setup was the
+   bug; if it stays at `PDS_EXEC_BASE`, the EDM ignores it. This is the likeliest real
+   answer, since the DDK reaches +0x01400000.
+
+**The fix depends on the result:**
+- A word-0 segment reaches 0x0ec00000: set the EDM DOUTU word 0 to it, SGX530 only, heap
+  unchanged (matches the DDK). No alias.
+- `USE_CODE_BASE_15` moves the fetch: program it for the EDM, heap unchanged.
+- Neither: the reach is 512 KiB, so move the SGX530 kernel code heap within 512 KiB of
+  `PDS_EXEC_BASE` and set word 0's offset. This departs from TI's layout; flag it to the
+  coordinator before committing.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
