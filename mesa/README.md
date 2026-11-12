@@ -40,7 +40,7 @@ reach the code that goes upstream.  Where the line runs today:
 |---|---|
 | `src/sgx/compiler/` | **No.** Includes only Mesa and its own headers. |
 | `src/gallium/drivers/sgx/` | **No.** It sees the winsys only through `sgxws.h` (GL-level state, the hardware's words as `docs/` describes them, opaque device/context/RT/buffer handles). Its meson dependency (`idep_sgx_ws`) carries no kernel include path and no kernel defines, so an include of anything services-side fails to build. |
-| `src/gallium/winsys/sgx/drm/` (`sgx_frame.c`, `sgx_powervr_sgx.c`) | **No.** The frame recorder and the powervr_sgx backend include the dual-licensed uAPI header (`include/drm-uapi/powervr_sgx_drm.h`) and the packers generated from `docs/uapi/powervr_sgx_kmd_stream.xml`, nothing else. |
+| `src/gallium/winsys/sgx/drm/` (`sgx_frame.c`, `sgx_powervr_sgx.c`) | **No.** The frame recorder and the powervr_sgx backend include the dual-licensed uAPI header (`include/drm-uapi/powervr_sgx_drm.h`), nothing else. |
 | `src/gallium/winsys/sgx/drm/` (`sgx_pvr.c`, `libpvr/`) | **Yes, by design, overlay only.** Built only where build.sh links libpvr in, against the kernel's bridge headers (`include/sgx-kernel`, the `-DSERVICES4`... defines), into objects of their own. It lays out structures the microkernel reads (the TA command, render details, RT data, sync lists) by their offsets. |
 | `src/egl/drivers/dri2/platform_fbdev.c` | No kernel material; not for upstream (Mesa has no fbdev platform). |
 

@@ -24,6 +24,7 @@
 #include "pvrsgx_fw.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
+#include "pvrsgx_prime.h"
 #include "pvrsgx_render.h"
 #include "pvrsgx_validate.h"
 #include "pvrsgx_vm.h"
@@ -49,7 +50,8 @@ void *pvrsgx_obj_array_get(const struct drm_powervr_sgx_obj_array *in, u32 obj_s
 
 		if (err) {
 			kvfree(out);
-			return ERR_PTR(err == -E2BIG ? -EINVAL : err);
+			/* -E2BIG: a larger struct this kernel doesn't know. */
+			return ERR_PTR(err);
 		}
 	}
 	return out;
@@ -101,18 +103,20 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 	}
 	case DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET: {
 		/*
-		 * Render-target limits are not documented (docs/UAPI.md G14):
-		 * these are the sizes the captures cover, to be raised when
-		 * larger targets are tested. PB pages from STATE.md 6.
+		 * Render-target limits are not documented: these are the sizes
+		 * known to work, to be raised when larger targets are tested.
 		 */
 		struct drm_powervr_sgx_dev_query_limits lim = {
 			.rt_max_width = 2048,
 			.rt_max_height = 2048,
-			.rt_max_samples = 1,
+			.rt_max_samples = sdev->family->cmds->max_samples,
 			.pb_min_pages = 0x100,
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
 			.pb_max_pages = 0x8000,
-			.max_ta_kicks = 64,
+			.max_ta_kicks = PVRSGX_MAX_TA_KICKS,
+			.va_bits = sdev->family->va_bits,
+			.caps = DRM_POWERVR_SGX_CAP_BACKWARD_BLITS,
+			.max_layers = 1,
 		};
 
 		return query_put(ptr, &args->size, &lim, sizeof(lim));
@@ -128,13 +132,31 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			if (q._padding_c)
 				return -EINVAL;
 		}
-		/* No erratum that reaches userspace is documented for rev 1014 (G25). */
+		/* No erratum that reaches userspace is known for these cores. */
 		q.count = 0;
 		q.musthave_count = 0;
 		return query_put(ptr, &args->size, &q, sizeof(q));
 	}
 	case DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET:
 		return pvrsgx_query_heap_info(sdev, ptr, &args->size);
+	case DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET: {
+		const struct pvrsgx_cmd_def *render = pvrsgx_cmd_def(sdev, PVRSGX_CMD_RENDER);
+		const struct pvrsgx_cmd_def *kick = pvrsgx_cmd_def(sdev, PVRSGX_CMD_TA_KICK);
+		const struct pvrsgx_cmd_def *xfer = pvrsgx_cmd_def(sdev, PVRSGX_CMD_TRANSFER);
+		struct drm_powervr_sgx_dev_query_commands c = {
+			.job_types = BIT(DRM_POWERVR_SGX_JOB_TYPE_NULL),
+		};
+
+		/* A render needs its kicks too; an unsupported command is refused. */
+		if (render && render->supported && kick && kick->supported)
+			c.job_types |= BIT(DRM_POWERVR_SGX_JOB_TYPE_RENDER);
+		if (xfer && xfer->supported)
+			c.job_types |= BIT(DRM_POWERVR_SGX_JOB_TYPE_TRANSFER);
+		c.render_exts = render ? pvrsgx_cmd_ext_mask(render) : 0;
+		c.ta_kick_exts = kick ? pvrsgx_cmd_ext_mask(kick) : 0;
+		c.transfer_exts = xfer ? pvrsgx_cmd_ext_mask(xfer) : 0;
+		return query_put(ptr, &args->size, &c, sizeof(c));
+	}
 	default:
 		return -EINVAL;
 	}
@@ -176,8 +198,7 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 	IOCTL(GET_BO_MMAP_OFFSET, pvrsgx_ioctl_get_bo_mmap_offset),
 	IOCTL(CREATE_VM_CONTEXT, pvrsgx_ioctl_create_vm_context),
 	IOCTL(DESTROY_VM_CONTEXT, pvrsgx_ioctl_destroy_vm_context),
-	IOCTL(VM_MAP, pvrsgx_ioctl_vm_map),
-	IOCTL(VM_UNMAP, pvrsgx_ioctl_vm_unmap),
+	IOCTL(VM_BIND, pvrsgx_ioctl_vm_bind),
 	IOCTL(CREATE_CONTEXT, pvrsgx_ioctl_create_context),
 	IOCTL(DESTROY_CONTEXT, pvrsgx_ioctl_destroy_context),
 	IOCTL(GET_CONTEXT_STATE, pvrsgx_ioctl_get_context_state),
@@ -200,7 +221,7 @@ static const struct drm_driver pvrsgx_drm_driver = {
 	.debugfs_init = pvrsgx_debugfs_init,
 #endif
 	.gem_create_object = pvrsgx_gem_create_object,
-	.gem_prime_import_sg_table = drm_gem_shmem_prime_import_sg_table,
+	.gem_prime_import_sg_table = pvrsgx_prime_import_sg_table,
 
 	.name = PVRSGX_DRIVER_NAME,
 	.desc = PVRSGX_DRIVER_DESC,
@@ -227,16 +248,17 @@ int pvrsgx_probe_common(struct pvrsgx_device *sdev)
 	err = drm_dev_register(&sdev->base, 0);
 	if (err) {
 		pvrsgx_power_fini(sdev);
-		pvrsgx_device_fini(sdev);
+		pvrsgx_device_unplug(sdev);
 	}
 	return err;
 }
 
 void pvrsgx_remove_common(struct pvrsgx_device *sdev)
 {
-	pvrsgx_power_fini(sdev);
+	/* No new ioctl, and the running ones done, before the hardware goes. */
 	drm_dev_unplug(&sdev->base);
-	pvrsgx_device_fini(sdev);
+	pvrsgx_power_fini(sdev);
+	pvrsgx_device_unplug(sdev);
 }
 
 static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)

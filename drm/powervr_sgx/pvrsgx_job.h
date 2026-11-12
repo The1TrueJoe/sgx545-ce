@@ -50,6 +50,17 @@ struct pvrsgx_signal {
 	u64 point;
 };
 
+/* Bytes of an import a job reads or writes: @rows rows of @size, @stride apart. */
+struct pvrsgx_cache_range {
+	struct drm_gem_object *obj;
+	u64 offset;
+	u64 size;
+	u32 stride;
+	u32 rows;
+	bool write;
+	bool import;
+};
+
 /**
  * struct pvrsgx_job - One submitted job
  */
@@ -81,16 +92,10 @@ struct pvrsgx_job {
 	/** @transfer: The transfer job, for a transfer context. */
 	struct pvrsgx_transfer_job transfer;
 
-	/** @bos: Objects the job references, for implicit sync. */
-	struct drm_gem_object **bos;
-	/** @bo_flags: DRM_POWERVR_SGX_BO_REF_FLAG_* of each of @bos. */
-	u32 *bo_flags;
-	/** @nbos: Number of @bos. */
-	u32 nbos;
-	/** @imports: The imported objects in @bos, flushed around the job. */
-	struct drm_gem_object **imports;
-	/** @nimports: Number of @imports. */
-	u32 nimports;
+	/** @ranges: The bytes of imports the job reads or writes, flushed around it. */
+	struct pvrsgx_cache_range *ranges;
+	/** @nranges: Number of @ranges. */
+	u32 nranges;
 	/** @signals: Syncobjs to signal with the job's fence. */
 	struct pvrsgx_signal *signals;
 	/** @nsignals: Number of @signals. */
@@ -100,6 +105,7 @@ struct pvrsgx_job {
 int pvrsgx_job_init(struct pvrsgx_device *sdev);
 void pvrsgx_job_fini(struct pvrsgx_device *sdev);
 void pvrsgx_job_process_done(struct pvrsgx_device *sdev);
+void pvrsgx_job_unplug(struct pvrsgx_device *sdev);
 int pvrsgx_job_quiesce(struct pvrsgx_device *sdev);
 void pvrsgx_job_unquiesce(struct pvrsgx_device *sdev);
 bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev);

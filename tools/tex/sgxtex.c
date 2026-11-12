@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+/* Copyright © 2026 Joseph Telaak */
+
 /* sgxtex: see sgxtex.h and docs/TEX.md */
 #include <string.h>
 

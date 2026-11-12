@@ -417,6 +417,34 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
          vary->set_comps[set + r] =
             MAX2(vary->set_comps[set + r], frac + comps);
    }
+   /* A flat primary colour (glShadeModel(GL_FLAT): st makes it a flat
+    * input) goes to set 0 as the TA's vertex colour, the one source the PDS
+    * iterates flat; the sets before it move up one.  Not with a sprite's
+    * coordinate in set 0. */
+   for (unsigned i = 0; nir->info.stage == MESA_SHADER_FRAGMENT && !sprite &&
+                        i < n && i < vary->n;
+        i++) {
+      struct sgx_varying *c = &vary->v[i];
+
+      if (strcmp(c->name, SGX_LEGACY_NAME "0") ||
+          vars[i]->data.interpolation != INTERP_MODE_FLAT || c->rows != 1)
+         continue;
+      for (unsigned j = 0; j < vary->n; j++) {
+         if (j != i && vary->v[j].set < c->set)
+            vary->v[j].set++;
+      }
+      c->set = 0;
+      memset(vary->set_comps, 0, sizeof(vary->set_comps));
+      for (unsigned j = 0; j < vary->n; j++) {
+         const struct sgx_varying *v = &vary->v[j];
+
+         for (unsigned r = 0; r < v->rows && v->set + r < SGX_MAX_SETS; r++)
+            vary->set_comps[v->set + r] =
+               MAX2(vary->set_comps[v->set + r], v->comp + v->comps);
+      }
+      vary->colour = true;
+      break;
+   }
    /* past ten sets: rows into the free components of earlier sets */
    vary->point_size = sprite;
    if (sprite)
@@ -432,7 +460,8 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
 static bool
 same_varyings(const struct sgx_varyings *a, const struct sgx_varyings *b)
 {
-   if (a->n != b->n || memcmp(a->set_comps, b->set_comps, sizeof(a->set_comps)))
+   if (a->n != b->n || a->colour != b->colour ||
+       memcmp(a->set_comps, b->set_comps, sizeof(a->set_comps)))
       return false;
    for (unsigned i = 0; i < a->n; i++) {
       const struct sgx_varying *x = &a->v[i], *y = &b->v[i];
@@ -978,6 +1007,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          t0.set9 = tsp[9];
       }
       so->prog.point_size = vary.point_size;
+      so->prog.colour = vary.colour;
       /* TSP word 1 stays 0, as the DDK's for a sampled set: with a set's bit
        * in it, the TPU samples at a constant coordinate; the DDK's for a
        * sprite's coordinate set (`sprite`) is 1 */
@@ -1066,9 +1096,11 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       }
       /* a program that discards: its feedback nop is the last instruction
        * (the compiler's layout); the depth plane goes in after the iterated
-       * inputs, by one more PDS iteration */
+       * inputs, by one more PDS iteration. The compiled program's discards,
+       * not the shader's: a sampler view's swizzle can fold one away (an RGB
+       * texture's alpha is 1) */
       so->discard_pa = -1;
-      if (orig->info.fs.uses_discard) {
+      if (out.discards) {
          if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u
                                                            << 32) {
             fprintf(
@@ -1094,7 +1126,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       so->prog.pa_dwords = out.n_pa;
       so->prog.sec_dwords = so->const_dwords ? 9 + so->const_dwords : 0;
       /* One DOUTI per iteration, in PA order (docs/PDS.md "DOUTI"): a
-       * varying's iterator is its set + 1.  The DDK's driver also iterates a
+       * varying's iterator is its set + 1, or, with the vertex colour in set
+       * 0, the set itself (the PDS numbers the sets after the colour from 1:
+       * seen for a sample, an iteration assumed alike).
+       * The DDK's driver also iterates a
        * placeholder colour (source 0x20) in a shader without varyings; that
        * hangs the GPU when the vertex program outputs no colour, and ours
        * never do, so there is none. */
@@ -1103,6 +1138,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       for (unsigned i = 0; i < out.n_iters && i < ARRAY_SIZE(so->prog.douti);
            i++) {
          unsigned it = out.iters[i].set + 1;
+         unsigned tc = out.iters[i].set + (vary.colour ? 0 : 1);
 
          if (out.iters[i].sample) {
             /* sample half: coordinate set + 1, 2-D or projected (docs/PDS.md).
@@ -1122,9 +1158,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
 
             if (d && !so->prog.douti_tex[prev] && !d->sample_set && !d->dim2 &&
                 !d->proj && d->iterate && !d->w1 && d->b25_26 == 3 &&
-                (d->src == it ||
+                (d->src == tc ||
                  (other_set && d->src >= 1 && d->src <= SGX_MAX_SETS))) {
-               d->sample_set = it;
+               d->sample_set = tc;
                d->dim2 = !proj;
                d->proj = proj;
                so->prog.douti_tex[prev] = out.iters[i].sampler + 1;
@@ -1133,7 +1169,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                last_sample = so->prog.n_douti;
                so->prog.douti_tex[so->prog.n_douti] = out.iters[i].sampler + 1;
                so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
-                  .sample_set = it,
+                  .sample_set = tc,
                   .dim2 = !proj,
                   .proj = proj,
                   .src = 0x24,
@@ -1151,29 +1187,38 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          /* gl_FragCoord (the compiler's set 13) is source 0: x and y at pixel
           * centres in the target's memory order, z, 1/w (docs/PDS.md "DOUTI") */
          if (it == SGX_FRAGCOORD_ITER)
-            it = 0;
+            tc = 0;
+         /* set 0 as the vertex colour: source 0x20, four components into
+          * one register as BGRA8 */
+         bool colour =
+            vary.colour && out.iters[i].set == 0 && !out.iters[i].pointcoord;
+
          last_plain = so->prog.n_douti;
          so->prog.douti[so->prog.n_douti++] = (struct sgx_pds_douti){
-            .src = it,
-            .comps = out.iters[i].comps,
+            .src = colour ? 0x20 : tc,
+            .comps = colour ? 4 : out.iters[i].comps,
             .iterate = true,
-            /* 2: the provoking (last) vertex's value, 3 interpolated */
+            /* 2: the provoking (last) vertex's value, 3 interpolated; only
+             * the colour source iterates flat */
             .b25_26 = out.iters[i].flat ? 2 : 3,
             .prec1 = out.iters[i].f16,
             .w1 = out.iters[i].pointcoord ? 0x10 : 0,
          };
       }
-      if (so->code && orig->info.fs.uses_discard) {
+      if (so->code && out.discards) {
          /* the triangle's depth plane (source 0x22, 3 components) after the
           * inputs: pa<n> on, n = the registers the iterations above fill (an
-          * F32 component 1, an F16 pair 1, a sampled texel 1) */
+          * F32 component 1, an F16 pair 1, a sampled texel or the vertex
+          * colour 1) */
          unsigned pa = 0;
 
          for (unsigned i = 0; i < so->prog.n_douti; i++) {
             const struct sgx_pds_douti *d = &so->prog.douti[i];
 
             if (d->iterate)
-               pa += d->prec1 ? (d->comps + 1) / 2 : d->comps;
+               pa += d->src == 0x20 ? 1
+                     : d->prec1     ? (d->comps + 1) / 2
+                                    : d->comps;
             if (d->dim2 || d->proj)
                pa++;
          }

@@ -18,6 +18,10 @@
  *   pass1/pass2           the multipass form: the lightmap, then the texture
  *                         blended GL_DST_COLOR, GL_ZERO at depth GL_EQUAL
  *   flat-shademodel       glShadeModel(GL_FLAT): the last vertex's colour
+ *   flat/smooth-alpha     a colour's alpha through a blend
+ *   flat/smooth-tex-*     a texture times the colour (GL_MODULATE), and blended
+ *                         by the texel's alpha (QuakeSpasm's particles, drawn
+ *                         under GL_FLAT)
  *
  *   sgx_multitex          prints PASS/FAIL per check, exit 0 when all pass
  *
@@ -397,6 +401,76 @@ int main(void)
       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, ti);
       CHECK("flat-shademodel", 4, 4, 0, 255, 0);
       CHECK("flat-shademodel", 20, 4, 0, 255, 0);
+      glShadeModel(GL_SMOOTH);
+   }
+
+   /* a flat colour with a texture (a particle: glShadeModel(GL_FLAT)
+    * left on, a textured MODULATE quad with a colour per vertex; and the flat
+    * colour's alpha through a blend */
+   {
+      G(PFNGLSHADEMODELPROC, glShadeModel);
+      float q[16] = {0, 0, 0, 1, W, 0, 0, 1, W, H, 0, 1, 0, H, 0, 1};
+      float qst[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+      unsigned short qi[6] = {0, 1, 2, 0, 2, 3};
+      unsigned char white[16], halfg[16], cyanish[16];
+      memset(white, 255, sizeof(white));
+      for (int v = 0; v < 4; v++) {
+         unsigned char hg[4] = {0, 255, 0, 128}, cy[4] = {128, 255, 255, 255};
+         memcpy(halfg + 4 * v, hg, 4);
+         memcpy(cyanish + 4 * v, cy, 4);
+      }
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_BLEND);
+      glActiveTexture(GL_TEXTURE1);
+      glDisable(GL_TEXTURE_2D);
+      glClientActiveTexture(GL_TEXTURE1);
+      glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+      glActiveTexture(GL_TEXTURE0);
+      glClientActiveTexture(GL_TEXTURE0);
+      glVertexPointer(3, GL_FLOAT, 16, q);
+      for (int flat = 0; flat < 2; flat++) {
+         char nm[64];
+         glShadeModel(flat ? GL_FLAT : GL_SMOOTH);
+         /* untextured green, alpha 128, over red */
+         glDisable(GL_TEXTURE_2D);
+         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+         glClearColor(1, 0, 0, 1);
+         glClear(GL_COLOR_BUFFER_BIT);
+         glEnable(GL_BLEND);
+         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+         glColorPointer(4, GL_UNSIGNED_BYTE, 0, halfg);
+         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, qi);
+         snprintf(nm, sizeof(nm), "%s-alpha", flat ? "flat" : "smooth");
+         CHECK(nm, 32, 32, 127, 128, 0);
+         glDisable(GL_BLEND);
+         /* unit 0's texture (left red, right green), MODULATE */
+         glEnable(GL_TEXTURE_2D);
+         glBindTexture(GL_TEXTURE_2D, tex[0]);
+         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+         glTexCoordPointer(2, GL_FLOAT, 0, qst);
+         glClearColor(0, 0, 1, 1);
+         for (int c = 0; c < 2; c++) {
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColorPointer(4, GL_UNSIGNED_BYTE, 0, c ? cyanish : white);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, qi);
+            snprintf(nm, sizeof(nm), "%s-tex-%s", flat ? "flat" : "smooth",
+                     c ? "cyanish" : "white");
+            CHECK(nm, 8, 32, c ? 128 : 255, 0, 0);
+            CHECK(nm, 56, 32, 0, 255, 0);
+         }
+         /* blended by the texel's alpha (a particle): the red texel's alpha
+          * 255, so the left half is the texel times the colour */
+         glEnable(GL_BLEND);
+         glClear(GL_COLOR_BUFFER_BIT);
+         glColorPointer(4, GL_UNSIGNED_BYTE, 0, white);
+         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, qi);
+         snprintf(nm, sizeof(nm), "%s-tex-blend", flat ? "flat" : "smooth");
+         CHECK(nm, 8, 32, 255, 0, 0);
+         glDisable(GL_BLEND);
+         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+         glDisable(GL_TEXTURE_2D);
+      }
       glShadeModel(GL_SMOOTH);
    }
 

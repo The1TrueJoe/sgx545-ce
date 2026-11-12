@@ -816,14 +816,22 @@ varyings_match(const struct sgxws_prog *vs, const struct sgxws_prog *fs)
    for (unsigned i = 0; i < fs->n_douti; i++) {
       const struct sgx_pds_douti *d = &fs->douti[i];
       unsigned need[2][2] = {{0, 0}}, n = 0;
+      /* (with the vertex colour in set 0 a set's source is the set itself) */
+      unsigned base = vs->colour ? 0 : 1;
 
       /* plain iteration: source set + 1; source 0 (gl_FragCoord) and sources
        * from 0x20 on are not varyings (0x22: the depth plane of a discard) */
       if (d->iterate && d->src > 0 && d->src < 0x20)
-         need[n][0] = d->src - 1, need[n++][1] = d->comps;
+         need[n][0] = d->src - base, need[n++][1] = d->comps;
+      /* the vertex colour (set 0, output select b11) */
+      if (d->iterate && d->src == 0x20) {
+         if (!vs->colour)
+            return false;
+         need[n][0] = 0, need[n++][1] = 4;
+      }
       if (d->dim2 ||
           d->proj) /* sample half: coordinate set + 1, 2-D or projected */
-         need[n][0] = d->sample_set - 1, need[n++][1] = d->proj ? 3 : 2;
+         need[n][0] = d->sample_set - base, need[n++][1] = d->proj ? 3 : 2;
       for (unsigned k = 0; k < n; k++) {
          unsigned size = (vs->tsp_sizes >> (3 * need[k][0])) & 7;
 

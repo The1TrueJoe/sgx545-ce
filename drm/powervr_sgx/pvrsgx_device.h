@@ -18,10 +18,14 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
+#ifdef CONFIG_X86
+#include <asm/set_memory.h>
+#endif
+
 #include "pvrsgx_core.h"
 #include "pvrsgx_hw.h"
 
-/* Device-wide ranges for kernel-owned objects (docs/UAPI.md section 5). */
+/* Device-wide ranges for kernel-owned objects. */
 enum pvrsgx_krange {
 	PVRSGX_KRANGE_KDATA,	/* firmware only */
 	PVRSGX_KRANGE_KCODE,	/* firmware only */
@@ -60,7 +64,7 @@ struct pvrsgx_kmem {
 	void *cpu;
 };
 
-/* Firmware-visible buffers, in the allocation order docs/SRVINIT.md lists. */
+/* Firmware-visible buffers, in the vendor init's allocation order. */
 enum pvrsgx_fw_buf {
 	PVRSGX_FW_CCB,		/* kernel CCB: 256 commands */
 	PVRSGX_FW_CCBCTL,	/* its write and read offsets */
@@ -119,8 +123,6 @@ struct pvrsgx_device {
 	struct drm_device base;
 	/** @pdev: The SGX PCI function (CE5300), or NULL behind gma500 (Cedarview). */
 	struct pci_dev *pdev;
-	/** @dma_parms: DMA parameters of the gma500 auxiliary device. */
-	struct device_dma_parameters dma_parms;
 	/** @gma_sgx: The gma500 auxiliary device behind which the SGX sits, or NULL. */
 	struct gma500_sgx_device *gma_sgx;
 	/** @irq_work: The interrupt's bottom half behind gma500, which owns the line. */
@@ -167,13 +169,21 @@ struct pvrsgx_device {
 	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
+	/** @reset_lock: Serializes a GPU reset with unbind. */
+	struct mutex reset_lock;
+	/** @faulted: The BIF reported a page fault; the running job ends with -EFAULT. */
+	bool faulted;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
 	/** @ccb_spin: Keeps @ccb_issued and the write offset in step for readers. */
 	spinlock_t ccb_spin;
-	/** @ccb_issued: Commands written to the kernel CCB since the firmware started. */
+	/** @ccb_issued: Commands written to the kernel CCB since load, across restarts. */
 	u64 ccb_issued;
+	/** @inval_lock: Protects @inval_waits. */
+	spinlock_t inval_lock;
+	/** @inval_waits: &struct pvrsgx_inval_wait for invalidates not yet taken. */
+	struct list_head inval_waits;
 
 	/** @sched: The one scheduler; one job on the GPU at a time. */
 	struct drm_gpu_scheduler sched;
@@ -189,10 +199,6 @@ struct pvrsgx_device {
 	struct list_head active;
 	/** @last_fence: Hardware fence of the job last sent to the firmware. */
 	struct dma_fence *last_fence;
-	/** @last_ctx: That job's context; compared only while @last_fence is pending. */
-	struct pvrsgx_context *last_ctx;
-	/** @last_type: That job's type. */
-	u32 last_type;
 	/** @poll_work: Checks completions while jobs are out. */
 	struct delayed_work poll_work;
 
@@ -206,14 +212,29 @@ struct pvrsgx_device {
 	/** @pb_lock: Serializes @pb's creation. */
 	struct mutex pb_lock;
 
-	/** @kobj_lock: Protects @krange and @graveyard. */
+	/** @kobj_lock: Protects @krange, @graveyard and @kobj_unmapped. */
 	struct mutex kobj_lock;
 	/** @krange: Allocators of the device-wide kernel object ranges. */
 	struct drm_mm krange[PVRSGX_KRANGE_COUNT];
 	/** @graveyard: Released kernel objects the firmware may still read. */
 	struct list_head graveyard;
+	/** @kobj_unmapped: Unmapped kernel objects waiting for a BIF TLB invalidate. */
+	struct list_head kobj_unmapped;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
+	/**
+	 * @done_seq: Jobs signalled since the microkernel started, against its
+	 * count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
+	 */
+	u32 done_seq;
+	/** @restarts: Microkernel restarts; graveyard entries from before one can go. */
+	u32 restarts;
+	/** @coredump_work: Hands a hang's dump to devcoredump, outside the reset. */
+	struct work_struct coredump_work;
+	/** @coredump: The dump waiting for @coredump_work, or NULL (@fence_lock). */
+	void *coredump;
+	/** @coredump_len: Its length. */
+	size_t coredump_len;
 	/** @renders_done: Render jobs the firmware has finished. */
 	u64 renders_done;
 	/** @reap_work: Frees @graveyard entries a later render made safe. */
@@ -264,12 +285,33 @@ static inline u32 pvrsgx_dirlist_edm(const struct pvrsgx_device *sdev)
 	return sdev->family->num_dir_lists - 1;
 }
 
+/*
+ * The GPU doesn't snoop, so the CPU maps what it shares write-combined. Only
+ * x86 has the call; elsewhere (COMPILE_TEST) it is a no-op.
+ */
+static inline int pvrsgx_pages_wc(struct page **pages, int n)
+{
+#ifdef CONFIG_X86
+	return set_pages_array_wc(pages, n);
+#else
+	return 0;
+#endif
+}
+
+static inline void pvrsgx_pages_wb(struct page **pages, int n)
+{
+#ifdef CONFIG_X86
+	set_pages_array_wb(pages, n);
+#endif
+}
+
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
-		      u32 dev_addr, u32 size, u32 pte_flags);
+		      u32 dev_addr, u32 size, u32 pte_flags, gfp_t gfp);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
+void pvrsgx_kmem_release(struct pvrsgx_kmem *km);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
-void pvrsgx_device_fini(struct pvrsgx_device *sdev);
+void pvrsgx_device_unplug(struct pvrsgx_device *sdev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);

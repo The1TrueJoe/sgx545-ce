@@ -363,7 +363,7 @@ and every field below that it sets is hardware.
 
 | bits | meaning | status |
 |---|---|---|
-| 11–16 | source: texture coordinate set + 1 (TC slot from the GL varying map); 0 = the fragment's position (gl_FragCoord: `27800000` x3, `27c00000` x4: x and y at pixel centers in the target's memory order, z, then 1/w; capture `fragcoord`, `fragcoordw`, 2026-11-02); 0x20 = color (`0x1c10000`); 0x22 = the depth plane a discard's `pcoeff` reads, x3 (ISA.md "Phases, visibility feedback and discard") | capture |
+| 11–16 | source: texture coordinate set + 1 (TC slot from the GL varying map); 0 = the fragment's position (gl_FragCoord: `27800000` x3, `27c00000` x4: x and y at pixel centers in the target's memory order, z, then 1/w; capture `fragcoord`, `fragcoordw`, 2026-11-02); 0x20 = color (`0x1c10000`; with b21 = 0 it arrives packed BGRA8 in one dword, pa0: STATE.md "Output select and TSP words"); 0x22 = the depth plane a discard's `pcoeff` reads, x3 (ISA.md "Phases, visibility feedback and discard") | capture |
 | 21 | color iterator at precision < 2 | capture; meaning of the precision values guessed |
 | 22–23 | components − 1 (forced 4 for color) | hardware; capture |
 | 24 | plain iteration enabled | hardware; capture |

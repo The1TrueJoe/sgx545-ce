@@ -1,0 +1,41 @@
+From: Joseph Telaak <joseph@telaak.dev>
+Subject: [PATCH] drm/gem-shmem: Map pages for the DMA device
+
+A DRM device whose DMA goes through another device sets it with
+drm_dev_set_dma_dev(). The DMA helper allocates and maps for that
+device, and PRIME imports attach with it, but the shmem helper still
+maps and unmaps its pages for drm_device.dev. On such a device that is
+a struct device without DMA ops or a DMA mask.
+
+Map and unmap shmem pages for drm_dev_dma_dev(), as the DMA helper
+does. Nothing changes for drivers that don't set a DMA device.
+---
+--- a/drivers/gpu/drm/drm_gem_shmem_helper.c
++++ b/drivers/gpu/drm/drm_gem_shmem_helper.c
+@@ -175,7 +175,7 @@
+ {
+ 	dma_resv_assert_held(shmem->base.resv);
+ 
+-	dma_unmap_sgtable(shmem->base.dev->dev, shmem->sgt, DMA_BIDIRECTIONAL, 0);
++	dma_unmap_sgtable(drm_dev_dma_dev(shmem->base.dev), shmem->sgt, DMA_BIDIRECTIONAL, 0);
+ 	sg_free_table(shmem->sgt);
+ 	kfree(shmem->sgt);
+ 	shmem->sgt = NULL;
+@@ -535,7 +535,7 @@
+ 
+ 	drm_WARN_ON(obj->dev, !drm_gem_shmem_is_purgeable(shmem));
+ 
+-	dma_unmap_sgtable(dev->dev, shmem->sgt, DMA_BIDIRECTIONAL, 0);
++	dma_unmap_sgtable(drm_dev_dma_dev(dev), shmem->sgt, DMA_BIDIRECTIONAL, 0);
+ 	sg_free_table(shmem->sgt);
+ 	kfree(shmem->sgt);
+ 	shmem->sgt = NULL;
+@@ -854,7 +854,7 @@
+ 		goto err_put_pages;
+ 	}
+ 	/* Map the pages for use by the h/w. */
+-	ret = dma_map_sgtable(obj->dev->dev, sgt, DMA_BIDIRECTIONAL, 0);
++	ret = dma_map_sgtable(drm_dev_dma_dev(obj->dev), sgt, DMA_BIDIRECTIONAL, 0);
+ 	if (ret)
+ 		goto err_free_sgt;
+ 

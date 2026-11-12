@@ -867,6 +867,51 @@ TEST_F(sgx_compile_test, fragment_flat_varyings)
    }
 }
 
+/* integer division by a power of two as the GLSL front end lowers it,
+ * isign(i) * (iabs(i) >> 2), and a shift left and an arithmetic shift right
+ * by constants: all become float arithmetic (integers are floats here) */
+TEST_F(sgx_compile_test, fragment_int_division_and_shifts)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, a);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, v, 0));
+   nir_def *j = nir_f2i32(&b, nir_channel(&b, v, 1));
+   nir_def *q =
+      nir_imul(&b, nir_isign(&b, i), nir_ushr_imm(&b, nir_iabs(&b, i), 2));
+   nir_def *l = nir_ishl_imm(&b, j, 3);
+   nir_def *r = nir_ishr_imm(&b, j, 1);
+   nir_store_var(&b, col,
+                 nir_vec4(&b, nir_i2f32(&b, q), nir_i2f32(&b, l),
+                          nir_i2f32(&b, r), nir_imm_float(&b, 1)),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+}
+
+/* an integer op with no float form fails to compile, with an error */
+TEST_F(sgx_compile_test, fragment_unsupported_int_op_fails)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *a =
+      var(nir_var_shader_in, glsl_vec4_type(), "a", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, nir_load_var(&b, a), 0));
+   nir_def *c = nir_bit_count(&b, i);
+   nir_store_var(&b, col,
+                 nir_vec4(&b, nir_i2f32(&b, c), nir_imm_float(&b, 0),
+                          nir_imm_float(&b, 0), nir_imm_float(&b, 1)),
+                 0xf);
+   EXPECT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("unsupported integer op"),
+             std::string::npos)
+      << (out.log ? out.log : "");
+}
+
 /* split_phases: an alpha-tested texture program becomes phase 0 (the test
  * into p1, ending in the feedback nop) and phase 1 (the colour); phase 0
  * writes no PA register (the inputs phase 1 reads) */
@@ -1008,6 +1053,68 @@ TEST_F(sgx_compile_test, fragment_discard_one_phase)
    for (unsigned i = 0; i < out.n_blocks; i++)
       feedback |= out.blocks[i].kind == SGX_BLOCK_FEEDBACK;
    EXPECT_TRUE(feedback);
+}
+
+/* an alpha test a uniform gates, between the sample and the colour math (an
+ * alias-model shader's): phase 0 ends in the feedback nop */
+TEST_F(sgx_compile_test, fragment_uniform_gated_discard_ends_in_feedback)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec4_type(), "uv", VARYING_SLOT_VAR0);
+   nir_variable *c4 =
+      var(nir_var_shader_in, glsl_vec4_type(), "c", VARYING_SLOT_VAR1);
+   nir_variable *on = var(nir_var_uniform, glsl_float_type(), "on", -1);
+   nir_variable *smp =
+      var(nir_var_uniform,
+          glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+          "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_trim_vector(&b, nir_load_var(&b, uv), 2);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_def *keep =
+      nir_fmul(&b, nir_sne(&b, nir_load_var(&b, on), nir_imm_float(&b, 0.0)),
+               nir_slt(&b, nir_channel(&b, t, 3), nir_imm_float(&b, 0.666)));
+   nir_discard_if(&b, nir_fneu_imm(&b, keep, 0.0));
+   nir_def *v = nir_fmul(&b, t, nir_load_var(&b, c4));
+   nir_store_var(&b, col, nir_fsat(&b, nir_fmul_imm(&b, v, 2.0)), 0xf);
+
+   for (int split = 0; split < 2; split++) {
+      split_phases = split;
+      ASSERT_TRUE(compile()) << out.log;
+      EXPECT_TRUE(out.discards);
+      ASSERT_GT(out.n_code, 0u);
+      EXPECT_EQ(out.code[out.n_code - 1], (uint64_t)0xf8000140u << 32)
+         << disasm();
+   }
+}
+
+/* a discard on a condition that folds to false (an RGB texture's alpha, 1,
+ * tested < 0.666): no discard left, no feedback point, drawn as opaque */
+TEST_F(sgx_compile_test, fragment_folded_discard_has_no_feedback)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_discard_if(&b, nir_flt_imm(&b, nir_imm_float(&b, 1.0), 0.666));
+   nir_store_var(&b, col, v, 0xf);
+
+   split_phases = true;
+   ASSERT_TRUE(compile()) << out.log;
+   EXPECT_FALSE(out.discards);
+   EXPECT_EQ(out.n_code1, 0u);
+   for (unsigned i = 0; i < out.n_blocks; i++)
+      EXPECT_NE(out.blocks[i].kind, SGX_BLOCK_FEEDBACK);
 }
 
 /* more constants than SA holds: the rest are loaded from memory (ld.a.d) */

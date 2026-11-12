@@ -24,18 +24,22 @@ static struct pvrsgx_device *kobj_test_device(struct kunit *test)
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev->kernel_mmu);
 	mutex_init(&sdev->ccb_lock);
+	spin_lock_init(&sdev->ccb_spin);
+	spin_lock_init(&sdev->inval_lock);
+	INIT_LIST_HEAD(&sdev->inval_waits);
 	mutex_init(&sdev->pb_lock);
 	pvrsgx_kobj_init(sdev);
 	return sdev;
 }
 
-/* What pvrsgx_device_fini() does with them; every range must come back empty. */
+/* What the device release does with them; every range must come back empty. */
 static void kobj_test_fini(struct kunit *test, struct pvrsgx_device *sdev)
 {
 	pvrsgx_pb_put(sdev->pb);
 	sdev->pb = NULL;
 	pvrsgx_kobj_fini(sdev);
 	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->kobj_unmapped));
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		KUNIT_EXPECT_TRUE_MSG(test, drm_mm_clean(&sdev->krange[r]), "range %d", r);
 	pvrsgx_mmu_destroy(sdev->kernel_mmu);
@@ -92,9 +96,98 @@ static void kobj_test_vm_gone_first(struct kunit *test)
 	kobj_test_fini(test, sdev);
 }
 
+/*
+ * A reaped object is unmapped at once, but its pages and address wait until
+ * the microkernel has taken a command after it: that command's cache control
+ * invalidates the BIF TLB, which may still translate the old pages.
+ */
+static void kobj_test_free_after_invalidate(struct kunit *test)
+{
+	struct pvrsgx_device *sdev = kobj_test_device(test);
+	u32 *ccbctl = kunit_kzalloc(test, 2 * sizeof(u32), GFP_KERNEL);
+	struct pvrsgx_kobj *o = NULL;
+	u32 addr;
+
+	KUNIT_ASSERT_NOT_NULL(test, ccbctl);
+	/* An empty ring: everything issued is consumed. */
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = ccbctl;
+	KUNIT_ASSERT_EQ(test, pvrsgx_kobj_new(sdev, &o, PVRSGX_KRANGE_KDATA, PAGE_SIZE, 0, NULL),
+			0);
+	addr = kobj_va(o);
+	sdev->fw.cache_control = 0;
+
+	/* Released before render 1, which has finished. */
+	pvrsgx_kobj_drop(sdev, &o);
+	pvrsgx_kobj_reap(sdev, 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
+	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->kobj_unmapped));
+	KUNIT_EXPECT_TRUE(test, pvrsgx_mmu_range_empty(sdev->kernel_mmu, addr, PAGE_SIZE));
+	KUNIT_EXPECT_EQ(test, sdev->fw.cache_control & PVRSGX_CC_INVAL_BIF_PT,
+			PVRSGX_CC_INVAL_BIF_PT);
+	KUNIT_EXPECT_FALSE(test, drm_mm_clean(&sdev->krange[PVRSGX_KRANGE_KDATA]));
+
+	/* No command since: still held. */
+	pvrsgx_kobj_reap(sdev, 1);
+	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->kobj_unmapped));
+
+	/* The next command was sent and taken. */
+	sdev->ccb_issued++;
+	pvrsgx_kobj_reap(sdev, 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->kobj_unmapped));
+	KUNIT_EXPECT_TRUE(test, drm_mm_clean(&sdev->krange[PVRSGX_KRANGE_KDATA]));
+
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = NULL;
+	kobj_test_fini(test, sdev);
+}
+
+struct kobj_test_wait {
+	struct pvrsgx_inval_wait w;
+	bool done;
+};
+
+static void kobj_test_wait_done(struct pvrsgx_inval_wait *w)
+{
+	container_of(w, struct kobj_test_wait, w)->done = true;
+}
+
+/* What an unmap freed waits for the command that carries the invalidate. */
+static void kobj_test_after_invalidate(struct kunit *test)
+{
+	struct pvrsgx_device *sdev = kobj_test_device(test);
+	u32 *ccbctl = kunit_kzalloc(test, 2 * sizeof(u32), GFP_KERNEL);
+	struct kobj_test_wait t = { .w.done = kobj_test_wait_done };
+
+	KUNIT_ASSERT_NOT_NULL(test, ccbctl);
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = ccbctl;
+	sdev->fw.cache_control = 0;
+
+	pvrsgx_ccb_after_invalidate(sdev, &t.w, PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD);
+	KUNIT_EXPECT_EQ(test, sdev->fw.cache_control,
+			PVRSGX_CC_INVAL_BIF_PT | PVRSGX_CC_INVAL_BIF_PD);
+	pvrsgx_ccb_inval_reap(sdev, false);
+	KUNIT_EXPECT_FALSE(test, t.done);
+
+	/* The next command was sent and taken. */
+	sdev->ccb_issued++;
+	pvrsgx_ccb_inval_reap(sdev, false);
+	KUNIT_EXPECT_TRUE(test, t.done);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->inval_waits));
+
+	/* Once the GPU is lost, nothing waits. */
+	t.done = false;
+	WRITE_ONCE(sdev->lost, true);
+	pvrsgx_ccb_after_invalidate(sdev, &t.w, PVRSGX_CC_INVAL_BIF_PT);
+	KUNIT_EXPECT_TRUE(test, t.done);
+
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = NULL;
+	kobj_test_fini(test, sdev);
+}
+
 static struct kunit_case pvrsgx_kobj_test_cases[] = {
 	KUNIT_CASE(kobj_test_vm_held_by_graveyard),
 	KUNIT_CASE(kobj_test_vm_gone_first),
+	KUNIT_CASE(kobj_test_free_after_invalidate),
+	KUNIT_CASE(kobj_test_after_invalidate),
 	{}
 };
 

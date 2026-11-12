@@ -11,8 +11,8 @@
  * (CREATE_RT_DATASET), the TA command.  The client keeps what the hardware
  * reads as data, in its own VM: VDM streams, TA state, PDS and USSE programs,
  * vertices, textures, surfaces.  A frame is one SUBMIT_JOBS render job whose
- * client parts are CMD_RENDER and CMD_TA_KICK streams (docs/UAPI.md section
- * 3), written by the packers generated from powervr_sgx_kmd_stream.xml.
+ * client parts are the render and TA kick command structs of the uAPI header
+ * (docs/UAPI.md section 3), with the SGX545 extension for the ZLS words.
  *
  * Addresses: the client picks every mapping's address in the heaps
  * DEV_QUERY returns.  USSE code lives in code objects, which have no CPU
@@ -47,7 +47,6 @@
 #include "util/simple_mtx.h"
 #include "util/vma.h"
 
-#include "powervr_sgx_kmd_stream.h"
 #include "sgx_frame.h"
 
 /* A scene as two TA kicks: the frame's stream, then one with only the
@@ -73,9 +72,13 @@ struct zombie {
    uint64_t point;
 };
 
+/* the uAPI revision this backend speaks: the driver's DRM minor version */
+#define PSGX_UAPI_REVISION 3
+
 struct psgx_dev {
    struct sgxws_dev base;
    int fd;
+   uint64_t render_exts; /* the render extensions this core accepts */
    bool lost;         /* -EIO: the GPU couldn't be recovered; nothing is sent */
    unsigned pb_pages; /* the parameter buffer's size (0: the kernel's) */
    uint32_t vm;       /* VM context */
@@ -161,18 +164,48 @@ timeline_value(struct psgx_dev *dd)
 
 /* ------------------------------------------------------------------ memory */
 
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+/* VM_BIND: ops applied in order, all or nothing; synchronous */
+static int
+vm_bind(struct psgx_dev *dd, struct drm_powervr_sgx_vm_bind_op *ops, unsigned n)
+{
+   struct drm_powervr_sgx_ioctl_vm_bind_args a = {
+      .vm_context_handle = dd->vm,
+      .flags = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC,
+      .ops = {.stride = sizeof(*ops), .count = n, .array = (uintptr_t)ops},
+   };
+
+   return xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_BIND, &a);
+}
+
+static struct drm_powervr_sgx_vm_bind_op
+unmap_op(uint64_t va, uint64_t size)
+{
+   return (struct drm_powervr_sgx_vm_bind_op){
+      .op = DRM_POWERVR_SGX_VM_BIND_OP_UNMAP,
+      .device_addr = va,
+      .size = size,
+   };
+}
+#endif
+
 static void
 vm_unmap(struct psgx_dev *dd, uint64_t va, uint64_t size)
 {
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+   struct drm_powervr_sgx_vm_bind_op op = unmap_op(va, size);
+   int e = vm_bind(dd, &op, 1);
+#else
    struct drm_powervr_sgx_ioctl_vm_unmap_args a = {
       .vm_context_handle = dd->vm,
       .device_addr = va,
       .size = size,
    };
    int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
+#endif
 
    if (e)
-      mesa_loge("sgx: VM_UNMAP %#llx +%#llx failed: %d", (unsigned long long)va,
+      mesa_loge("sgx: VM unmap %#llx +%#llx failed: %d", (unsigned long long)va,
                 (unsigned long long)size, e);
 }
 
@@ -196,6 +229,28 @@ reap(struct psgx_dev *dd, bool all)
    if (all)
       timeline_wait(dd, dd->point, 5000);
    done = timeline_value(dd);
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+   /* the done ones' unmaps in as few VM_BINDs as the kernel takes */
+   {
+      struct drm_powervr_sgx_vm_bind_op ops[256];
+      unsigned nops = 0;
+
+      for (unsigned i = 0; i < dd->n_zombies; i++) {
+         struct zombie *z = &dd->zombies[i];
+
+         if (z->point > done && !all)
+            continue;
+         ops[nops++] = unmap_op(z->va, z->size);
+         if (nops == ARRAY_SIZE(ops)) {
+            if (vm_bind(dd, ops, nops))
+               mesa_loge("sgx: VM unmap of %u buffers failed", nops);
+            nops = 0;
+         }
+      }
+      if (nops && vm_bind(dd, ops, nops))
+         mesa_loge("sgx: VM unmap of %u buffers failed", nops);
+   }
+#endif
    for (unsigned i = 0; i < dd->n_zombies; i++) {
       struct zombie *z = &dd->zombies[i];
 
@@ -203,7 +258,9 @@ reap(struct psgx_dev *dd, bool all)
          dd->zombies[n++] = *z;
          continue;
       }
+#ifndef DRM_IOCTL_POWERVR_SGX_VM_BIND
       vm_unmap(dd, z->va, z->size);
+#endif
       gem_close(dd, z->handle);
       util_vma_heap_free(&dd->vma[z->heap], z->va, z->size);
    }
@@ -228,6 +285,16 @@ va_alloc(struct psgx_dev *dd, enum sgx_heap heap, uint64_t size, uint64_t align)
 static int
 vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
 {
+#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
+   struct drm_powervr_sgx_vm_bind_op op = {
+      .op = DRM_POWERVR_SGX_VM_BIND_OP_MAP,
+      .handle = handle,
+      .device_addr = va,
+      .size = size,
+   };
+
+   return vm_bind(dd, &op, 1);
+#else
    struct drm_powervr_sgx_ioctl_vm_map_args a = {
       .vm_context_handle = dd->vm,
       .device_addr = va,
@@ -236,6 +303,7 @@ vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
    };
 
    return xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a);
+#endif
 }
 
 static int
@@ -438,6 +506,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
       dd->has_heap[SGX_HEAP_TEXTURE] ? SGX_HEAP_TEXTURE : SGX_HEAP_GENERAL;
    impl->shared = true;
    impl->refs = 1;
+   impl->base.cpu_dirty = true; /* the CPU's lines before it was ours */
    impl->dmabuf_fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
    impl->map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
    if (impl->map == MAP_FAILED) {
@@ -768,35 +837,85 @@ shared_signal(struct psgx_dev *dd, const struct shared_use *sh, unsigned n)
    close(fd);
 }
 
+/* The bytes of shared buffers the kernel keeps coherent with the CPU around
+ * the job (UAPI.md D6): the frame's damage of a linear target, which it writes;
+ * the whole of any other buffer it writes, or of one the CPU wrote since a job
+ * last flushed it.  A buffer the job only reads, clean, needs nothing: the GPU
+ * reads memory.  The render rewrites the target's other tiles as it loaded
+ * them, which needs no flush either. */
+static unsigned
+cache_ranges(struct sgxws_ctx *c, const struct shared_use *sh, unsigned n_sh,
+             struct drm_powervr_sgx_cache_range *r)
+{
+   const struct psgx_bo *target = c->target.bo ? dbo(c->target.bo) : NULL;
+   const struct sgxws_rect *d = &c->damage;
+   unsigned n = 0;
+
+   for (unsigned i = 0; i < n_sh; i++) {
+      struct psgx_bo *bo = sh[i].bo;
+      uint32_t whole = 0;
+
+      if (bo->base.cpu_dirty)
+         whole |= DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ;
+      if (bo == target && !sgxws_target_twiddled(&c->target)) {
+         uint32_t pitch = c->target.stride * 4,
+                  x1 = MIN2(d->x1, c->rt->w), y1 = MIN2(d->y1, c->rt->h);
+
+         if (c->draws && x1 > d->x0 && y1 > d->y0)
+            r[n++] = (struct drm_powervr_sgx_cache_range){
+               .handle = bo->handle,
+               .flags = DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE,
+               .offset = (uint64_t)(c->target.va - bo->va) +
+                         (uint64_t)d->y0 * pitch + d->x0 * 4,
+               .size = (x1 - d->x0) * 4,
+               .stride = pitch,
+               .rows = y1 - d->y0,
+            };
+      } else if (sh[i].write) {
+         whole |= DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE;
+      }
+      if (whole)
+         r[n++] = (struct drm_powervr_sgx_cache_range){
+            .handle = bo->handle,
+            .flags = whole,
+            .size = bo->base.size,
+         };
+      bo->base.cpu_dirty = false;
+   }
+   return n;
+}
+
 static int
 psgx_kick(struct sgxws_ctx *c, uint32_t seq)
 {
    struct psgx_dev *dd = ddev(c->dev);
    struct psgx_ctx *k = c->k;
    uint32_t pds = c->dev->heap_base[SGX_HEAP_PDSPIXEL];
-   struct SGX_KMD_STREAM_CMD_RENDER render = {
+   struct drm_powervr_sgx_cmd_render render = {
+      .head.size = sizeof(render),
       .pixel_event_pds_addr = c->pixev,
       .pixel_event_pds_rows = c->pixev_rows,
       .bg_pds_secondary_addr = pds + ((c->bg_pds[0] & 0x3ffffff) << 4),
       .bg_pds_secondary_rows = c->bg_pds[0] >> 26,
       .bg_pds_primary_addr = pds + ((c->bg_pds[2] & 0x3ffffff) << 4),
       .bg_pds_primary_rows = c->bg_pds[2] >> 26,
-      .bg_depth = sgxws_f32(1.0f),
+      .bg_depth_f32 = sgxws_f32(1.0f),
       .depth_bias_units = c->bias_units,
-      .depth_bias_factor = sgxws_f32(c->bias_factor),
+      .depth_bias_factor_f32 = sgxws_f32(c->bias_factor),
+   };
+   struct drm_powervr_sgx_ext_sgx545_render zls = {
+      .base.name = DRM_POWERVR_SGX_EXT_SGX545_RENDER,
    };
    uint32_t pad = sgxws_zls_pixels(c->rt->w, c->rt->h);
-   uint64_t render_buf[SGX_KMD_STREAM_CMD_RENDER_length / 8];
-   uint64_t kick_buf[TA_KICKS][(SGX_KMD_STREAM_CMD_TA_KICK_length + 7) / 8];
-   struct drm_powervr_sgx_ta_kick kicks[TA_KICKS];
+   struct drm_powervr_sgx_cmd_ta_kick kicks[TA_KICKS];
    struct shared_use sh[ARRAY_SIZE(c->use) + 1];
-   struct drm_powervr_sgx_bo_ref refs[ARRAY_SIZE(sh)];
+   struct drm_powervr_sgx_cache_range ranges[ARRAY_SIZE(sh) + 1];
    struct drm_powervr_sgx_sync_op ops[3];
    struct drm_powervr_sgx_job job;
    struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
       .jobs = {.stride = sizeof(job), .count = 1, .array = (uintptr_t)&job},
    };
-   unsigned n_sh = 0, n_ops = 0;
+   unsigned n_sh = 0, n_ops = 0, n_ranges;
    uint64_t point, t0;
    int e = 0;
 
@@ -811,43 +930,36 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
          dd->lost = true;
    }
 
-   /* the scene's stream (it ends with the terminate words), then a stream
-    * of the terminate words alone */
+   /* the scene's VDM stream (it ends with the terminate words), then one of
+    * the terminate words alone */
    for (unsigned i = 0; i < TA_KICKS; i++) {
-      struct SGX_KMD_STREAM_CMD_TA_KICK ta = {.vdm_base = c->vdm_start};
-
+      kicks[i] = (struct drm_powervr_sgx_cmd_ta_kick){
+         .head.size = sizeof(kicks[i]),
+         .vdm_base = c->vdm_start,
+      };
       if (i) {
-         ta.vdm_base = c->vdm.bo.va + ((c->vdm.used + 3) & ~3u);
+         kicks[i].vdm_base = c->vdm.bo.va + ((c->vdm.used + 3) & ~3u);
          sgxws_vdm_end(c);
       }
-      kicks[i] = (struct drm_powervr_sgx_ta_kick){
-         .cmd_stream = (uintptr_t)kick_buf[i],
-         .cmd_stream_len = SGX_KMD_STREAM_CMD_TA_KICK_pack(kick_buf[i], &ta),
-      };
    }
-   if (c->target.zls_va) {
+   if (c->target.zls_va &&
+       (dd->render_exts & BITFIELD64_BIT(DRM_POWERVR_SGX_EXT_SGX545_RENDER))) {
       /* the kernel adds the tile count and the ZLS base */
       render.depth_addr = c->target.zls_va;
       render.stencil_addr = c->target.zls_va + pad * 4;
-      render.zls_control = SGXWS_ZLS_BASE | SGXWS_ZLS_STORE |
-                           (c->target.zls_load ? SGXWS_ZLS_LOAD : 0);
+      zls.zls_control = SGXWS_ZLS_BASE | SGXWS_ZLS_STORE |
+                        (c->target.zls_load ? SGXWS_ZLS_LOAD : 0);
       /* the 3D flags of a render with a depth buffer (kick b19-20) [D] */
-      render.flags_3d = 0x180;
+      zls.flags_3d = 0x180;
+      render.head.extensions = (uintptr_t)&zls;
    }
-   SGX_KMD_STREAM_CMD_RENDER_pack(render_buf, &render);
 
    if (c->target.bo)
       add_shared(sh, &n_sh, c->target.bo, true);
    for (unsigned i = 0; i < c->n_use; i++)
       add_shared(sh, &n_sh, c->use[i].bo, c->use[i].write);
 
-   /* until the kernel flushes imports without it: the shared buffers'
-    * list, which is what makes it flush them around the job */
-   for (unsigned i = 0; i < n_sh; i++)
-      refs[i] = (struct drm_powervr_sgx_bo_ref){
-         .handle = sh[i].bo->handle,
-         .flags = sh[i].write ? DRM_POWERVR_SGX_BO_REF_FLAG_WRITE : 0,
-      };
+   n_ranges = cache_ranges(c, sh, n_sh, ranges);
 
    simple_mtx_lock(&dd->lock);
    point = ++dd->point;
@@ -873,14 +985,13 @@ psgx_kick(struct sgxws_ctx *c, uint32_t seq)
    job = (struct drm_powervr_sgx_job){
       .type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
       .context_handle = k->handle,
-      .cmd_stream = (uintptr_t)render_buf,
-      .cmd_stream_len = SGX_KMD_STREAM_CMD_RENDER_length,
+      .cmd = (uintptr_t)&render,
       .sync_ops = {.stride = sizeof(ops[0]),
                    .count = n_ops,
                    .array = (uintptr_t)ops},
-      .bo_refs = {.stride = sizeof(refs[0]),
-                  .count = n_sh,
-                  .array = (uintptr_t)refs},
+      .cache_ranges = {.stride = sizeof(ranges[0]),
+                       .count = n_ranges,
+                       .array = (uintptr_t)ranges},
       .ta_kicks = {.stride = sizeof(kicks[0]),
                    .count = TA_KICKS,
                    .array = (uintptr_t)kicks},
@@ -994,7 +1105,9 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    };
    struct drm_powervr_sgx_dev_query_gpu_info gi = {0};
    struct drm_powervr_sgx_dev_query_limits li = {0};
+   struct drm_powervr_sgx_dev_query_commands cq = {0};
    struct drm_powervr_sgx_ioctl_create_vm_context_args vm = {0};
+   drmVersionPtr ver;
    struct psgx_dev *dd = calloc(1, sizeof(*dd));
    struct sgxws_dev *d = &dd->base;
    uint64_t cap = 0;
@@ -1007,6 +1120,15 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    dd->pb_pages = opts->pb_pages;
    if (opts->trace)
       mesa_logw("sgx: SGX_TRACE is for the services driver; ignored");
+   ver = drmGetVersion(fd);
+   if (!ver || ver->version_minor < PSGX_UAPI_REVISION) {
+      mesa_loge("sgx: powervr_sgx speaks uAPI revision %d, this Mesa %d",
+                ver ? ver->version_minor : -1, PSGX_UAPI_REVISION);
+      drmFreeVersion(ver);
+      e = -ENODEV;
+      goto fail;
+   }
+   drmFreeVersion(ver);
    if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) || !cap) {
       mesa_loge("sgx: powervr_sgx without timeline syncobjs");
       e = -ENODEV;
@@ -1017,10 +1139,21 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
        (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &li,
                       sizeof(li))) ||
        (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET, &hi,
-                      sizeof(hi)))) {
+                      sizeof(hi))) ||
+       (e = dev_query(fd, DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET, &cq,
+                      sizeof(cq)))) {
       mesa_loge("sgx: DEV_QUERY failed: %d", e);
       goto fail;
    }
+   if (!(cq.job_types & BITFIELD_BIT(DRM_POWERVR_SGX_JOB_TYPE_RENDER))) {
+      mesa_loge("sgx: powervr_sgx doesn't offer render jobs on core %#x yet",
+                gi.core_id);
+      e = -ENODEV;
+      goto fail;
+   }
+   dd->render_exts = cq.render_exts;
+   if (!(dd->render_exts & BITFIELD64_BIT(DRM_POWERVR_SGX_EXT_SGX545_RENDER)))
+      mesa_logw("sgx: no SGX545 render extension: depth and stencil aren't stored");
    d->info.core_id = gi.core_id;
    d->info.core_revision = gi.core_revision;
    d->info.zero_copy = true;

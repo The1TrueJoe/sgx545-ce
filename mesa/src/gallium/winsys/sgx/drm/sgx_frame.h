@@ -86,10 +86,16 @@ struct sgxws_dev {
    unsigned ta_split; /* sgxws_dev_options */
 };
 
+/* the PBE writes the target twiddled, not in rows */
+bool sgxws_target_twiddled(const struct sgxws_target *t);
+
 /* a buffer's backend side; a backend's buffer embeds it first */
 struct sgxws_bo_impl {
    const struct sgxws_kif *kif;
    uint32_t size;
+   /* the CPU may have written it since a job last flushed it (shared buffers:
+    * the kernel then flushes it for the next job that uses it) */
+   bool cpu_dirty;
 };
 
 /* A ring: the persistent part up to mark, then one equal part per frame in
@@ -157,6 +163,7 @@ struct sgxws_ctx {
    int priority; /* sgxws_ctx_create's */
    /* program code, pixel [0] and vertex [1] (sgxws_usse_upload) */
    struct sgxws_code usse[2];
+   struct sgxws_bo code_hold[2]; /* SGX_CODE_WINDOW's space below the code */
    struct sgx_fixed_progs fixed; /* the fixed programs, assembled */
    struct sgxws_ring pds_pix, pds_vtx, gen, vdm;
    /* the end-of-tile programs: two code pools used in turn, each emptied
@@ -199,6 +206,9 @@ struct sgxws_ctx {
    float bias_factor;
    struct sgxws_rect
       clip; /* what the visible bits and the region clip are now */
+   /* what the frame's draws and clears may change: the union of their clips
+    * (empty: x1 <= x0) */
+   struct sgxws_rect damage;
    /* shared buffers it reads or writes (sgxws_use_bo) */
    unsigned n_use;
    struct {
@@ -297,7 +307,8 @@ int sgxws_bo_alloc_heap(struct sgxws_dev *d, struct sgxws_bo *bo,
 #define SGXWS_ATTRIBS_COLOR 0x10000003
 
 /* Upload a USSE program to the code heaps (phas.i targets in reloc[] are
- * relocated to where it lands).  Returns its device address. */
+ * relocated to where it lands, within its 512 KiB code base window).
+ * Returns its device address. */
 uint32_t sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
                            unsigned n, const uint8_t *reloc, unsigned nreloc);
 

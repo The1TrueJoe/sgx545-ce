@@ -1,1 +1,1 @@
-../../docs/uapi/stream/pvrsgx_cmd_checks.c
+../../docs/uapi/cmd/pvrsgx_cmd_checks.c

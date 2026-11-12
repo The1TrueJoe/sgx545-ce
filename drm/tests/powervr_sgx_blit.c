@@ -82,7 +82,11 @@ static struct buf bo(int heap, uint32_t size)
 		.flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
-	struct drm_powervr_sgx_ioctl_vm_map_args m = {};
+	struct drm_powervr_sgx_vm_bind_op op = { .op = DRM_POWERVR_SGX_VM_BIND_OP_MAP };
+	struct drm_powervr_sgx_ioctl_vm_bind_args m = {
+		.flags = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC,
+		.ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
+	};
 	struct buf b;
 	int e;
 
@@ -106,11 +110,11 @@ static struct buf bo(int heap, uint32_t size)
 	b.handle = cb.handle;
 	b.size = cb.size;
 	m.vm_context_handle = vm;
-	m.handle = cb.handle;
-	m.device_addr = heap_next[heap];
-	m.size = cb.size;
-	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_VM_MAP, &m)))
-		die("VM_MAP", e);
+	op.handle = cb.handle;
+	op.device_addr = heap_next[heap];
+	op.size = cb.size;
+	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_VM_BIND, &m)))
+		die("VM_BIND", e);
 	b.va = (uint32_t)heap_next[heap];
 	heap_next[heap] += cb.size;
 	return b;
@@ -182,11 +186,11 @@ static void programs(void)
 	put(&pdsc, X.pds_secondary, sec, SGXTEX_SECONDARY_WORDS);
 }
 
-/* One blit: sgxtex's words into client memory, the rest as a CMD_TRANSFER stream. */
+/* One blit: sgxtex's words into client memory, the rest as the transfer command. */
 static int blit(const struct sgxtex_surface *src, const struct sgxtex_surface *dst, int filter)
 {
 	struct sgxtex_blit b;
-	uint32_t s[12] = { 48 };
+	struct drm_powervr_sgx_cmd_transfer t = { .head.size = sizeof(t) };
 	struct drm_powervr_sgx_sync_op op = {
 		.handle = syncobj,
 		.flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL |
@@ -195,7 +199,7 @@ static int blit(const struct sgxtex_surface *src, const struct sgxtex_surface *d
 	struct drm_powervr_sgx_job j = {
 		.type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER, .context_handle = ctx,
 		.flags = dst->layout == SGXTEX_LAYOUT_TWIDDLED ? DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED : 0,
-		.cmd_stream = (uintptr_t)s, .cmd_stream_len = sizeof(s),
+		.cmd = (uintptr_t)&t,
 		.sync_ops = DRM_POWERVR_SGX_OBJ_ARRAY(1, &op),
 	};
 	struct drm_powervr_sgx_ioctl_submit_jobs_args a = { .jobs = DRM_POWERVR_SGX_OBJ_ARRAY(1, &j) };
@@ -214,15 +218,15 @@ static int blit(const struct sgxtex_surface *src, const struct sgxtex_surface *d
 	upload(&usse, X.eot_use, SGXPBE_EOT_WORDS * 4);
 	__sync_synchronize();
 
-	/* CMD_TRANSFER (docs/UAPI.md 3.5): header, then the words the kernel turns into the command */
-	s[2] = X.bg;				/* bg_block_addr */
-	s[4] = b.cmd[9];			/* pixel_event_pds_addr */
-	s[6] = b.cmd[10];			/* pixel_event_pds_rows */
-	s[7] = b.cmd[12] >> 16;			/* first tile */
-	s[8] = b.cmd[12] & 0xffff;
-	s[9] = b.cmd[13] >> 16;			/* last tile */
-	s[10] = b.cmd[13] & 0xffff;
-	s[11] = b.cmd[2];			/* bg_depth */
+	/* The transfer command (uAPI revision 3): what the kernel turns into the firmware's */
+	t.bg_block_addr = X.bg;
+	t.pixel_event_pds_addr = b.cmd[9];
+	t.pixel_event_pds_rows = b.cmd[10];
+	t.first_tile_x = b.cmd[12] >> 16;
+	t.first_tile_y = b.cmd[12] & 0xffff;
+	t.last_tile_x = b.cmd[13] >> 16;
+	t.last_tile_y = b.cmd[13] & 0xffff;
+	t.bg_depth_f32 = b.cmd[2];
 
 	xioctl(DRM_IOCTL_SYNCOBJ_RESET, &r);
 	if ((e = xioctl(DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &a)))

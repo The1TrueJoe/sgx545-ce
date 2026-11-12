@@ -2,14 +2,12 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * Loading and starting the microkernel: what srvinit and the DDK services did
- * between them, now in the kernel. docs/SRVINIT.md is the reference for every
- * buffer, constant, PDS program and script value here, and docs/UKERNEL.md for
- * how the microkernel uses them.
+ * Loading and starting the microkernel: the buffers, constants, PDS programs
+ * and init scripts it needs, which the vendor's user-space init and services
+ * driver set up between them.
  *
- * The host interface is the vendor's as of DDK 1.7 (decision D8). The open
- * microkernel's file header lists its entry points and patch sites
- * (docs/UKERNEL.md 4a).
+ * The host interface is the vendor's SGXMKIF as of DDK 1.7. The microkernel
+ * file's header lists its entry points and patch sites.
  */
 
 #include <drm/drm_print.h>
@@ -37,12 +35,12 @@
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_pds.h"
 
-/* The open microkernel's file (docs/UKERNEL.md 4a). */
+/* The microkernel file's header. */
 #define UKFW_MAGIC0		0x35584753	/* "SGX5" */
 #define UKFW_MAGIC1		0x4e524b55	/* "UKRN" */
 #define UKFW_HEADER_MIN		0x60
 #define UKFW_IF_MAJOR		1
-#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE)
+#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | PVRSGX_UKFW_DONE_SEQ)
 /* Bits 16-31: the microkernel's own build variants, nothing the host must know. */
 #define UKFW_FEATURES_PRIVATE	GENMASK(31, 16)
 #define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
@@ -82,8 +80,8 @@ enum ukfw_patch_value {
 #define UKERNEL_TIMER_HZ	1000
 
 /*
- * Where each buffer lives: the addresses the DDK's allocator gave on an EA3,
- * kept so traces compare one for one with a DDK boot.
+ * Where each buffer lives: the addresses the vendor driver's allocator gives,
+ * kept so traces compare one for one with a vendor driver's.
  */
 static const struct {
 	bool code;
@@ -96,7 +94,7 @@ static const struct {
 	/* Right after the control block, which fills 0x3000-0x30ff. */
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
-	/* The image at 0, then the PDS programs from its end (0xcf70 for the DDK's). */
+	/* The image at 0, then the PDS programs from its end (0xcf70 for the vendor's). */
 	[PVRSGX_FW_UKERNEL] = { true, 0x0000, 0 },
 	[PVRSGX_FW_PDS0] = { true, 0x000, 0x18 },
 	[PVRSGX_FW_PDS1] = { true, 0x020, 0x38 },
@@ -160,7 +158,7 @@ static int fw_limm(struct pvrsgx_device *sdev, u32 off, u32 v)
 
 /*
  * The microkernel's control block, rebuilt at every start: after a reset it
- * must not find the previous run's render in flight (UKERNEL.md 5a, "discard").
+ * must not find the previous run's render in flight.
  */
 static void ta3dctl_fill(struct pvrsgx_device *sdev)
 {
@@ -173,6 +171,8 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
 	t->ccb = f->addr[PVRSGX_FW_CCB];
 	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
+	/* A fresh microkernel counts finished jobs from 0. */
+	WRITE_ONCE(sdev->done_seq, 0);
 }
 
 /*
@@ -238,7 +238,7 @@ static u32 (*ukfw_table(const u8 *data, size_t size, u32 off, u32 n))[2]
 }
 
 /*
- * The open microkernel's file: check the header (docs/UKERNEL.md 4a) and take
+ * The microkernel file: check the header and take
  * its image and tables into f. -ENOENT if data is not one; on -EINVAL, *why
  * says what is wrong. f's tables and image are the caller's to free either way.
  */
@@ -342,13 +342,17 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		return err;
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
-	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
+	/*
+	 * The PTE flags the vendor's GPL kernel services give the same buffers
+	 * (mmu.c, from EDM_PROTECT and read-only allocations): data read-write,
+	 * code read-only.
+	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
-				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
+				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
-				SGX_MMU_PTE_READONLY);
+				SGX_MMU_PTE_READONLY, 0);
 	if (err)
 		return err;
 
@@ -387,7 +391,7 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 	return sdev->cr->use_code_base0 + 4 * n;
 }
 
-/* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
+/* Init script part 2: the core's script, then the bases. */
 static void init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
@@ -396,11 +400,17 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
-	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
+	/*
+	 * Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15
+	 * ours. A client's PDS program can name any of them, so 14 is a second
+	 * name for 0 rather than whatever it held.
+	 */
 	for (u32 i = 0; i < 10; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
 		       ((PVRSGX_HEAP_USSE_PIXEL + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_SPARE_BASE_INDEX),
+	       (PVRSGX_HEAP_USSE_PIXEL >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
 	for (u32 i = 0; i < 4; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
 		       (PVRSGX_HEAP_USSE_VERTEX + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
@@ -454,7 +464,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		/*
 		 * After a hang the clocks are on and the cores may be busy. After a
 		 * clean stop (runtime suspend) they are gated and quiet already, and
-		 * a register read there froze the EA3 (log 2026-11-03-0630).
+		 * a register read there can hang the SoC.
 		 */
 		if (was_powered) {
 			/* What an unload and reload (which recovers) does in between. */
@@ -473,8 +483,12 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		err = fw_build(sdev, sdev->fw.image);
 		if (err)
 			return err;
-		/* Nothing the old run pointed at matters any more. */
-		pvrsgx_kobj_reap(sdev, U64_MAX);
+		/*
+		 * Nothing the old run pointed at matters any more. Freeing can take
+		 * locks a fence waiter holds, so the reap work does it, not a reset.
+		 */
+		WRITE_ONCE(sdev->restarts, sdev->restarts + 1);
+		queue_work(system_dfl_wq, &sdev->reap_work);
 	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;
@@ -483,8 +497,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_POWER_STATUS] = 0;
 	pvrsgx_ccb_reset(sdev);
 	ta3dctl_fill(sdev);
-	/* The first command invalidates the directory cache. */
-	sdev->fw.cache_control = PVRSGX_CC_INVAL_BIF_PD;
+	/* The first command invalidates the directory cache, keeping what a reap queued. */
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PD;
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
@@ -523,6 +537,21 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	return 0;
 }
 
+/*
+ * Every unit and the BIF held in reset, at once and without the microkernel:
+ * no GPU memory access after this returns. For a hang, before the jobs' memory
+ * can go, and when the device is lost.
+ */
+void pvrsgx_fw_halt(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
+	sgx_rd(sdev, SGX_CR_SOFT_RESET);
+	if (sdev->pdev)
+		pci_clear_master(sdev->pdev);
+}
+
 /* Ask the microkernel to power off, then hold the cores in reset. */
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 {
@@ -531,7 +560,7 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 	u32 data[6] = { 0, POWER_OFF };
 
 	if (sdev->fw_running) {
-		if (pvrsgx_ccb_send(sdev, PVRSGX_CMD_POWER, data, NULL) ||
+		if (pvrsgx_ccb_send(sdev, PVRSGX_KCMD_POWER, data, NULL) ||
 		    pvrsgx_poll(sdev, &hc[HOSTCTL_POWER_STATUS], HOSTCTL_POWMAN_POWEROFF_COMPLETE,
 				HOSTCTL_POWMAN_POWEROFF_COMPLETE, 500000))
 			drm_warn(&sdev->base, "microkernel did not power off\n");

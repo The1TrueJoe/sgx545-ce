@@ -31,6 +31,7 @@ DEV_QUERY
                  drm_powervr_sgx_ioctl_dev_query_args
                  drm_powervr_sgx_dev_query_gpu_info
                  drm_powervr_sgx_dev_query_limits
+                 drm_powervr_sgx_dev_query_commands
                  drm_powervr_sgx_dev_query_quirks
                  drm_powervr_sgx_heap_id
                  drm_powervr_sgx_heap
@@ -61,8 +62,18 @@ VM CONTEXTS
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
    :identifiers: drm_powervr_sgx_ioctl_create_vm_context_args
                  drm_powervr_sgx_ioctl_destroy_vm_context_args
-                 drm_powervr_sgx_ioctl_vm_map_args
-                 drm_powervr_sgx_ioctl_vm_unmap_args
+
+VM_BIND
+-------
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :doc: VM_BIND operations
+
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :doc: Flags for struct drm_powervr_sgx_ioctl_vm_bind_args
+
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :identifiers: drm_powervr_sgx_vm_bind_op
+                 drm_powervr_sgx_ioctl_vm_bind_args
 
 CONTEXTS
 --------
@@ -86,10 +97,19 @@ RT DATASETS
    :identifiers: drm_powervr_sgx_ioctl_create_rt_dataset_args
                  drm_powervr_sgx_ioctl_destroy_rt_dataset_args
 
-COMMAND STREAMS
+CLIENT COMMANDS
 ---------------
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
-   :doc: PowerVR SGX command streams
+   :doc: PowerVR SGX client commands
+
+.. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
+   :identifiers: drm_powervr_sgx_cmd_head
+                 drm_powervr_sgx_ext
+                 drm_powervr_sgx_cmd_render
+                 drm_powervr_sgx_cmd_ta_kick
+                 drm_powervr_sgx_cmd_transfer
+                 drm_powervr_sgx_ext_sgx545_render
+                 drm_powervr_sgx_ext_sgx545_ta_kick
 
 SUBMIT_JOBS
 -----------
@@ -100,15 +120,14 @@ SUBMIT_JOBS
    :doc: Flags for struct drm_powervr_sgx_sync_op
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
-   :doc: Flags for struct drm_powervr_sgx_bo_ref
+   :doc: Flags for struct drm_powervr_sgx_cache_range
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
    :doc: Flags for &drm_powervr_sgx_job.flags
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
-   :identifiers: drm_powervr_sgx_ta_kick
-                 drm_powervr_sgx_sync_op
-                 drm_powervr_sgx_bo_ref
+   :identifiers: drm_powervr_sgx_sync_op
+                 drm_powervr_sgx_cache_range
                  drm_powervr_sgx_job_type
                  drm_powervr_sgx_job
                  drm_powervr_sgx_ioctl_submit_jobs_args

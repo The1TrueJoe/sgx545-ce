@@ -3,7 +3,7 @@
 
 config DRM_POWERVR_SGX
 	tristate "PowerVR SGX5xx (SGX545: Intel CE5300, Cedarview)"
-	depends on DRM && PCI && MMU && X86
+	depends on DRM && PCI && MMU && (X86 || COMPILE_TEST)
 	select DRM_EXEC
 	select DRM_GEM_SHMEM_HELPER
 	select DRM_GPUVM
@@ -43,7 +43,8 @@ config DRM_POWERVR_SGX_KUNIT_TEST
 	help
 	  Unit tests of the driver's firmware file checks (a well-formed
 	  image is accepted, and every malformed header, table and checksum
-	  is refused), of kernel-object teardown at unbind and of the core
-	  table. The tests need no GPU.
+	  is refused), of kernel-object teardown at unbind, of the core
+	  table, of a job's cache ranges and of a render target's tiling
+	  numbers. The tests need no GPU.
 
 	  For developers; if unsure, say N.

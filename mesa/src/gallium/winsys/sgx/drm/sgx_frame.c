@@ -22,7 +22,9 @@
 
 #include <xf86drm.h>
 
+#include "util/log.h"
 #include "util/macros.h"
+#include "util/u_debug.h"
 #include "util/u_math.h"
 
 #include "sgx_csb.h"
@@ -101,6 +103,19 @@ sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo)
 {
    if (d->kif->bo_prepare_target)
       d->kif->bo_prepare_target(d, bo);
+}
+
+bool
+sgxws_target_twiddled(const struct sgxws_target *t)
+{
+   return t->t1_layout == SGX_TEXSTATE_LAYOUT_TWIDDLED;
+}
+
+void
+sgxws_bo_cpu_written(struct sgxws_bo *bo)
+{
+   if (bo->impl)
+      bo->impl->cpu_dirty = true;
 }
 
 int
@@ -255,6 +270,18 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
 /* ------------------------------------------------------------------ USSE */
 
+/* A USSE heap is cut into 512 KiB code base windows: a task runs from the
+ * window its DOUTU names, and its absolute targets (phas.i, ba) count from
+ * that window's start, not the heap's (ISA.md) */
+#define USSE_WINDOW_SHIFT 19
+#define USSE_WINDOW_MASK ((1u << USSE_WINDOW_SHIFT) - 1)
+
+static uint32_t
+usse_heap_off(const struct sgxws_ctx *c, uint32_t va, bool vertex)
+{
+   return va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
+}
+
 static bool
 code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
                 enum sgx_heap heap, uint32_t size)
@@ -264,6 +291,14 @@ code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
 
    if (sgxws_bo_alloc_heap(d, &k->r.bo, heap, 0x1, size, al))
       return false;
+   if ((k->r.bo.va - d->heap_base[heap]) >> USSE_WINDOW_SHIFT) {
+      static bool once;
+
+      if (!once)
+         mesa_logi("sgx: program code past the first 512 KiB window (%s heap)",
+                   heap == H_VTXSHADER ? "vertex" : "pixel");
+      once = true;
+   }
    k->r.size = size;
    /* nothing at a heap's first byte: a DOUTU word of 0 would name it */
    k->r.used = 0x100;
@@ -346,7 +381,8 @@ sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
    }
    k->live++;
    p = ring_alloc(&k->r, n * 8, USSE_ALIGN);
-   pc0 = (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+   /* from the start of the program's code base window (doutu_w0) */
+   pc0 = (usse_heap_off(c, p.va, vertex) & USSE_WINDOW_MASK) / 8;
    memcpy(p.p, w, n * 8);
    /* phas.i targets are absolute, in instructions (ISA.md) */
    for (unsigned i = 0; i < nreloc; i++)
@@ -399,11 +435,11 @@ usse_load(struct sgxws_ctx *c, const struct sgx_fixed_prog *pr, bool vertex)
 static uint32_t
 doutu_w0(struct sgxws_ctx *c, uint32_t va, bool vertex, uint32_t temps)
 {
-   uint32_t off = va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
+   uint32_t off = usse_heap_off(c, va, vertex);
 
    return sgx_pds_doutu_w0(&(struct sgx_pds_doutu){
-      .base = (off >> 19) + c->dev->usse_base_index[vertex],
-      .offset = off & 0x7ffff,
+      .base = (off >> USSE_WINDOW_SHIFT) + c->dev->usse_base_index[vertex],
+      .offset = off & USSE_WINDOW_MASK,
       .temps4 = (temps + 3) >> 2,
    });
 }
@@ -837,6 +873,8 @@ ctx_free(struct sgxws_ctx *c)
       sgxws_bo_free(c->dev, &rings[i]->bo);
    code_fini(c, &c->usse[0]);
    code_fini(c, &c->usse[1]);
+   for (unsigned v = 0; v < 2; v++)
+      sgxws_bo_free(c->dev, &c->code_hold[v]);
    free(c->pds_pix.memo);
    free(c->last_u);
    c->dev->kif->ctx_fini(c);
@@ -880,6 +918,18 @@ sgxws_ctx_create(struct sgxws_dev *d, int priority)
    /* (without it, every draw's pixel programs anew) */
    if (!d->state_always)
       c->pds_pix.memo = calloc(1, sizeof(*c->pds_pix.memo));
+
+   /* SGX_CODE_WINDOW=n: program code starts in window n of each USSE heap,
+    * to test code past the first window (the space below it is held) */
+   unsigned skip = debug_get_num_option("SGX_CODE_WINDOW", 0);
+   for (unsigned v = 0; skip && v < 2; v++) {
+      enum sgx_heap heap = v ? H_VTXSHADER : H_PIXSHADER;
+
+      if (sgxws_bo_alloc_heap(d, &c->code_hold[v], heap, 0x1,
+                              (skip << USSE_WINDOW_SHIFT) - SGXWS_CODE_CHUNK,
+                              SGXWS_CODE_CHUNK))
+         mesa_logw("sgx: SGX_CODE_WINDOW=%u: no room to hold", skip);
+   }
 
    /* fixed USSE programs */
    char err[160];
@@ -1304,6 +1354,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->bias_units = 0;
    c->bias_factor = 0.0f;
    c->clip = (struct sgxws_rect){0, 0, rt->w, rt->h};
+   c->damage = (struct sgxws_rect){0, 0, 0, 0};
 
    /* the render details are the target's: written at the kick, once its
     * previous render is done */
@@ -1584,6 +1635,22 @@ vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles,
             vertices_per_task(c->dev->core, 4));
 }
 
+/* the pixels a draw or clear may change: the clip it draws within */
+static void
+add_damage(struct sgxws_ctx *c)
+{
+   struct sgxws_rect *d = &c->damage;
+
+   if (d->x1 <= d->x0) {
+      *d = c->clip;
+      return;
+   }
+   d->x0 = MIN2(d->x0, c->clip.x0);
+   d->y0 = MIN2(d->y0, c->clip.y0);
+   d->x1 = MAX2(d->x1, c->clip.x1);
+   d->y1 = MAX2(d->y1, c->clip.y1);
+}
+
 /* Make r the visible pixels (STATE.md "Scissor and partial viewports"): reset
  * the bits over the whole target within the old rectangle's tiles, and set
  * them over r, which leaves r's tiles as the region clip the draws inherit.
@@ -1694,6 +1761,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
    vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0,
             8);
    c->draws++;
+   add_damage(c);
    return 0;
 }
 
@@ -1965,7 +2033,9 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    sgx_pack(&blk[n++], TA_STATE_OUTSELECT, os)
    {
       os.out_dwords = vs->out_dwords;
-      os.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
+      os.unknown_11_13 = vs->colour
+                            ? SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW_COLOUR
+                            : SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
       os.point_size = vs->point_size;
       os.clip_planes = vs->clip_planes;
    }
@@ -2030,6 +2100,7 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
                vs->in_dwords, vs->out_dwords, vs->temps,
                vertices_per_task(c->dev->core, vs->out_dwords));
    c->draws++;
+   add_damage(c);
    /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
    if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
       return kick_ta(c);
