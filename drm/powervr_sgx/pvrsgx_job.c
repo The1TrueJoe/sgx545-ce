@@ -689,11 +689,15 @@ void pvrsgx_context_destroy_all(struct pvrsgx_file *sfile)
 int pvrsgx_ioctl_destroy_context(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_destroy_context_args *args = data;
+	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 	struct pvrsgx_context *ctx;
 
 	if (args->_padding_4)
 		return -EINVAL;
-	ctx = xa_erase(&to_pvrsgx_file(file)->contexts, args->handle);
+	/* A submit that found it has pushed its jobs before the entity goes. */
+	down_write(&sfile->submit_lock);
+	ctx = xa_erase(&sfile->contexts, args->handle);
+	up_write(&sfile->submit_lock);
 	if (!ctx)
 		return -ENOENT;
 	context_destroy(ctx);
@@ -918,6 +922,7 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_submit_jobs_args *args = data;
+	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 	struct drm_powervr_sgx_job *in;
 	struct job_args *ja;
 	struct drm_exec exec;
@@ -940,6 +945,9 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 		return -ENOMEM;
 	}
 
+	err = down_read_interruptible(&sfile->submit_lock);
+	if (err)
+		goto out_free;
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
 		if (err) {
@@ -1020,8 +1028,11 @@ out_exec:
 	/* The references of the jobs not pushed. */
 	pvrsgx_power_put(to_pvrsgx_device(drm), n - pushed);
 out:
+	/* Armed jobs not pushed are cleaned up while their entity still exists. */
 	for (u32 i = 0; i < n; i++)
 		job_args_fini(&ja[i]);
+	up_read(&sfile->submit_lock);
+out_free:
 	kvfree(ja);
 	kvfree(in);
 	return err;

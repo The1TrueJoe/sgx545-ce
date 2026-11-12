@@ -285,6 +285,12 @@ struct pvrsgx_file {
 	struct xarray rtds;
 	/** @usage: GPU time, for fdinfo. */
 	struct pvrsgx_usage *usage;
+	/**
+	 * @submit_lock: Read across SUBMIT_JOBS, from its context lookups to its
+	 * pushes; written to take a context out of @contexts, so none is
+	 * destroyed under a submit that found it.
+	 */
+	struct rw_semaphore submit_lock;
 };
 
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)

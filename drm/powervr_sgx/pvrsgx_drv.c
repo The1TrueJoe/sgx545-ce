@@ -177,6 +177,7 @@ static int pvrsgx_open(struct drm_device *drm, struct drm_file *file)
 	xa_init_flags(&sfile->vms, XA_FLAGS_ALLOC1);
 	xa_init_flags(&sfile->contexts, XA_FLAGS_ALLOC1);
 	xa_init_flags(&sfile->rtds, XA_FLAGS_ALLOC1);
+	init_rwsem(&sfile->submit_lock);
 	file->driver_priv = sfile;
 	return 0;
 }
