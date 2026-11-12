@@ -490,6 +490,8 @@ z scale.
   when the shader writes the point size.
   - 4 dwords are the position. Each texcoord set adds its size.
   - The clear's own value is `0x00081800` (8 dwords: position and color).
+    Its texcoord-size word is 5 (one 4-component set: the color) and its
+    MTE control 0x40.
   - **The vertex color.** ES1 draws with a color have `0x00083800`: the usual
     `0x3000` plus b11, which the clear's `0x1800` has too. Their vertex
     program writes the color as 4 F32 dwords in o4-o7, right after the
@@ -502,11 +504,16 @@ z scale.
     right. Its DOUTU word 1 iterates one dword (`01000004`); the DOUTI has
     b21 = 0 (capture: `es1base`). What b21 = 1 does to the format is not
     captured.
-    That b11 is what turns the first set into the color source is a
-    **guess** (no capture without it). No second color source (0x21) has
-    been seen.
-    Its texcoord-size word is 5 (one 4-component set: the color) and its
-    MTE control 0x40.
+  - **The open stack draws GL's flat colors this way** (**hardware**, a
+    CE5300 board, 2026-11-12): output select `0x00083800`, the color as
+    4 F32 in o4-o7, TSP word 0 = 5, DOUTI `25c10000`, and the pixel program
+    unpacking pa0 with `pck.f32.u8` (lanes R = 2, G = 1, B = 0, A = 3). MTE
+    control stays at the ES2 value `01555620`. The flat-shademodel test
+    probe reads (0, 255, 0), the provoking vertex's color; the 96 clipflat
+    subtests and gl-1.0-dlist-shademodel pass, with no GPU resets.
+  - That b11 is what turns the first set into the color source is a
+    **guess**: every working draw has it, and none has been run without it.
+    No second color source (0x21) has been seen.
   - Status: capture; hardware (open driver).
 - **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
   base4 capture; 4 input dwords from one vertex stream, 8 output dwords):
