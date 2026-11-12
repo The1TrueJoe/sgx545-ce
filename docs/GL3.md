@@ -536,9 +536,12 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     varyings"): the first flat varying, the one the compiler puts on the
     colour source, comes back wrong even with no block in the program, and
     the next one, a texcoord set equal at every vertex, comes back exact.
-    The same tests with their checks moved to the fragment program pass (10
-    of 12 run). Two more fail to link (blocks over 16 KiB, as they should),
-    and `minmax`.
+    The same tests with their checks moved to the fragment program pass (12
+    of 12, runs 22-23). Two more fail to link (blocks over 16 KiB, as they
+    should), and `minmax`.
+  - The default path with this in (run 23): dEQP 78 F / 16637 P and zs, ms,
+    ff, gl21 against run 19 unchanged, apart from fixed-clip-enables (the
+    intermittent above).
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
