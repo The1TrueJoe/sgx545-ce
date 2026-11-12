@@ -5529,6 +5529,12 @@ emit_color(struct sgx_ctx *c)
    emit_depth(c);
    if (c->opts->rt_packed & 1) {
       /* the render target's word, packed by the driver */
+      if (c->color_mask & ~1u) {
+         sgx_fail(c, "packed render target: output 0 writes mask 0x%x, not "
+                     "one word",
+                  c->color_mask);
+         return;
+      }
       struct sgx_ref x =
          c->has_color && (c->color_mask & 1) ? c->color[0] : ref(SGX_F_K, 0);
       c->colour_pa = 0;
