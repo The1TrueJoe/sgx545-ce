@@ -1153,6 +1153,35 @@ mirror with `[moe]` dropped from the `ld.a.d` and `st.a.d`.
   encoding differs. Next is an offset sweep (vary #42) to read the effective-address
   formula, as the USE_CODE_BASE bits were read.
 
+## After the twenty-eighth attempt: not [moe], not a scaled offset
+
+Attempt 28 (log 2026-11-12-0336): the no-`[moe]` probe faults at the same 0x0fd79000. So
+`[moe]` is not the cause, and 0x0fd79000 is a deterministic function of r17 (0x0f003000) and
+the `ld.a.d` that is neither `r17 + 42 × a clean unit` nor MOE-derived.
+
+**Attempt 29** isolates one `ld.a.d`, gated by `str` (a register write, not `a.d`
+addressing, so it signals success without depending on the thing under test). `EVENT_TIMER`
+= 0xa5a means the load did not fault; a fault names the effective address.
+
+| Probe | `ld.a.d` | Asks |
+|---|---|---|
+| `sgx530_usse_ld0` | `r3, r17, #0` | does the offset matter? If it still faults at 0x0fd79000, the address doesn't depend on the offset |
+| `sgx530_usse_ld0nb` | `r3, r5, #0`, r5 = `limm` 0x0f004000 | does the base register matter? If the fault stays at 0x0fd79000, the base operand isn't read from the register |
+
+- Build each: `python3 ukernel/build.py sgx530_usse_ld0 …` / `… sgx530_usse_ld0nb …`, then
+  mkukfw. `sgx530_usse_ld0`: image sha256 675b7843…, crc 0xc7a8e64a, packaged 7013b5a6….
+  `sgx530_usse_ld0nb`: image d0ce59a3…, crc 0xd7ce33b4, packaged e1d819da…. Both same
+  through asm.py and `sgx-asm`.
+- Reading:
+  - **ld0 passes (`EVENT_TIMER` 0xa5a):** r17 + 0 is a valid address; the offset scaling is
+    wrong. Next: an offset sweep to read the unit.
+  - **ld0 faults at 0x0fd79000:** the offset is irrelevant; the base/address comes from
+    elsewhere. Then ld0nb separates the register from a fixed source.
+  - **ld0nb's fault moves with r5, ld0's with r17:** the base register works, so it's the
+    offset. If both stay at 0x0fd79000 whatever the base, the `a.d` addressing reads its
+    base from a fixed place (an internal/index register), not the operand — an ISA
+    difference to decode from the hwt_* suites, document C, and hand to cleanroom-isa.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
