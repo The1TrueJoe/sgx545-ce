@@ -435,6 +435,16 @@ and drops, so both points run the same loop, with `mfence` around it.
   the lines any earlier would let a prefetch refill them stale.
 - **At import, once:** the whole object, before it can be mapped.
 
+The kernel flushes through the exporter's CPU mapping (`dma_buf_vmap`, held for the
+import's life), never the attachment's pages. An importer may not touch those. **So an
+import must come from an exporter that supports vmap,** and other imports are refused.
+An `is_iomem` mapping needs no flush.
+
+**A job whose fence carries an error leaves its `WRITE` ranges undefined.** The reset and
+device-lost paths signal under the fence lock with no after-flush, and a
+millisecond-scale `clflush` doesn't belong under a spinlock. Any stale line left is the
+object's own earlier bytes.
+
 **An unlisted byte has undefined contents after the job,** for the CPU and the GPU: the
 GPU may read stale DRAM, a dirty CPU line may overwrite its output, and the CPU may read
 a stale line. **It is never a security issue.** Our own objects' pages are flushed when

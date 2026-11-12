@@ -1059,7 +1059,8 @@ struct drm_powervr_sgx_bo_ref {
  * Bytes of an import the job touches but doesn't list have undefined contents
  * afterwards, for the CPU and the GPU alike. That is never a leak: the kernel
  * writes the whole import back once when it is imported, so a stale line or a
- * stale DRAM word is the object's own earlier contents.
+ * stale DRAM word is the object's own earlier contents. A job whose out-fence
+ * carries an error leaves its WRITE ranges undefined.
  */
 struct drm_powervr_sgx_cache_range {
 	/** @handle: GEM handle of an imported object. */

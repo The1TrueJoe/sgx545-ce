@@ -126,6 +126,10 @@ entry). The kernel flushes only those bytes:
   lines of every `WRITE` range again (the CPU may have fetched them during the job);
 - once, when an object is imported, it writes back the whole object.
 
+It flushes through the exporter's vmap, held for the import's life, so an import must
+come from an exporter that supports vmap. A job whose fence carries an error (reset,
+device lost) gets no after-flush: its `WRITE` ranges are undefined.
+
 Bytes the job touches but doesn't list have undefined contents afterwards, for the CPU
 and the GPU, and that is never a leak: after the import-time write-back, a stale line or
 DRAM word is the object's own earlier contents. Writes by another process into a cached
