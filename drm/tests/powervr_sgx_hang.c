@@ -159,7 +159,7 @@ static void eot_place(void)
 
 /* A transfer job copying surface s to `copy`, waiting on `wait` (0: nothing). */
 struct xjob {
-	uint32_t s[12];
+	struct drm_powervr_sgx_cmd_transfer t;
 	struct drm_powervr_sgx_sync_op op[2];
 	struct drm_powervr_sgx_job job;
 };
@@ -184,22 +184,22 @@ static void transfer_job_va(struct xjob *x, uint32_t src_va, uint32_t src_pitch,
 	__sync_synchronize();
 
 	memset(x, 0, sizeof(*x));
-	x->s[0] = 48;			/* CMD_TRANSFER (UAPI.md 3.5) */
-	x->s[2] = X.bg;
-	x->s[4] = b.cmd[9];
-	x->s[6] = b.cmd[10];
-	x->s[7] = b.cmd[12] >> 16;
-	x->s[8] = b.cmd[12] & 0xffff;
-	x->s[9] = b.cmd[13] >> 16;
-	x->s[10] = b.cmd[13] & 0xffff;
-	x->s[11] = b.cmd[2];
+	x->t.head.size = sizeof(x->t);	/* the transfer command (uAPI revision 3) */
+	x->t.bg_block_addr = X.bg;
+	x->t.pixel_event_pds_addr = b.cmd[9];
+	x->t.pixel_event_pds_rows = b.cmd[10];
+	x->t.first_tile_x = b.cmd[12] >> 16;
+	x->t.first_tile_y = b.cmd[12] & 0xffff;
+	x->t.last_tile_x = b.cmd[13] >> 16;
+	x->t.last_tile_y = b.cmd[13] & 0xffff;
+	x->t.bg_depth_f32 = b.cmd[2];
 	if (wait)
 		x->op[n++] = (struct drm_powervr_sgx_sync_op){ .handle = wait,
 							       .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_WAIT };
 	x->op[n++] = (struct drm_powervr_sgx_sync_op){ .handle = xsync, .flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL };
 	x->job = (struct drm_powervr_sgx_job){
 		.type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER, .context_handle = xctx,
-		.cmd_stream = (uintptr_t)x->s, .cmd_stream_len = 48,
+		.cmd = (uintptr_t)&x->t,
 		.sync_ops = OBJ_ARRAY(n, x->op),
 	};
 }
@@ -593,14 +593,15 @@ static int idle(struct rc *a, unsigned f)
 	char st[32] = "";
 	int bad = 0, s;
 
-	/* A render context holds the GPU awake: no runtime suspend while a exists. */
+	/* Only jobs hold the GPU awake: it suspends while a's context is idle. */
 	s = rpm_wait_suspended(1500);
 	if (s < 0) {
 		printf("  no runtime PM\n");
 		return 1;
 	}
 	printf("  idle with a render context: %s\n", s ? "SUSPENDED" : "stays active");
-	CHECK(s == 0);
+	CHECK(s == 1);
+	/* A render resumes it, and the context's state survived the suspend. */
 	CHECK(render(a, f));
 	rpm_status(st, sizeof(st));
 	CHECK(!strcmp(st, "active"));

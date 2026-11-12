@@ -7,6 +7,8 @@
 #include <linux/bits.h>
 #include <linux/types.h>
 
+struct pvrsgx_cmd_core;
+
 /*
  * Core features, as the SGX_FEATURE_* names of the GPL DDK's
  * sgxfeaturedefs.h. Only those the driver's design depends on are listed.
@@ -62,7 +64,7 @@ struct pvrsgx_core_regs {
 	u32 edm_task_reg1;
 };
 
-/* One write of the vendor init script (docs/SRVINIT.md, "Init scripts"). */
+/* One write of the vendor init script. */
 struct pvrsgx_core_init_reg {
 	u16 reg;
 	u32 val;
@@ -91,6 +93,8 @@ struct pvrsgx_core_family {
 	u32 num_dir_lists;
 	/** @va_bits: Device-virtual address bits (SGX_FEATURE_ADDRESS_SPACE_SIZE). */
 	u32 va_bits;
+	/** @cmds: What its client commands are checked against (pvrsgx_cmd_defs.c). */
+	const struct pvrsgx_cmd_core *cmds;
 	/** @init_regs: Init script part 2's register writes, in order. */
 	const struct pvrsgx_core_init_reg *init_regs;
 	/** @num_init_regs: Entries in @init_regs. */

@@ -1071,9 +1071,9 @@ The target doc is named.
 
 ### kernel driver: `drm/`
 
-`drm/powervr_sgx/powervr_sgx_stream*.{c,h}` and `powervr_sgx_cmd_checks.c`
-are byte-identical to `docs/uapi/stream/`, which is generated from
-`docs/uapi/powervr_sgx_kmd_stream.xml`, so UAPI.md §3 covers them.
+`drm/powervr_sgx/pvrsgx_cmd*.{c,h}` are links to `docs/uapi/cmd/`, whose
+tables are generated from `docs/uapi/powervr_sgx_cmd.xml`, so UAPI.md §3
+covers them.
 `include/uapi/drm/powervr_sgx_drm.h` is `docs/uapi/powervr_sgx_drm.h`.
 
 #### Table
@@ -1195,7 +1195,7 @@ are byte-identical to `docs/uapi/stream/`, which is generated from
 | `drm/tools/mkukfw.py` | builds/checks the 4a file: header struct `<2I10I4I32s` (0x60), header padded to 8, zlib CRC-32, patches_off 0 when none, default entry 0:0, the driver's checks incl. MAX_IMAGE 0xddf0, 64-pair table limit, word-1 placeholder mask 0x3f1f0 | UKERNEL.md "4a" | partial: same unstated limits as the `ukfw_parse` row; patches_off = 0 with no patches not stated |
 | `drm/tools/gen_usse_corpus.py` | test corpus extraction (drops setl/savl) | n/a | n/a |
 | `Makefile`, `Kconfig`, `MAINTAINERS.fragment`, `ci/*`, `Documentation/gpu/powervr_sgx/*` | build, CI kernel, RAM boot (`run.sh` extracts .rodata 0x2000 + 0xcf68), docs | DRM-DRIVER.md "7. Testing"; SRVINIT.md "The firmware file" | n/a (the 0x2000/0xcf68 extraction is covered) |
-| `powervr_sgx_stream*.{c,h}`, `powervr_sgx_cmd_checks.c` | stream framing, per-field checks, cross-field rules (identical to `docs/uapi/stream/`) | UAPI.md "3.1"-"3.6" (generated table) | covered |
+| `pvrsgx_cmd*.{c,h}` | command copy, extension chain, per-field checks, cross-field rules (links to `docs/uapi/cmd/`) | UAPI.md "3.1"-"3.6" (generated table) | covered |
 
 ##### Tests (one row each)
 

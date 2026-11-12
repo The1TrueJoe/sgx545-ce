@@ -5,6 +5,7 @@
 #include <drm/drm_prime.h>
 #include <drm/drm_vma_manager.h>
 
+#include <linux/dma-buf.h>
 #include <linux/pagemap.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
@@ -34,8 +35,17 @@ static int pvrsgx_gem_mmap(struct drm_gem_object *obj, struct vm_area_struct *vm
 	return drm_gem_shmem_object_mmap(obj, vma);
 }
 
+static void pvrsgx_gem_free(struct drm_gem_object *obj)
+{
+	struct pvrsgx_bo *bo = to_pvrsgx_bo(obj);
+
+	if (drm_gem_is_imported(obj) && !iosys_map_is_null(&bo->import_map))
+		dma_buf_vunmap_unlocked(obj->import_attach->dmabuf, &bo->import_map);
+	drm_gem_shmem_object_free(obj);
+}
+
 static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
-	.free = drm_gem_shmem_object_free,
+	.free = pvrsgx_gem_free,
 	.export = pvrsgx_gem_export,
 	.print_info = drm_gem_shmem_object_print_info,
 	.pin = drm_gem_shmem_object_pin,
@@ -54,7 +64,7 @@ struct drm_gem_object *pvrsgx_gem_create_object(struct drm_device *drm, size_t s
 	if (!bo)
 		return ERR_PTR(-ENOMEM);
 	bo->base.base.funcs = &pvrsgx_gem_funcs;
-	/* CPU/GPU coherency is not established (docs/UAPI.md G19). */
+	/* Whether the GPU snoops the CPU caches is not known. */
 	bo->base.map_wc = true;
 	return &bo->base.base;
 }

@@ -379,6 +379,9 @@ sgxws_bo_valid(const struct sgxws_bo *bo)
    return bo->impl != NULL;
 }
 /* wait for the submitted renders that write a render target (0 when done) */
+/* the CPU wrote a shared buffer (through its map): the next job that uses it
+ * has the kernel write the CPU's lines back first */
+void sgxws_bo_cpu_written(struct sgxws_bo *bo);
 /* a buffer to be rendered into: its sync data, for sgxws_bo_wait */
 void sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo);
 /* the buffer the frame being recorded renders into, NULL when none is */

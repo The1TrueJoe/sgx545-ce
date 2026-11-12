@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright © 2026 Joseph Telaak */
 
+#include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
 #include <drm/gma500_sgx.h>
@@ -14,8 +15,6 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-
-#include <asm/set_memory.h>
 
 #include "pvrsgx_ccb.h"
 #include "pvrsgx_core.h"
@@ -43,10 +42,11 @@ int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 
 /*
  * Kernel-owned memory at a fixed device address, mapped in the firmware's
- * directory. Pages below 4 GiB, write-combined in every CPU mapping.
+ * directory. Pages below 4 GiB, write-combined in every CPU mapping. gfp adds
+ * to GFP_KERNEL: __GFP_ACCOUNT for what a client's ioctl allocates.
  */
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
-		      u32 dev_addr, u32 size, u32 pte_flags)
+		      u32 dev_addr, u32 size, u32 pte_flags, gfp_t gfp)
 {
 	unsigned int i;
 	int err = -ENOMEM;
@@ -54,15 +54,15 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 	km->dev_addr = dev_addr;
 	km->size = PAGE_ALIGN(size);
 	km->npages = km->size >> PAGE_SHIFT;
-	km->pages = kvcalloc(km->npages, sizeof(*km->pages), GFP_KERNEL);
+	km->pages = kvcalloc(km->npages, sizeof(*km->pages), GFP_KERNEL | gfp);
 	if (!km->pages)
 		return -ENOMEM;
 	for (i = 0; i < km->npages; i++) {
-		km->pages[i] = alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_DMA32);
+		km->pages[i] = alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_DMA32 | gfp);
 		if (!km->pages[i])
 			goto err_free;
 	}
-	if (set_pages_array_wc(km->pages, km->npages))
+	if (pvrsgx_pages_wc(km->pages, km->npages))
 		goto err_free;
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)
@@ -77,7 +77,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 err_unmap:
 	vunmap(km->cpu);
 err_wb:
-	set_pages_array_wb(km->pages, km->npages);
+	pvrsgx_pages_wb(km->pages, km->npages);
 err_free:
 	while (i--)
 		__free_page(km->pages[i]);
@@ -91,8 +91,16 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km)
 	if (!km->pages)
 		return;
 	pvrsgx_mmu_unmap(km->mmu, km->dev_addr, km->size);
+	pvrsgx_kmem_release(km);
+}
+
+/* The memory of kmem the caller has already unmapped from the GPU. */
+void pvrsgx_kmem_release(struct pvrsgx_kmem *km)
+{
+	if (!km->pages)
+		return;
 	vunmap(km->cpu);
-	set_pages_array_wb(km->pages, km->npages);
+	pvrsgx_pages_wb(km->pages, km->npages);
 	for (unsigned int i = 0; i < km->npages; i++)
 		__free_page(km->pages[i]);
 	kvfree(km->pages);
@@ -197,7 +205,7 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 	       SGX_CR_EVENT_HOST_CLEAR_SW_EVENT | SGX_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT);
 	atomic_inc(&sdev->irq_count);
 	/*
-	 * The DDK microkernel interrupts at TA and 3D completion too: wake the
+	 * The vendor microkernel interrupts at TA and 3D completion too: wake the
 	 * thread only for a finished job or a lockup report.
 	 */
 	if (!sdev->fw_running || pvrsgx_job_oldest_done(sdev) ||
@@ -220,7 +228,8 @@ static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
 				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
 	/*
-	 * The microkernel's idle notice: acknowledge it, as the DDK's host does.
+	 * The microkernel's idle notice: acknowledge it, as the vendor's GPL
+	 * kernel services do (sgxutils.c, SGXTestActivePowerEvent).
 	 * Powering down is runtime PM's business, so nothing else happens here.
 	 */
 	if ((flags & ~clear) & HOSTCTL_INTERRUPT_ACTIVE_POWER)
@@ -305,6 +314,27 @@ static void irq_teardown(struct pvrsgx_device *sdev)
 	free_irq(sdev->irq, sdev);
 }
 
+/*
+ * The software state, at the DRM device's release: after unbind, and after the
+ * last file is closed, so nothing a file can reach goes before the file does.
+ */
+static void pvrsgx_device_release(struct drm_device *drm, void *arg)
+{
+	struct pvrsgx_device *sdev = arg;
+
+	pvrsgx_job_fini(sdev);
+	pvrsgx_ccb_inval_reap(sdev, true);
+	pvrsgx_pb_put(sdev->pb);
+	mutex_destroy(&sdev->pb_lock);
+	pvrsgx_kobj_fini(sdev);
+	pvrsgx_fw_fini(sdev);
+	__free_page(sdev->reset_page);
+	/* The reset directory still names the scratch page's tables, never the page. */
+	pvrsgx_mmu_destroy(sdev->reset_mmu);
+	pvrsgx_mmu_destroy(sdev->idle_mmu);
+	pvrsgx_mmu_destroy(sdev->kernel_mmu);
+}
+
 int pvrsgx_device_init(struct pvrsgx_device *sdev)
 {
 	int err;
@@ -312,6 +342,8 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	mutex_init(&sdev->ccb_lock);
 	mutex_init(&sdev->done_lock);
 	spin_lock_init(&sdev->ccb_spin);
+	spin_lock_init(&sdev->inval_lock);
+	INIT_LIST_HEAD(&sdev->inval_waits);
 
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	sdev->idle_mmu = pvrsgx_mmu_create(sdev);
@@ -337,20 +369,22 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	if (err)
 		goto err_fw;
 
+	/* From here the release frees the software state, on success or failure. */
+	err = drmm_add_action_or_reset(&sdev->base, pvrsgx_device_release, sdev);
+	if (err)
+		return err;
+
 	err = irq_setup(sdev);
 	if (err)
-		goto err_job;
+		return err;
 
 	err = pvrsgx_fw_start(sdev);
-	if (err)
-		goto err_irq;
-	return 0;
+	if (err) {
+		pvrsgx_fw_stop(sdev);
+		irq_teardown(sdev);
+	}
+	return err;
 
-err_irq:
-	pvrsgx_fw_stop(sdev);
-	irq_teardown(sdev);
-err_job:
-	pvrsgx_job_fini(sdev);
 err_fw:
 	pvrsgx_fw_fini(sdev);
 	pvrsgx_kobj_fini(sdev);
@@ -363,18 +397,13 @@ err_mmu:
 	return err;
 }
 
-void pvrsgx_device_fini(struct pvrsgx_device *sdev)
+/*
+ * The hardware, at unbind or when registration fails: no job reaches the GPU
+ * again, the firmware stops, the interrupt goes. Open files keep working
+ * against the software state until they close.
+ */
+void pvrsgx_device_unplug(struct pvrsgx_device *sdev)
 {
-	pvrsgx_job_fini(sdev);
-	pvrsgx_fw_stop(sdev);
+	pvrsgx_job_unplug(sdev);
 	irq_teardown(sdev);
-	pvrsgx_pb_put(sdev->pb);
-	mutex_destroy(&sdev->pb_lock);
-	pvrsgx_kobj_fini(sdev);
-	pvrsgx_fw_fini(sdev);
-	__free_page(sdev->reset_page);
-	/* The reset directory still names the scratch page's tables, never the page. */
-	pvrsgx_mmu_destroy(sdev->reset_mmu);
-	pvrsgx_mmu_destroy(sdev->idle_mmu);
-	pvrsgx_mmu_destroy(sdev->kernel_mmu);
 }

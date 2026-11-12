@@ -19,6 +19,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_kobj.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_mmu.h"
 #include "pvrsgx_render.h"
@@ -70,9 +71,10 @@ static void dump_regs(struct seq_buf *sb, struct pvrsgx_device *sdev)
 	}
 }
 
-void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
+void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev, bool regs)
 {
 	u32 *ctl = sdev->fw.cpu[PVRSGX_FW_CCBCTL];
+	struct pvrsgx_kobj_counts kc;
 
 	seq_buf_printf(sb, "firmware running: %d lost: %d resets: %u irqs: %d\n", sdev->fw_running,
 		       sdev->lost, sdev->reset_count, atomic_read(&sdev->irq_count));
@@ -89,8 +91,13 @@ void pvrsgx_dump_status(struct seq_buf *sb, struct pvrsgx_device *sdev)
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR),
 		       pvrsgx_fw_hostctl(sdev, HOSTCTL_ASSERT_FAIL));
 	seq_buf_printf(sb, "powered: %d\n", READ_ONCE(sdev->powered));
+	if (pvrsgx_kobj_pending(sdev, &kc))
+		seq_buf_printf(sb, "kobjs graveyard %u (%llu pages) unmapped %u (%llu pages)\n",
+			       kc.graveyard, kc.graveyard_pages, kc.unmapped, kc.unmapped_pages);
+	seq_buf_printf(sb, "client unmaps waiting for the invalidate %u\n",
+		       pvrsgx_ccb_inval_pending(sdev));
 	/* After a failed start the clocks are still on; after a stop they are not. */
-	if (!READ_ONCE(sdev->powered))
+	if (!regs || !READ_ONCE(sdev->powered))
 		return;
 	dump_regs(sb, sdev);
 }
@@ -152,6 +159,7 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 		[DRM_POWERVR_SGX_JOB_TYPE_TRANSFER] = "transfer",
 		[DRM_POWERVR_SGX_JOB_TYPE_NULL] = "null",
 	};
+	unsigned long flags;
 	struct seq_buf sb;
 	char *buf;
 
@@ -163,7 +171,7 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	seq_buf_printf(&sb, "powervr_sgx hang: %s job, ccb %llu, reset %u\n",
 		       bad->type < ARRAY_SIZE(types) ? types[bad->type] : "?", bad->ccb_seq,
 		       sdev->reset_count + 1);
-	pvrsgx_dump_status(&sb, sdev);
+	pvrsgx_dump_status(&sb, sdev, true);
 	if (sdev->fw_running)
 		dump_bif(&sb, sdev, bad);
 	pvrsgx_fw_dump(&sb, sdev, PVRSGX_FW_HOSTCTL, "hostctl");
@@ -173,5 +181,42 @@ void pvrsgx_coredump(struct pvrsgx_device *sdev, struct pvrsgx_job *bad)
 	pvrsgx_job_dump(&sb, bad);
 	if (seq_buf_has_overflowed(&sb))
 		drm_warn(&sdev->base, "coredump truncated\n");
-	dev_coredumpv(sdev->base.dev, buf, seq_buf_used(&sb), GFP_NOWAIT);
+	/* devcoredump registers a device, which allocates: from a worker. */
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	if (!sdev->coredump) {
+		sdev->coredump = buf;
+		sdev->coredump_len = seq_buf_used(&sb);
+		buf = NULL;
+	}
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	vfree(buf);
+	queue_work(system_dfl_wq, &sdev->coredump_work);
+}
+
+static void coredump_work_fn(struct work_struct *work)
+{
+	struct pvrsgx_device *sdev = container_of(work, struct pvrsgx_device, coredump_work);
+	unsigned long flags;
+	size_t len;
+	void *buf;
+
+	spin_lock_irqsave(&sdev->fence_lock, flags);
+	buf = sdev->coredump;
+	len = sdev->coredump_len;
+	sdev->coredump = NULL;
+	spin_unlock_irqrestore(&sdev->fence_lock, flags);
+	if (buf)
+		dev_coredumpv(sdev->base.dev, buf, len, GFP_KERNEL);
+}
+
+void pvrsgx_coredump_init(struct pvrsgx_device *sdev)
+{
+	INIT_WORK(&sdev->coredump_work, coredump_work_fn);
+}
+
+void pvrsgx_coredump_fini(struct pvrsgx_device *sdev)
+{
+	cancel_work_sync(&sdev->coredump_work);
+	vfree(sdev->coredump);
+	sdev->coredump = NULL;
 }

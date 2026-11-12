@@ -8,8 +8,8 @@
  * page the GPU sees must sit below 4 GiB.
  *
  * Tables are write-combined: whether the BIF snoops the CPU caches is not
- * established (docs/UAPI.md G19). Callers order the writes before the GPU
- * uses them by kicking the firmware, which issues a write barrier first.
+ * known. Callers order the writes before the GPU uses them by kicking the
+ * firmware, which issues a write barrier first.
  */
 
 #include <linux/io.h>
@@ -17,8 +17,6 @@
 #include <linux/mutex.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
-
-#include <asm/set_memory.h>
 
 #include "pvrsgx_device.h"
 #include "pvrsgx_mmu.h"
@@ -42,7 +40,7 @@ static struct page *table_page_alloc(void)
 {
 	struct page *p = alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_DMA32);
 
-	if (p && set_pages_array_wc(&p, 1)) {
+	if (p && pvrsgx_pages_wc(&p, 1)) {
 		__free_page(p);
 		return NULL;
 	}
@@ -51,7 +49,7 @@ static struct page *table_page_alloc(void)
 
 static void table_page_free(struct page *p)
 {
-	set_pages_array_wb(&p, 1);
+	pvrsgx_pages_wb(&p, 1);
 	__free_page(p);
 }
 
@@ -188,6 +186,23 @@ int pvrsgx_mmu_map_sgt(struct pvrsgx_mmu *mmu, u32 dev_addr,
 		err = -EINVAL;
 	if (err)
 		unmap_locked(mmu, dev_addr, done);
+	mutex_unlock(&mmu->lock);
+	return err;
+}
+
+/*
+ * Allocate the page tables of [dev_addr, dev_addr + size), so that a later map
+ * of the range can't fail for memory. Tables stay until the directory goes.
+ */
+int pvrsgx_mmu_reserve(struct pvrsgx_mmu *mmu, u32 dev_addr, u64 size)
+{
+	u64 span = SGX_MMU_PDE_SPAN, end = (u64)dev_addr + size;
+	int err = 0;
+
+	mutex_lock(&mmu->lock);
+	for (u64 a = round_down(dev_addr, span); a < end && !err; a += span)
+		if (!pte_get(mmu, a, true))
+			err = -ENOMEM;
 	mutex_unlock(&mmu->lock);
 	return err;
 }

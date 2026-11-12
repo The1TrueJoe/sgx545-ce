@@ -10,7 +10,7 @@
 struct pvrsgx_device;
 struct seq_buf;
 
-/* Fixed device-virtual layout (docs/UAPI.md section 5). */
+/* Fixed device-virtual layout. */
 #define PVRSGX_HEAP_3D_PARAMS		0x10000000u
 #define PVRSGX_HEAP_TA_DATA		0x20000000u
 #define PVRSGX_HEAP_SYNC		0x2d000000u
@@ -29,9 +29,10 @@ struct seq_buf;
 #define PVRSGX_USSE_WINDOW_LOG2		19
 #define PVRSGX_USSE_PIXEL_BASE_INDEX	0
 #define PVRSGX_USSE_VERTEX_BASE_INDEX	10
+#define PVRSGX_USSE_SPARE_BASE_INDEX	14
 #define PVRSGX_USSE_UKERNEL_BASE_INDEX	15
 
-/* Host control block words (docs/UKERNEL.md section 1, "The TA3D control block"). */
+/* Host control block words. */
 #define HOSTCTL_INIT_STATUS		0
 #define HOSTCTL_POWER_STATUS		1
 #define HOSTCTL_UK_LOCKUPS		3
@@ -40,14 +41,16 @@ struct seq_buf;
 #define HOSTCTL_INTERRUPT_CLEAR		9
 #define HOSTCTL_ASSERT_FAIL		14
 
-#define HOSTCTL_FLAGS			15	/* UKERNEL.md 4a */
+#define HOSTCTL_FLAGS			15
 
 /* HOSTCTL_FLAGS: the host writes the background object's PDS words. */
 #define HOSTCTL_HOST_BGBLOCK		BIT(0)
 
-/* Feature bits of the open microkernel's file header (docs/UKERNEL.md 4a). */
+/* Feature bits of the microkernel file's header. */
 #define PVRSGX_UKFW_CLEANUP_V2		BIT(0)	/* accepted, unused */
 #define PVRSGX_UKFW_SECURE		BIT(1)
+/* It counts finished jobs in pvrsgx_fw_ta3d_ctl.done_seq, then interrupts. */
+#define PVRSGX_UKFW_DONE_SEQ		BIT(2)
 
 #define HOSTCTL_INIT_COMPLETE		BIT(0)
 #define HOSTCTL_POWMAN_POWEROFF_COMPLETE BIT(3)
@@ -58,6 +61,7 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev);
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev);
 int pvrsgx_fw_start(struct pvrsgx_device *sdev);
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev);
+void pvrsgx_fw_halt(struct pvrsgx_device *sdev);
 u32 pvrsgx_fw_hostctl(struct pvrsgx_device *sdev, unsigned int word);
 void pvrsgx_fw_hostctl_set(struct pvrsgx_device *sdev, unsigned int word, u32 v);
 void pvrsgx_fw_dump(struct seq_buf *sb, struct pvrsgx_device *sdev, unsigned int b,

@@ -19,8 +19,9 @@ struct pvrsgx_vm;
  * Its address is unique across the device and the firmware's directory maps it,
  * and a VM also maps the ones the TA and 3D use under its directory. The 3D
  * parameters range is the exception: per VM, from the heap base, mapped only in
- * that VM's directory, as the DDK's per-context heap (each context's PB starts
- * at 0x10000000). A client can never map anything in these ranges itself.
+ * that VM's directory, as the vendor's per-context 3D parameters heap
+ * (sgxconfig.h; each context's PB starts at 0x10000000). A client can never map
+ * anything in these ranges itself.
  */
 struct pvrsgx_kobj {
 	/** @km: Its memory. */
@@ -39,6 +40,10 @@ struct pvrsgx_kobj {
 	struct list_head grave;
 	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
 	u64 grave_seq;
+	/** @flush_seq: Once unmapped, the kernel CCB command whose cache control frees it. */
+	u64 flush_seq;
+	/** @grave_restarts: pvrsgx_device.restarts when it was released. */
+	u32 grave_restarts;
 };
 
 static inline u32 *kobj_cpu(struct pvrsgx_kobj *o)
@@ -57,6 +62,14 @@ struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_k
 				       u32 size, u32 min_addr, struct pvrsgx_vm *vm);
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o);
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
+
+/* Objects and pages waiting in the graveyard, and unmapped ones waiting for the invalidate. */
+struct pvrsgx_kobj_counts {
+	u32 graveyard, unmapped;
+	u64 graveyard_pages, unmapped_pages;
+};
+
+bool pvrsgx_kobj_pending(struct pvrsgx_device *sdev, struct pvrsgx_kobj_counts *c);
 
 struct seq_buf;
 struct pvrsgx_vm;
