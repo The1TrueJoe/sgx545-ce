@@ -125,6 +125,12 @@ struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
 		return obj;
 	}
 	to_pvrsgx_bo(obj)->import_map = map;
+	/*
+	 * A listed import is flushed around each job, an unlisted one never: what
+	 * the CPU still holds of it (its zeroing, say) reaches memory now, or the
+	 * GPU could see the pages' earlier contents.
+	 */
+	import_flush(obj);
 	return obj;
 }
 
