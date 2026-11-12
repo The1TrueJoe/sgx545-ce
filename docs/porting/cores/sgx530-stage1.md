@@ -143,7 +143,7 @@ Without it, step 1 goes unread, and an all-zero result can't tell row 1 from row
 
 | `EVENT_TIMER` | wait | version | heartbeat | init | What it means |
 |---|---|---|---|---|---|
-| 0 | 0 | 0 | 0 | 0 | None of our code ran: the entry program's data under the SGX530's layout, the DOUTU against `USE_CODE_BASE_15`, or `limm`/`str` encode differently. Or the SGX530 needs `phas.i` first (U). Next: the entry side. |
+| 0 | 0 | 0 | 0 | 0 | None of our code ran: the entry program's data under the SGX530's layout, the DOUTU against `USE_CODE_BASE_15`, or `limm`/`str` encode differently. Or the SGX530 needs `phas.i` first (U). Read the BIF registers to tell them apart (gap 9). A BIF page fault at 0x00400000 (`BIF_FAULT` b12-27) means `USE_CODE_BASE` counts in 16 B units on the SGX530, and base 15 = 0x40000 points there. A fault at 0x04000000 would mean 256 B units. No fault leaves the unit at 128 B and points at the PDS side: the entry program or the DOUTU. Next: the entry side. |
 | 0xa5a | 0 | 0 | 0 | 0 | Our code runs and register stores work; the memory store doesn't land. Suspects: `st.a.d [moe]`, or the patched address. |
 | 0xa5a | 0xd1a60001 | 0 | 0 | 0 | Memory stores work, so the address patch is right. `ldr` or the `wdf` after it stops. |
 | 0xa5a | 0xd1a60001 | 0x01120000 | 0 | 0 | `ld.a.d` or `imae`. |
