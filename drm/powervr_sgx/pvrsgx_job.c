@@ -339,8 +339,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	if (lost)
 		goto fail;
 	if (fault)
-		drm_err(&sdev->base, "job page fault at 0x%08lx (BIF status 0x%08x); resetting\n",
-			sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK,
+		drm_err(&sdev->base, "job page fault at 0x%08x (BIF status 0x%08x); resetting\n",
+			sgx_rd(sdev, SGX_CR_BIF_FAULT) & sdev->cr->bif_fault_addr,
 			sgx_rd(sdev, SGX_CR_BIF_INT_STAT));
 	else
 		drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
@@ -576,7 +576,8 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	if (args->type == DRM_POWERVR_SGX_CTX_TYPE_TRANSFER && args->param_buffer_pages)
 		return -EINVAL;
 	if (args->param_buffer_pages &&
-	    (args->param_buffer_pages < 0x100 || args->param_buffer_pages > 0x8000))
+	    (args->param_buffer_pages < 0x100 ||
+	     args->param_buffer_pages > pvrsgx_heaps(to_pvrsgx_device(drm))->pb_max_pages))
 		return -EINVAL;
 
 	ctx = kzalloc_obj(*ctx);

@@ -10,6 +10,7 @@
 #include <drm/gpu_scheduler.h>
 
 #include <linux/device.h>
+#include <linux/idr.h>
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -18,10 +19,7 @@
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
-#ifdef CONFIG_X86
-#include <asm/set_memory.h>
-#endif
-
+#include "pvrsgx_cache.h"
 #include "pvrsgx_core.h"
 #include "pvrsgx_hw.h"
 
@@ -89,6 +87,10 @@ struct pvrsgx_fw {
 	struct pvrsgx_kmem data;
 	/** @code: Kernel code heap: microkernel and its PDS programs. */
 	struct pvrsgx_kmem code;
+	/** @pdtable: Single-context cores: the directory of each VM by slot, GPU read-only. */
+	struct pvrsgx_kmem pdtable;
+	/** @pd_slots: The @pdtable slots VMs hold. */
+	struct ida pd_slots;
 	/** @addr: Device address of each buffer. */
 	u32 addr[PVRSGX_FW_NBUF];
 	/** @cpu: CPU address of each buffer. */
@@ -146,7 +148,7 @@ struct pvrsgx_device {
 
 	/** @kernel_mmu: Page directory the microkernel translates through. */
 	struct pvrsgx_mmu *kernel_mmu;
-	/** @idle_mmu: Empty directory for list 0 while no job runs. */
+	/** @idle_mmu: Empty directory for list 0 while no job runs (multi-context cores). */
 	struct pvrsgx_mmu *idle_mmu;
 	/** @reset_mmu: Scratch directory that absorbs faults during reset. */
 	struct pvrsgx_mmu *reset_mmu;
@@ -247,6 +249,12 @@ struct pvrsgx_device {
 
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
+	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
+	bool pm_pinned;
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+	/** @test_wr: KUnit only: sees every register write before it lands. */
+	void (*test_wr)(struct pvrsgx_device *sdev, u32 reg, u32 val);
+#endif
 };
 
 #define to_pvrsgx_device(drm) container_of_const(drm, struct pvrsgx_device, base)
@@ -277,7 +285,34 @@ static inline u32 sgx_rd(struct pvrsgx_device *sdev, u32 reg)
 
 static inline void sgx_wr(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+	if (sdev->test_wr)
+		sdev->test_wr(sdev, reg, val);
+#endif
 	iowrite32(val, sdev->regs + reg);
+}
+
+/*
+ * What list 0 holds while no job runs: an empty directory, or on a
+ * single-context core the firmware's, since the microkernel translates
+ * through list 0 too.
+ */
+static inline struct pvrsgx_mmu *pvrsgx_idle_mmu(const struct pvrsgx_device *sdev)
+{
+	return pvrsgx_core_single_context(sdev->family) ? sdev->kernel_mmu : sdev->idle_mmu;
+}
+
+/* The core's device-virtual layout. */
+static inline const struct pvrsgx_heap_layout *pvrsgx_heaps(const struct pvrsgx_device *sdev)
+{
+	return sdev->family->heaps;
+}
+
+/* A register from the core table: 0 is one the core lacks, never written. */
+static inline void sgx_wr_opt(struct pvrsgx_device *sdev, u32 reg, u32 val)
+{
+	if (reg)
+		sgx_wr(sdev, reg, val);
 }
 
 /*
@@ -290,30 +325,11 @@ static inline u32 pvrsgx_dirlist_edm(const struct pvrsgx_device *sdev)
 	return sdev->family->num_dir_lists - 1;
 }
 
-/*
- * The GPU doesn't snoop, so the CPU maps what it shares write-combined. Only
- * x86 has the call; elsewhere (COMPILE_TEST) it is a no-op.
- */
-static inline int pvrsgx_pages_wc(struct page **pages, int n)
-{
-#ifdef CONFIG_X86
-	return set_pages_array_wc(pages, n);
-#else
-	return 0;
-#endif
-}
-
-static inline void pvrsgx_pages_wb(struct page **pages, int n)
-{
-#ifdef CONFIG_X86
-	set_pages_array_wb(pages, n);
-#endif
-}
-
 int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		      u32 dev_addr, u32 size, u32 pte_flags, gfp_t gfp);
 void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 void pvrsgx_kmem_release(struct pvrsgx_kmem *km);
+void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_unplug(struct pvrsgx_device *sdev);

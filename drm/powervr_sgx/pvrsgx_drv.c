@@ -112,7 +112,7 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			.rt_max_samples = sdev->family->cmds->max_samples,
 			.pb_min_pages = 0x100,
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
-			.pb_max_pages = 0x8000,
+			.pb_max_pages = pvrsgx_heaps(sdev)->pb_max_pages,
 			.max_ta_kicks = PVRSGX_MAX_TA_KICKS,
 			.va_bits = sdev->family->va_bits,
 			.caps = DRM_POWERVR_SGX_CAP_BACKWARD_BLITS,
@@ -329,13 +329,23 @@ static int __init pvrsgx_init(void)
 		return err;
 	err = pvrsgx_aux_register();
 	if (err)
-		pci_unregister_driver(&pvrsgx_pci_driver);
+		goto err_pci;
+	err = pvrsgx_of_register();
+	if (err)
+		goto err_aux;
+	return 0;
+
+err_aux:
+	pvrsgx_aux_unregister();
+err_pci:
+	pci_unregister_driver(&pvrsgx_pci_driver);
 	return err;
 }
 module_init(pvrsgx_init);
 
 static void __exit pvrsgx_exit(void)
 {
+	pvrsgx_of_unregister();
 	pvrsgx_aux_unregister();
 	pci_unregister_driver(&pvrsgx_pci_driver);
 }

@@ -62,7 +62,7 @@ int pvrsgx_kmem_alloc(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km,
 		if (!km->pages[i])
 			goto err_free;
 	}
-	if (pvrsgx_pages_wc(km->pages, km->npages))
+	if (pvrsgx_pages_wc(sdev->base.dev, km->pages, km->npages))
 		goto err_free;
 	km->cpu = vmap(km->pages, km->npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 	if (!km->cpu)
@@ -132,7 +132,7 @@ static void inval_dc(struct pvrsgx_device *sdev)
  * The reset sequence for a single-core SGX5xx: reset everything, clear the directory
  * lists, take the cores out of reset with list 0 on a scratch directory that
  * absorbs faults left over from before, then give the microkernel its own
- * directory on list 15.
+ * directory on the last list (list 15 on the SGX545).
  */
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 {
@@ -140,8 +140,8 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 	reset_sleep(sdev);
 
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, 0);
-	sgx_wr(sdev, SGX_CR_BIF_BANK_SET, 0);
-	sgx_wr(sdev, SGX_CR_BIF_BANK0, 0);
+	sgx_wr_opt(sdev, sdev->cr->bif_bank_set, 0);
+	sgx_wr_opt(sdev, sdev->cr->bif_bank0, 0);
 	for (unsigned int i = 0; i < sdev->family->num_dir_lists; i++)
 		sgx_wr(sdev, sgx_cr_bif_dir_list_base(i), 0);
 
@@ -158,7 +158,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 
 			if (!(stat & sdev->cr->bif_int_stat_fault_req))
 				break;
-			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & SGX_MMU_ADDR_MASK;
+			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & sdev->cr->bif_fault_addr;
 			drm_warn(&sdev->base, "reset: page fault 0x%x at 0x%08x\n", stat, addr);
 			soft_reset(sdev, true);
 			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
@@ -177,12 +177,14 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		reset_sleep(sdev);
 	}
 
-	sgx_wr(sdev, SGX_CR_BIF_BANK0,
-	       FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, pvrsgx_dirlist_edm(sdev)));
-	sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
-	       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	sgx_wr_opt(sdev, sdev->cr->bif_bank0,
+		   FIELD_PREP(SGX_CR_BIF_BANK0_INDEX_EDM, pvrsgx_dirlist_edm(sdev)));
+	/* With one directory list the EDM's is list 0, set below. */
+	if (pvrsgx_dirlist_edm(sdev))
+		sgx_wr(sdev, sgx_cr_bif_dir_list_base(pvrsgx_dirlist_edm(sdev)),
+		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
-	       pvrsgx_mmu_pd_addr(sdev->idle_mmu));
+	       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
 	inval_dc(sdev);
 
 	sgx_wr(sdev, SGX_CR_SOFT_RESET, 0);
@@ -256,6 +258,24 @@ static int identify(struct pvrsgx_device *sdev)
 	sdev->core_id = sgx_rd(sdev, sdev->cr->core_id);
 	sdev->core_rev = sgx_rd(sdev, sdev->cr->core_revision);
 
+	if (!pvrsgx_core_family_usable(sdev->family)) {
+		drm_info(&sdev->base,
+			 "%s core id 0x%08x revision 0x%08x: this driver can't run an %s yet; not touching it further\n",
+			 sdev->family->name, sdev->core_id, sdev->core_rev, sdev->family->name);
+		return -ENODEV;
+	}
+	if (pvrsgx_core_single_context(sdev->family)) {
+		if (!pvrsgx_allow_unisolated) {
+			drm_err(&sdev->base,
+				"%s has one memory context: every client could reach the firmware and the other clients' commands. Not running it; powervr_sgx.allow_unisolated=1 runs it anyway.\n",
+				sdev->family->name);
+			return -ENODEV;
+		}
+		drm_warn(&sdev->base,
+			 "%s has one memory context: clients are not isolated from the firmware or from each other (allow_unisolated=1)\n",
+			 sdev->family->name);
+	}
+
 	sdev->core = pvrsgx_core_lookup(sdev->family, sdev->core_id, sdev->core_rev);
 	if (!sdev->core) {
 		drm_err(&sdev->base,
@@ -266,6 +286,36 @@ static int identify(struct pvrsgx_device *sdev)
 	drm_info(&sdev->base, "SGX core id 0x%08x revision 0x%08x: %s\n",
 		 sdev->core_id, sdev->core_rev, sdev->core->name);
 	return 0;
+}
+
+/*
+ * On a single-context core the microkernel runs on the job's directory, so
+ * every VM maps the firmware heaps. They get their page tables now, so the
+ * directory entries every VM copies never change.
+ */
+static int share_fw_heaps_init(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	const struct pvrsgx_va_range *r[] = { &h->kernel_code, &h->kernel_data, &h->sync };
+	int err = 0;
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return 0;
+	for (unsigned int i = 0; i < ARRAY_SIZE(r) && !err; i++)
+		err = pvrsgx_mmu_prealloc(sdev->kernel_mmu, r[i]->base, r[i]->end);
+	return err;
+}
+
+/* Point a VM's directory at the firmware heaps' page tables, on a single-context core. */
+void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return;
+	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->kernel_code.base, h->kernel_code.end);
+	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->kernel_data.base, h->kernel_data.end);
+	pvrsgx_mmu_share(mmu, sdev->kernel_mmu, h->sync.base, h->sync.end);
 }
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
@@ -356,6 +406,9 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 	}
 
 	err = identify(sdev);
+	if (err)
+		goto err_mmu;
+	err = share_fw_heaps_init(sdev);
 	if (err)
 		goto err_mmu;
 

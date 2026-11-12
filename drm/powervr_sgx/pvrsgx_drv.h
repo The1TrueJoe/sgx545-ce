@@ -37,6 +37,14 @@ static inline int pvrsgx_aux_register(void) { return 0; }
 static inline void pvrsgx_aux_unregister(void) { }
 #endif
 
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_OF)
+int pvrsgx_of_register(void);
+void pvrsgx_of_unregister(void);
+#else
+static inline int pvrsgx_of_register(void) { return 0; }
+static inline void pvrsgx_of_unregister(void) { }
+#endif
+
 void *pvrsgx_obj_array_get(const struct drm_powervr_sgx_obj_array *in, u32 obj_size,
 			   u32 max_count);
 int pvrsgx_obj_array_put(const struct drm_powervr_sgx_obj_array *out, const void *src,
