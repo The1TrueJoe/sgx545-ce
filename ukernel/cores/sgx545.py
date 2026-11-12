@@ -351,6 +351,7 @@ USSE_PA_READ = False         # read pa0 as the ld base: are PDS-set attributes v
 USSE_ALU_DSTOP = None        # aluwr: an explicit dest/base operand (e.g. 'o0','pa0') for the write-file test
 USSE_STOUT = None           # 'o0': or it then st it to [pa0] (a driver-DOUTA-set scratch addr): st-from-output (cores/sgx530_stout_o0.py)
 USSE_ODIST = None           # read o{N} after writing o0..o9 distinct values: are the outputs distinct regs or aliases? (cores/sgx530_odist0.py)
+USSE_ODIST_N = 10           # how many outputs the odist sweep writes (11 includes o10 for the margin-1 check)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000

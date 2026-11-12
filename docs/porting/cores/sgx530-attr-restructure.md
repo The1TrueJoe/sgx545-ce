@@ -70,17 +70,20 @@ the control-block base and `r14` the PD table — §2(A) puts both in primary at
 read directly as `pa0`/`pa1` (an attribute works as an `ld`/`st` base; `ld.a.d r3, pa0` is
 confirmed). They leave the scratch budget entirely. So **peak OUTPUT pressure = 12 − 2 = 10.**
 
-**Attempt 42 (C): all of o0..o10 are writable** — every one faults at 0x0fd7d000. So ≥10 usable
-outputs holds, and the restructure is **a per-core reallocation, no spill:** a 530 register remap
-in `ukernel.py`'s emit layer (scratch → `o0..o9`), plus the §2(A) attribute change for the two
-bases (r17, r14 → PA0, PA1), plus per-core gating. Contained — it changes the register
-convention, not each path's logic. The `<10 usable` spill case does not arise.
+**Attempt 42 (C): all of o0..o10 are writable** — every one faults at 0x0fd7d000. That is
+**eleven** writable outputs against a peak of 10, so the restructure is **a per-core
+reallocation, no spill:** a 530 register remap in `ukernel.py`'s emit layer (scratch → `o0..o9`),
+plus the §2(A) attribute change for the two bases (r17, r14 → PA0, PA1), plus per-core gating.
+Contained — it changes the register convention, not each path's logic. The `<10 usable` spill
+case does not arise. **The margin is one** (eleven outputs, ten needed) *if* o10 is distinct too.
 
 **One caveat gates it (G):** attempt 42 wrote the *same* value to every output, so the outputs
 are not yet shown to be **distinct** physical registers. A reallocation needs 10 distinct scratch
 slots; if the "11 outputs" are aliases of fewer physical registers, the budget collapses. The
-distinctness probe (`sgx530_odist0/9`: write o0..o9 ten distinct values, read the endpoints)
-settles it. **Go/no-go: GO for the clean reallocation, conditional on the distinctness check.**
+distinctness sweep (`sgx530_odist0..10`: write o0..o10 eleven distinct values and read each in
+turn — each must read its own source's leftover, else a later write clobbered it = aliasing)
+settles it, and o10 tells whether the margin is one or zero. **Go/no-go: GO for the clean
+reallocation, conditional on the distinctness check.**
 
 ## 4. Which microkernel paths change
 
@@ -125,40 +128,55 @@ likely to fit.
 
 ## 6. DOUTA-then-DOUTU on the SGX530: the open problem, and two ways round it
 
-**The facts (C, attempts 40-41).** A DOUTA writes a primary attribute and it persists (PA0 read
+**Why it matters: attribute setup is required, not optional.** The microkernel's bases r17
+(control block) and r14 (PD table) are loader-patched `limm`s, and `limm` does not retire on the
+530 — that is the original blocker. So those addresses cannot reach the task through a temporary
+at all; the **only** way to hand the task a mapped pointer is a primary attribute (DOUTA). The
+microkernel therefore cannot run until attribute setup works. This is the gating problem for the
+whole restructure, not a convenience.
+
+**The facts (C, attempts 40-43).** A DOUTA writes a primary attribute and it persists (PA0 read
 back as 0x0e850000, then 0x0e860000, across resets/reloads). But a DOUTA *followed by a DOUTU in
 the same PDS program* makes the DOUTU issue with word 0 ≈ 0 — the task launches at code base 0
-(fault 0x0f400000). One-row and two-row DOUTA layouts fail identically, so it is **not** the
-data-row interleave. On the 530 the event register points at `pds0` (a bare DOUTU, `pds_ours()`
-in `srvinit.c`); `pds3` — the DDK/open event dispatcher that does DOUTA-then-DOUTU — **has never
-run on the 530**, so this pattern is simply unproven there, not known-good.
+(fault 0x0f400000). One-row and two-row DOUTA layouts fail identically (not the data-row
+interleave), and the **`2f`/`.x2.s27` DOUTA form is ruled out (C, attempt 43):** both the plain
+`07…` and the `2f…` DOUTA (word | 0x28000000, purely additive on bits 27/29, every source field
+intact) give the same code-base-0 fault. So the DOUTA's *encoding* is not what breaks the next
+DOUTU. On the 530 the event register points at `pds0` (a bare DOUTU, `pds_ours()` in
+`srvinit.c`); the DDK/open `pds3` dispatcher that does DOUTA-then-DOUTU has never run there.
 
-**Why it may break (H, from PDS.md).** PDS.md records the captured working DOUTA as `2f800466`
-— top nibble 2 with bit 27 set (`.x2.s27`), the form that "also consumes word 2." The open
-`srvinit` `movs()` emits DOUTA as the plain `07…` form (no bit 27), and the probe does too. A
-DOUTA is a 2-word DOUT; if the hardware's DOUT sequencer expects the `2f` (3-word-consuming)
-form for a DOUTA that precedes another DOUT, the plain `07` DOUTA could leave the sequencer
-mis-aligned so the next DOUTU's word 0 reads short. This is a hypothesis, testable by rebuilding
-the DOUTA in the `2f` form and seeing whether the following DOUTU recovers. A second
-construction difference worth matching: the working `pds3` DOUTU reads word 1 from a DS word
-holding the constant **2** (the microkernel phase/swizzle count, D0(0)=2) and word 0 from a DS1
-word holding `doutu()`; the probe's slot choices differ, and mirroring `pds3`'s exact slots
-removes that variable.
+**The better-evidenced next step: mirror `pds3`'s exact slots.** The remaining differences from
+the known DDK construction are not the DOUTA form: `pds3`'s DOUTA takes its *value from an input*
+(`IN(0)`), not a DS word; its DOUTU reads word 1 from a DS word holding the constant **2** (the
+microkernel phase count), and word 0 from a DS1 word holding `doutu()`; and `pds3` has *many
+instructions between* its DOUTAs and its DOUTU, where the probe puts them adjacent. Mirroring
+`pds3` tests these together against the one construction known to work on the 545. If it is still
+flat, the order-swap diagnostic (DOUTU first, then DOUTA) shows whether a DOUTA breaks *any*
+following DOUT or only this sequence.
 
-**Two ways to get the attributes set before the task reads them:**
+**The pds3-mirror spec (from docs/SRVINIT.md "Buffer contents", capture-confirmed).** pds3's
+DOUTU is the word **`07003885`**, which "sends ds1[3], ds0[0] = 2, ds0[1]" (SRVINIT.md): DOUTU
+word 0 = ds1[3] (a DS1 word holding `doutu(entry)`), word 1 = ds0[0] = **2** (the microkernel
+phase count), word 2 = ds0[1], dest 5. Its DOUTAs are `douta in0/in2/in4` to PA0-PA2 with ctrl
+0/0x100/0x200 — the **value comes from an input** (in0), not a DS word. A minimal mirror probe:
 
-- **(A) Solve DOUTA-then-DOUTU** so the launch program (`pds0` today) also sets the attributes.
-  Needs the hypothesis above resolved on hardware. This is the general path and matches how the
-  DDK primary-attribute setup works (per-task, in the launch program).
-- **(B) Exploit persistence.** The primary attributes survive between PDS invocations on the 530
-  (observed across resets and reloads). So a **one-time setup program** could DOUTA the pointers
-  once, and the normal bare-DOUTU `pds0` launches would read the persisted PA0-PA2 — no
-  DOUTA-then-DOUTU needed. Cheaper, but it depends on the attributes surviving across **real task
-  launches** (not just resets), which is **U** and must be confirmed: set PA0 in one program,
-  launch an unrelated bare-DOUTU task, and check PA0 still reads back.
+    data: ds0[0] = 2 ; ds0[1] = 0 ; ds1[0] = 0 (DOUTA ctrl for PA0) ; ds1[3] = doutu(reader entry)
+    in0  = V  (the PA0 value, supplied as the task input by the host)
+    code: douta in0, ds1[0], in0, in0        # PA0 = in0 = V, ctrl 0  (value from an INPUT)
+          <several non-DOUT instructions>     # pds3 has ~30 here; the probe had none
+          movs 07003885                       # DOUTU: w0=ds1[3]=entry, w1=ds0[0]=2, w2=ds0[1]
+          halt
 
-Path (B) is the lower-risk first move if persistence holds across launches; path (A) is the
-fallback and the more general answer. Either way, attribute *setup* is an open SGX530 PDS
+The four deltas from the failing probe, any of which could be the cause: DOUTA value from an
+input not a DS word; DOUTU word 1 = 2 (the probe's was 0); DOUTU word 0 from a DS1 word; and
+non-DOUT spacing between the DOUTA and the DOUTU. The reader (`sgx530_pa0`) launched by the DOUTU
+reads PA0; a fault at V = both the DOUTA wrote PA0 and the DOUTU launched the reader. Build it
+from the SRVINIT.md description above, not from `srvinit.c` (whose pds3 is our reconstruction).
+
+**If DOUTA-then-DOUTU cannot be made to work**, the fallback is persistence: a standalone DOUTA
+(confirmed to persist) sets the pointers, and the driver re-issues it after every reset / resume
+/ power transition rather than relying on them surviving one. Heavier for the driver, but it does
+not need DOUTA-then-DOUTU. Either way, attribute *setup* is an open SGX530 PDS
 problem, not a solved one — the earlier claim that the driver's `pds3` already handles it was
 wrong (it does not run on the 530).
 

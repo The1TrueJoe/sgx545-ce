@@ -1681,6 +1681,29 @@ scratch registers, so a follow-up (`cores/sgx530_odist0.py`, `_odist9.py`) write
 difference) and reads o0 (expect 0x0055d000) and o9 (expect 0x0d04f000); its own source's value =
 distinct, any other page = a later write clobbered it = aliasing. Pending a board slot.
 
+## After the forty-third attempt (path A, the .x2 DOUTA): the DOUTA form is not the cause (C)
+
+Attempt 43 (log 8be4dc7d, build 661edcb7, with the `sgx530_pa0` reader) ran path A — a single
+PDS program doing a DOUTA then a DOUTU — in three variants:
+
+- Baseline: b1 at 0x0e860000 (PA0 still holds attempt 41's one-row DOUTA value).
+- Plain one-row DOUTA (V 0x0e860000): b2 at 0x0f400000, code base 0.
+- The `.x2.s27` DOUTA (word | 0x28000000, V 0x0e870000): b2 at 0x0f400000, **code base 0, the
+  same.** The board session verified the OR is purely additive — it sets b29 (op nibble 2) and
+  b27 (s), while the src rows, swizzle and dest all sit at b0-23 and cc at b24-26, so every
+  source field is intact and the word went 0x07… → 0x2f… cleanly.
+
+**Confirmed (C): the DOUTA's form (07 vs 2f) is not what breaks the following DOUTU.** My
+`2f`/`.x2.s27` hypothesis is ruled out. The DOUTA still writes PA0; a DOUTU after it still
+launches at code base 0.
+
+**Next (both sessions agree): mirror `pds3`'s exact slots** — DOUTA value from an input not a DS
+word, DOUTU word 1 = 2 from a DS word, word 0 from a DS1 word holding `doutu()`, and the many
+instructions `pds3` puts between the DOUTA and the DOUTU (the probe puts them adjacent). Those
+are the remaining differences from the one construction known to work on the 545. Order-swap
+(DOUTU first, then DOUTA) is the diagnostic if that is flat too. Analysis:
+[sgx530-attr-restructure.md](sgx530-attr-restructure.md) §6.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
