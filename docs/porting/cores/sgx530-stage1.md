@@ -1356,6 +1356,21 @@ Readout: the `aluwr` image (81dd5785…, packaged 18ce50ba…), by its fault pag
   start working.
 - **0x0c004000:** still 0 temps; try the next position.
 
+**The cheapest, most likely variant first: temp field = 8 (bit 27).** `pvrsgx_doutu` sets
+`0x8000000` (bit 27). The attempt-24 override is `(doutu & ~GENMASK(31,24)) | FIELD_PREP(…,
+DIV_ROUND_UP(ukernel_temps, 4))`, and `GENMASK(31,24)` includes bit 27, so `ukernel_temps =
+24` writes field value 6 and **clears bit 27**. PDS.md: the microkernel's own entries
+(pds0/2/3/4) have bit 27 set = field value 8 = 32 temporaries, and the SGX545 keeps it (it
+has no override). So attempt 24's reduction to 24 temps cleared the bit the vendor entry
+carries, and that alone could be why 31-34 saw 0 temps. Variant 0: `ukernel_temps = 32`
+(field 8, bit 27 set). If `aluwr` then writes (0x0fd7d000), re-run the real `sgx530` image
+with it — likely init completing. Only if that's flat do the group ORs below matter.
+
+Note (the kernel session's constraint): b0-3/b4-7/b16-18 move the code fetch (attempts
+21-22), so the free bits for a moved field are b8-15, b19-23 and b27-31; the sweep ORs each
+group all-ones onto the normal word (0x0000ff00, 0x00f80000, 0xf0000000) and bisects the one
+that works.
+
 If a position works, re-run the real `sgx530` image: with temporaries, `limm` and the stores
 should land and init can complete. Also worth a look: `phas.i`'s `temps4` field (ISA.md) as
 an alternate temp source, since the entry's `phas.i #0, #0` carries 0 there.
