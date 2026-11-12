@@ -366,9 +366,9 @@ In the captures the DDK sets ZLS up only for **EGL window surfaces**: the
 a depth buffer have them (**capture**). That it does so only when a frame is
 flushed mid-scene (kick flag 0x80) is **unconfirmed**; the split-window
 captures below store depth whether or not the frame is split. Its ZLS
-buffer is 5 bytes per padded pixel (**unconfirmed** for the DDK; the open
-driver allocates that and runs on the board, **hardware, open driver**). It
-sends, as deferred render-details updates (section 1 of STATE.md;
+buffer is 5 bytes per padded pixel (**capture**: `ms1d`'s is 0x1af400 =
+736 × 480 × 5 bytes, from the depth address on; the open driver allocates
+the same and runs on the board, **hardware, open driver**). It sends, as deferred render-details updates (section 1 of STATE.md;
 **capture**):
 
 | render details | value | from |
@@ -448,7 +448,9 @@ depth.
   - Stencil: +0x38 = +0x3c = `801da000`.
   - Stencil starts 0x159000 bytes after depth: 736 × 480 × 4 bytes, so one
     float32 per pixel of the tile-padded width (23 tiles of 32 px). One
-    stencil byte per pixel follows (**unconfirmed**).
+    byte per pixel follows it (the buffer's size, **capture**); that the
+    stencil is stored there one byte per pixel, and in which order, is
+    **unconfirmed**.
   - The same addresses serve the store and the load.
 - **Every DDK window render with a depth buffer stores depth** (`001710b4` at
   the terminating kick), split or not.
@@ -467,6 +469,43 @@ depth.
   - **TA command 3D flags b7 | b8 (0x180)** are needed on every render that
     uses ZLS (the DDK sends 0x580 = 0x400 | 0x180). Without them nothing is
     stored. Which of the two bits does it is not isolated.
+
+**The order of the stored depth** (**capture**, 2026-11-11). `ms1d` and
+`ms4d` are 720×480 window frames from the DDK with a 24-bit depth buffer and
+no stencil, cleared to depth 1, with one triangle at depth 0.5, at 1 and 4
+samples. The trace's copy of the ZLS buffer taken after the render holds the
+stored depth. Every depth word is float32 `3f800000` (1.0) or `3f000000`
+(0.5), the padding columns too (all 736 × 480 words written). The order below
+puts every 0.5 word under a pixel of the triangle in the readback, and no
+word outside it: 43200 of 43200 at 1 sample. At 4 samples, the count of
+0.5 samples in each pixel equals the pixel's resolved coverage
+(0, ¼, ½, ¾, 1) in all 345600 pixels.
+
+- **Rows run top-down**: row 0 is the window's top row (the last row of a
+  glReadPixels image).
+- **Tiles of 32 × 16, row-major**: 512 words per tile, the padded width's
+  tiles across (23 at 720 px), then the next row of tiles.
+- **Inside a tile**, word index bits from bit 0 up, at 1 sample:
+  `y0 x0 y1 x1 y2 x2 y3 x3 x4` (x, y inside the tile). That is two 16×16
+  halves, the left one first, each twiddled with y in the even bits.
+- **4 samples** (2×2 per pixel) are stored as one surface of samples twice
+  as wide and twice as high: sample (sx, sy) of pixel (px, py) is at
+  X = 2·px + sx, Y = 2·py + sy, in a 1472 × 960 grid with 46 tiles of 32 × 16
+  samples per row (ZLS control's x-tiles field reads 45 there). The tiles
+  are row-major as at 1 sample, but the bit order inside a tile is
+  `y0 x1 y1 x2 y2 x3 y3 x0 x4` (X, Y inside the tile): X's bit 0 moves up to
+  bit 7. So at 4 samples a tile is 16×8 pixels: two 8×8-pixel halves (bit 8);
+  inside each, the sx = 0 samples of all 64 pixels come first, then the
+  sx = 1 samples (bit 7). Within those 128 words the pixels are twiddled
+  with px in the even bits (`px0 py0 px1 py1 px2 py2` at bits 1-6), and the
+  two sy samples of a pixel are adjacent (bit 0).
+- The 4-sample depth is 4 × 4 bytes per padded pixel (0x564000 bytes); the
+  stencil address follows it (+0x38 = `805e5000`, 0x5e5000 − 0x81000 =
+  0x564000), and the buffer is 0x6bd000 bytes: 1 byte per sample after the
+  depth. Its contents and order are not covered (no stencil in these
+  captures).
+- Not covered: a 16-bit depth buffer (the `zls-*` frames: only their
+  decodes are kept, not the traces), stencil, FBOs, other sample counts.
 
 ## 8. Cube maps
 
@@ -882,15 +921,14 @@ until it is confirmed.
   0x80); the `zls-*` captures already show window renders storing depth
   without a split → captures of window frames with and without a split,
   logging each kick's flags next to its render's ZLS words.
-- The DDK's ZLS buffer is 5 bytes per padded pixel → a capture of the DDK's
-  ZLS buffer allocation for a window with a depth buffer, its size compared
-  with the padded pixel count.
 - ZLS control's bits outside the base are the surface's bits masked with
   `0xf80ee007` → captures of windows with different depth/stencil configs
   (16/0, 24/0, 24/8) and a diff of +0x2c.
-- One stencil byte per pixel follows the depth in the ZLS buffer, and it is
-  stored and loaded → a hardware split-frame stencil test (stencil written
-  before a 1-pixel readback, tested after), with the ZLS buffer read back.
+- One stencil byte per pixel follows the depth in the ZLS buffer, it is
+  stored and loaded, and in which order → a hardware split-frame stencil
+  test (stencil written before a 1-pixel readback, tested after), with the
+  ZLS buffer read back; or a DDK capture with stencil (24/8) that writes a
+  known stencil pattern.
 
 ### 10. GPU blits of our own
 
