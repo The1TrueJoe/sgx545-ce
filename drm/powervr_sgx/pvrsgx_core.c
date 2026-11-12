@@ -46,6 +46,7 @@ static const struct pvrsgx_core_regs sgx545_regs = {
 	.bif_bank_set = SGX_CR_BIF_BANK_SET,
 	.bif_bank0 = SGX_CR_BIF_BANK0,
 	.use_code_base_dm_shift = 25,
+	.use_code_base_addr_shift = 7,
 	.vendor_b30 = 0x0b30,
 	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
 	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
@@ -110,6 +111,8 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.bif_int_stat_fault_type = BIT(14),	/* read or write */
 	.bif_fault_addr = GENMASK(27, 12),
 	.use_code_base_dm_shift = 24,
+	/* 256-byte units: the EDM fetches at field << 8 (stage 1, log 2026-11-12-0300). */
+	.use_code_base_addr_shift = 8,
 	.pds_pc_base = 0x0b2c,
 	.pds_ctrl = 0x0abc,
 	.pds_inv = { 0x0ad0, 0x0ad4, 0x0ad8, 0x0adc },

@@ -478,10 +478,17 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	ida_destroy(&sdev->fw.pd_slots);
 }
 
-/* USE_CODE_BASE: device address >> 7, and the window's data master (1 pixel, 3 the EDM). */
-#define USE_CODE_BASE_ADDR_SHIFT	7
+/*
+ * USE_CODE_BASE: the device address in the core's units (128 bytes on the
+ * SGX545, 256 on the SGX530), and the window's data master (1 pixel, 3 the EDM).
+ */
 #define USE_CODE_BASE_DM_PIXEL		1
 #define USE_CODE_BASE_DM_UKERNEL	3
+
+static u32 code_base_addr(struct pvrsgx_device *sdev, u64 a)
+{
+	return (u32)a >> sdev->cr->use_code_base_addr_shift;
+}
 
 static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 {
@@ -558,7 +565,7 @@ static void pads_set(struct pvrsgx_device *sdev)
 			 n < 10 ? USE_CODE_BASE_DM_PIXEL : 0;
 
 		sgx_wr(sdev, use_code_base(sdev, n),
-		       (base + n * PAD_STRIDE) >> USE_CODE_BASE_ADDR_SHIFT |
+		       code_base_addr(sdev, base + n * PAD_STRIDE) |
 		       dm << cr->use_code_base_dm_shift);
 	}
 }
@@ -656,16 +663,17 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	} else {
 		for (u32 i = 0; i < 10; i++)
 			sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
-			       ((u32)(h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-				USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_DM_PIXEL << dm);
+			       code_base_addr(sdev, h->usse_pixel.base +
+						      (i << PVRSGX_USSE_WINDOW_LOG2)) |
+			       USE_CODE_BASE_DM_PIXEL << dm);
 		for (u32 i = 0; i < 4; i++)
 			sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
-			       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-			       USE_CODE_BASE_ADDR_SHIFT);
+			       code_base_addr(sdev, h->usse_vertex.base +
+						      (i << PVRSGX_USSE_WINDOW_LOG2)));
 	}
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       (sdev->sweep_flags & PVRSGX_SWEEP_CB15 ? sdev->sweep_cb15 :
-		(u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
+		code_base_addr(sdev, h->kernel_code.base)) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
@@ -756,7 +764,7 @@ static bool probes_wanted(struct pvrsgx_device *sdev)
 static u64 probe_va(struct pvrsgx_device *sdev, unsigned int i)
 {
 	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
-	u64 va = (h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) << code_base_probe[i].k;
+	u64 va = (u64)code_base_addr(sdev, h->kernel_code.base) << code_base_probe[i].k;
 	const struct pvrsgx_va_range *kh[] = { &h->kernel_code, &h->kernel_data, &h->sync };
 
 	if (va & (PAGE_SIZE - 1) || va + PAGE_SIZE > BIT_ULL(sdev->family->va_bits))
@@ -876,17 +884,16 @@ struct sweep_variant {
 };
 
 /*
- * Code base 15 at 0, 0x100000 and kernel code >> 7 fit an EDM fetch at
- * (field << 8) & 0x0fffffff (stage 1, log 2026-11-12-0300): 256-byte units
- * on the SGX530. The baseline; the field at 0x1b0000 (fetch 0x0b000000) to
- * pin the shift; at kernel code >> 8, where the microkernel should run; and
- * at kernel code >> 8 + 1, one unit in.
+ * Part 2 now writes code base 15 in the SGX530's 256-byte units (stage 1, log
+ * 2026-11-12-0300), so the baseline should start the microkernel and end the
+ * sweep. If it doesn't: the field at 0x1b0000 (fetch 0x0b000000) to pin the
+ * shift, and at kernel code >> 8 + 1, one unit in.
  */
 #define CB15(v)	{ .flags = PVRSGX_SWEEP_CB15, .cb15 = (v) }
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	CB15(0x1b0000), CB15(0x0ec00000 >> 8), CB15((0x0ec00000 >> 8) + 1),
+	CB15(0x1b0000), CB15((0x0ec00000 >> 8) + 1),
 };
 
 #undef CB15

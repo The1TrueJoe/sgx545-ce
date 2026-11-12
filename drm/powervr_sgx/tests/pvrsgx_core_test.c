@@ -149,6 +149,9 @@ static void core_test_heaps(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, f545->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE);
 	KUNIT_EXPECT_TRUE(test, pds_reach(f530, &f530->heaps->kernel_code));
 	KUNIT_EXPECT_TRUE(test, pds_reach(f530, &f530->heaps->pds_vertex));
+	/* Code bases: 128-byte units on the SGX545, 256 on the SGX530. */
+	KUNIT_EXPECT_EQ(test, f545->regs->use_code_base_addr_shift, 7);
+	KUNIT_EXPECT_EQ(test, f530->regs->use_code_base_addr_shift, 8);
 	KUNIT_EXPECT_EQ(test, f530->regs->clkgatectl2, 0);
 	KUNIT_EXPECT_EQ(test, f530->regs->event_kick2, 0);
 	/* No register the SGX530's header doesn't name: the vendor script's 0xb30 is the 545's. */
