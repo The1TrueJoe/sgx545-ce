@@ -139,7 +139,8 @@ struct sgx_varyings {
    /* set 0 reserved (vertex shaders that write gl_PointSize) */
    bool point_size;
    /* set 0 is the TA's vertex colour (output select b11): four F32
-    * components after the position, iterated by the PDS as the colour source,
+    * components after the position, iterated by the PDS as the colour source
+    * into one register as BGRA8 (B in byte 0, R in byte 2),
     * the one source it iterates flat */
    bool colour;
    unsigned set_comps[SGX_MAX_SETS];

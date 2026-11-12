@@ -1182,7 +1182,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
           * centres in the target's memory order, z, 1/w (docs/PDS.md "DOUTI") */
          if (it == SGX_FRAGCOORD_ITER)
             it = 0;
-         /* set 0 as the vertex colour: source 0x20, four F32 components */
+         /* set 0 as the vertex colour: source 0x20, four components into
+          * one register as BGRA8 */
          bool colour = vary.colour && it == 1 && !out.iters[i].pointcoord;
 
          last_plain = so->prog.n_douti;
@@ -1200,14 +1201,17 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
       if (so->code && orig->info.fs.uses_discard) {
          /* the triangle's depth plane (source 0x22, 3 components) after the
           * inputs: pa<n> on, n = the registers the iterations above fill (an
-          * F32 component 1, an F16 pair 1, a sampled texel 1) */
+          * F32 component 1, an F16 pair 1, a sampled texel or the vertex
+          * colour 1) */
          unsigned pa = 0;
 
          for (unsigned i = 0; i < so->prog.n_douti; i++) {
             const struct sgx_pds_douti *d = &so->prog.douti[i];
 
             if (d->iterate)
-               pa += d->prec1 ? (d->comps + 1) / 2 : d->comps;
+               pa += d->src == 0x20 ? 1
+                     : d->prec1     ? (d->comps + 1) / 2
+                                    : d->comps;
             if (d->dim2 || d->proj)
                pa++;
          }

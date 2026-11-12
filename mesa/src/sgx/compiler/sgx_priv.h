@@ -108,6 +108,8 @@ struct sgx_iter {
    bool f16;        /* iterated as F16 (mediump), two components per register */
    bool pointcoord; /* gl_PointCoord (set 0) */
    bool flat;       /* every varying in the set flat */
+   /* the TA's vertex colour (source 0x20): one register, BGRA8 */
+   bool colour;
    unsigned sampler;
 };
 
@@ -146,6 +148,8 @@ struct sgx_ctx {
    int in_reg[512], out_reg[512];
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
+#define SGX_IN_U8                                                              \
+   0x20000 /* in_reg: a vertex colour component, low bits = 4 * pa + it */
 #define SGX_ITER_FRAGCOORD 14 /* list A iterator of gl_FragCoord */
    struct sgx_iter iters[16];
    unsigned n_iters;
