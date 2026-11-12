@@ -628,6 +628,37 @@ Also read 0xa68's low four bits back after writing them (0x1, 0x4, 0xf). The SGX
 writes the address & ~0xf. If the bits stick on the SGX530, they're a field: candidates are
 a data size or a row count. Then rerun A with them set.
 
+## Correction: 0xa6c counts 16-byte rows
+
+The sections after the twelfth and thirteenth attempts read 0xa6c in dwords. It counts
+16-byte rows.
+- `PDS_PC_BASE` is in dwords: 0x5012a8 × 4 is exactly PDS0's start.
+- 0xa6c = 0, 1, 2 and 4 gave 0x5012a8, …ac, …b0 and …b8. That is 4 dwords, 16 bytes,
+  per unit.
+
+So:
+- 0xa6c = 1, the SGX545's value, starts the PDS at byte 0x10: our MOVS, after the one-row
+  data segment. It was right from attempt 1 (C).
+- 0xa6c = 4 starts it at byte 0x40, past PDS0's 0x18 bytes, inside PDS1's slot. Attempt
+  13's results don't apply to our program. Neither does the attempt-14 plan above,
+  which put its programs after the data segment with 0xa6c = 4.
+- Attempts 8-11 read with 1 = row 1: the PC cycling …ac / …b0 fits the PDS fetching
+  our MOVS-and-HALT row, then the next row. It probably did execute the MOVS and the HALT
+  and send the DOUT, and no task started. That points back at the DOUTU's contents and the
+  USSE side.
+
+**Attempt 14, corrected.** 0xa6c = 1, code from row 1. The PC may resolve only rows, so
+each landmark gets its own row:
+- **A:** row 1 = `bra #8` and three HALTs; row 2 = four HALTs; row 3 = `bra #8` (a
+  self-loop) and three HALTs. If the PDS executes, the PC sits at row 3 (…b4), a value
+  never seen before. If it doesn't, it stays at …ac.
+- **C:** row 1 = `bra #4` and three HALTs; row 2 = four HALTs. If it executes, the PC shows
+  …b0 and then goes idle.
+- **D:** A from byte 0 with 0xa6c = 0.
+
+The test program needs 0x40 bytes and overlaps PDS1's slot, which the SGX530's event
+registers don't use. The normal start goes back to 0xa6c = 1.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
