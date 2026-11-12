@@ -6,6 +6,7 @@
 
 #include <drm/drm_gem_shmem_helper.h>
 
+#include <linux/iosys-map.h>
 #include <linux/types.h>
 
 struct drm_device;
@@ -22,6 +23,8 @@ struct pvrsgx_bo {
 	 */
 	bool code_abs;
 	s64 code_place;
+	/** @import_map: An import's CPU mapping, from its exporter, for the cache flushes. */
+	struct iosys_map import_map;
 };
 
 static inline struct pvrsgx_bo *to_pvrsgx_bo(struct drm_gem_object *obj)
