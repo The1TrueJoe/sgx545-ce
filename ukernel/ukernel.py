@@ -344,6 +344,36 @@ class Asm:
         self.i(f"str #{kick_reg // 4}, r5")
         self.wait(CR_EVENT_STATUS2, done_bit, CR_EVENT_HOST_CLEAR2)
 
+    def pb_dpm_save(self, base, v0, v1, v2, v3, three_d):
+        """Snapshot the live DPM free-list state of the PB whose descriptor is at
+        `base` into pb[6..9] (bytes +0x18/+0x1c/+0x20/+0x24), so the descriptor is
+        current when that PB is reloaded after a switch (UKERNEL.md "Switching PBs").
+        TA side reads 0x700/0x710/0x724/0x72c and stores the high half of the two
+        counts; the 3D side reads the 3D counterparts 0x70c/0x71c/0x728/0x730 and
+        stores the low half -- the 3D state includes the pages the render freed, so
+        a PB reloaded without the 3D save loses one render's pages per switch.
+        `base` and v0..v3 are distinct registers; v0..v3 are clobbered."""
+        head, tail, c0, c1 = (0x70c, 0x71c, 0x728, 0x730) if three_d else \
+                             (0x700, 0x710, 0x724, 0x72c)
+        self.i(f"ldr {v0}, #{head // 4}")
+        self.i(f"ldr {v1}, #{tail // 4}")
+        self.i(f"ldr {v2}, #{c0 // 4}")
+        self.i(f"ldr {v3}, #{c1 // 4}")
+        self.i("wdf")
+        self.i(f"shl {v1}, {v1}, #16")                 # tail << 16
+        if three_d:                                    # 0x728 & 0xffff, 0x730 & 0xffff
+            self.i(f"shl {v2}, {v2}, #16"); self.i(f"shr {v2}, {v2}, #16")
+            self.i(f"shl {v3}, {v3}, #16"); self.i(f"shr {v3}, {v3}, #16")
+        else:                                          # 0x724 >> 16, 0x72c >> 16
+            self.i(f"shr {v2}, {v2}, #16")
+            self.i(f"shr {v3}, {v3}, #16")
+        self.i(f"st.a.d {base}, #{0x18 // 4}, {v0} [moe]")
+        self.i(f"st.a.d {base}, #{0x1c // 4}, {v1} [moe]")
+        self.i(f"st.a.d {base}, #{0x20 // 4}, {v2} [moe]")
+        self.i(f"st.a.d {base}, #{0x24 // 4}, {v3} [moe]")
+        self.i("idf")
+        self.i("wdf")
+
     def dpm_load(self):
         """load the DPM state and control, and clear the OTPM, waiting for each
         (docs/UKERNEL.md §6) so the free list is ready before the TA kicks."""
@@ -1452,6 +1482,21 @@ def build(a):
     a.i("wdf")
     a.i("test.xor.eq p0, r5, r11")              # same PB already loaded -> skip the reload
     a.i("(p0) ba skip_pb_fl")
+    # PB switch (option A): the TA is moving to a new PB (T=r5 != P=r11).
+    # 1. Clear the stage-1 OOM state carried from the departing PB, so P's first OOM
+    #    doesn't undo a stage-1 raise measured against the departing PB's thresholds.
+    a.i("limm r2, #0")
+    a.i(f"st.a.d r17, #{STAGE1_FLAG}, r2 [moe]")
+    a.i(f"st.a.d r17, #{STAGE1_SAVED_628}, r2 [moe]")
+    # 2. Save the departing TA's live free-list state into T's descriptor before the
+    #    load overwrites the global DPM. In the common (credit-1) path the next 3D
+    #    re-saves this PB from the 3D side and overwrites pb_T[6..9]; this save matters
+    #    when a PB's TA ran and was switched away before its 3D (pipelined/overlap).
+    #    Guard T != 0 (first TA load since a reset: markers 0, nothing to save).
+    a.i("test.and.eq p0, r5, r5")               # T == 0? skip the departing save
+    a.i("(p0) ba skip_ta_depart")
+    a.pb_dpm_save("r5", "r2", "r3", "r4", "r6", three_d=False)
+    a.label("skip_ta_depart")
     a.program(11, TA_PB)
     a.dpm_freelist(3, CR_DPM_TA_FL, 0x1)        # load the TA free list before the kick
     a.i(f"st.a.d r17, #{PB_TA_LOADED}, r11 [moe]")   # remember the loaded PB
@@ -1893,6 +1938,18 @@ def build(a):
     a.i("wdf")
     a.i("test.xor.eq p0, r4, r11")                    # same PB already loaded -> skip
     a.i("(p0) ba skip_3d_fl")
+    # PB switch (option A): the 3D is moving to a new PB (D=r4 != P=r11). Before the
+    # global DPM is reloaded for P, save the DEPARTING 3D's live free-list state into
+    # D's own descriptor (0x70c/0x71c/0x728/0x730 -> pb_D[6..9]); the open microkernel
+    # lacked this, so a PB reloaded after a switch lost the ~25 pages that render freed
+    # and exhausted within a few switches. Guard D != 0 (after a reset the markers are
+    # 0: nothing to save, load straight from the kernel-seeded descriptor). Overlap
+    # (UK_OVERLAP) additionally needs the TA->P save below gated on P==T and a TA pause
+    # arm when the TA is still live on P -- not reachable at credit 1; see note below.
+    a.i("test.and.eq p0, r4, r4")                    # D == 0 (first 3D since reset)? skip
+    a.i("(p0) ba skip_3d_depart")
+    a.pb_dpm_save("r4", "r2", "r5", "r6", "r7", three_d=True)
+    a.label("skip_3d_depart")
     # save_ta_state: stash the TA page counters in the PB descriptor, shifted.
     a.i(f"ldr r4, #{0x700 // 4}")
     a.i(f"ldr r5, #{0x710 // 4}")
