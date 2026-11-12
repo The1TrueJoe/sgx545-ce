@@ -4,13 +4,25 @@ A draft for Joseph to read. **Not sent, and not to be sent from here.** Joseph
 signs and sends it himself (`b4 send` or `git send-email`).
 
 - `0000-cover-letter.txt`: the cover letter, with To and Cc.
-- The patches don't exist yet as a series. The cover letter lists the v1
-  split (8 patches, the core only) and the follow-ups to come;
-  `docs/UPSTREAM-READINESS.md` (Kernel, "Minimal first series") has the plan.
-- Refreshed 2026-11-09 for m2-drm since a8dff09: the shared parameter
-  buffer (and question 4 on it), hang blame, the Cedarview results, and
-  testing on drm-misc-next. The runtime-PM stopgap (a render context
-  keeps the GPU awake) is in F3, not v1, so the letter doesn't mention it.
+- `series/`: the per-patch commit messages `drm/ci/rfc-series.sh` uses. The
+  patch list and diffstat in the letter come from `git format-patch` when the
+  series is cut.
+- Rewritten 2026-11-12 from the reviewer research
+  (`sgx545-work/upstream/rfc-research-2026-11-12.md`) and the Kernel items
+  K10-K18 in `docs/UPSTREAM-READINESS.md`. The letter describes the driver as
+  it will be when it is sent, so some of its sentences depend on work still
+  open:
+
+| sentence | needs |
+|---|---|
+| "Each client has its own parameter buffer" | K11, option A (open-ukernel `wip-pb-switch` and the per-VM PB) |
+| "Completion comes from the microkernel's interrupt" | K7 (the DONE_SEQ firmware required) |
+| "sends a wedged uevent" | K5 |
+| "the uAPI, frame, hang, PRIME and unbind tests, also under lockdep, KASAN, ..." | K8 clean |
+| "CI builds every patch" | K9 |
+| "transfer jobs" listed as a follow-up | K12 (transfer left out of the series) |
+| the bracketed placeholders | Joseph: the AI disclosure, the Gama/Patrik paragraph, and the links (Mesa MR, the Imagination 2023 mail, IGT) |
+
 
 ## Standards checklist (2026-11-08)
 
@@ -24,7 +36,7 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 
 | item | status |
 |---|---|
-| Subject `[RFC PATCH 0/8] drm/powervr_sgx: ...` (v1 core only; the follow-ups listed as to follow), imperative patch subjects with the subsystem prefix | pass |
+| Subject `[RFC PATCH 0/N] drm/powervr_sgx: ...`, imperative patch subjects with the subsystem prefix; N and the patch list from the cut series | open until the cut |
 | Cover letter says what, why and what is asked; RFC status explicit | pass |
 | Plain text, wrapped under 75 columns, no attachments | pass |
 | One logical change per patch, each one building | **open**: the series isn't cut yet |
@@ -37,8 +49,8 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 | item | status |
 |---|---|
 | No `Signed-off-by` from the AI | pass |
-| No AI attribution trailers on any patch (Joseph's rule) | pass |
-| AI-assistance disclosure in the cover letter | **left for Joseph**: his wording, if any |
+| No per-patch AI tags. The kernel dropped `Assisted-by:` in v7.4-rc1 (1e035297ffda); disclosure belongs in the cover letter | pass |
+| AI-assistance disclosure in the cover letter (generated-content.rst) | **left for Joseph**: a placeholder in the letter, his wording |
 
 ### drm-uapi.rst (new uAPI)
 
@@ -67,11 +79,17 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 
 - Keep: the drm-misc maintainers (Maarten Lankhorst, Maxime Ripard, Thomas
   Zimmermann), David Airlie, Simona Vetter, dri-devel, linux-kernel.
-- Added by hand: the drm/imagination maintainers **as of mainline after
-  June 2026**, Alessio Belle and Luigi Santivetti, plus
-  imagination@lists.freedesktop.org (the 7.1.8 tree still lists Frank Binns and
-  Matt Coster). Frank Binns, a reviewer, stays on Cc. Patrik Jakobsson for the
+- Added by hand: the drm/imagination maintainers (IMGTEC POWERVR DRM DRIVER
+  since v7.3), Alessio Belle and Luigi Santivetti, plus
+  imagination@lists.freedesktop.org. Frank Binns is no longer listed, not even
+  as a reviewer; he stays on Cc as a courtesy because he wrote Imagination's
+  2023 statement that SGX should have its own driver. Patrik Jakobsson for the
   gma500 patches.
+- The DRM GPU SCHEDULER maintainers (Matthew Brost, Danilo Krummrich, Philipp
+  Stanner; Christian König as reviewer) and Thomas Hellström (DRM GPUVM
+  reviewer, and the x86 write-combining question). get_maintainer decides the
+  addresses on the day: König is `R:` for the scheduler under a different
+  address than his dma-buf one.
 - Matched by keyword, to decide at send time: dma-buf (Sumit Semwal,
   Christian König, linux-media, linaro-mm-sig: the driver imports dma-bufs) and
   Documentation (Jonathan Corbet, linux-doc).
@@ -103,15 +121,16 @@ archive refuse automated reads; not bypassed).
   - Timing: if the SGX535 render code lands inside gma500 first, there will be
     two SGX render stacks. Writing to the reMESA author before posting may be
     the friendlier first step. That's Joseph's call.
-  - Tone: the cover letter is kept short, and it says up front that an AI
-    assistant was used, with the tags on each patch.
+  - Tone: the cover letter is kept short. Its AI disclosure is Joseph's
+    paragraph (a placeholder until then); there are no per-patch tags.
 - **drm/imagination** is busy: async VM_BIND with sparse mappings
   (2026-11-08), GPUVM immediate mode (October), runtime-PM fixes, and new
   maintainers since June (Alessio Belle, Luigi Santivetti; Matt Coster left).
   The Rogue driver shares nothing with ours. Imagination does maintain the
   Series5 SGX binding, so placement next to it is a fair question for them
-  (question 1). Our synchronous-only VM_BIND will be compared with their
-  async one (question 3).
+  (question 1). Their async VM_BIND makes ours look odd only if ours takes
+  fences: a synchronous VM_BIND takes none (drm-vm-bind-async.rst; K14), and
+  an async mode is a later flag, as theirs was.
 - **Series5 SGX device-tree work** (Andrew Davis, 2023-24; binding comments
   from H. Nikolaus Schaller, Tony Lindgren and Krzysztof Kozlowski, some
   still active in October 2026) added `img,powervr-sgx.yaml` for TI and
