@@ -555,8 +555,15 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
    if (res->texture) {
       unsigned w = u_minify(res->base.width0, level),
                h = u_minify(res->base.height0, level);
-      bool twiddled =
-         util_is_power_of_two_nonzero(w) && util_is_power_of_two_nonzero(h);
+      /* A twiddled level one texel high (a 1D texture) is a plain row in
+       * the sampler's layout (TEX.md section 1: the tiles are min(w, h)
+       * square), but the PBE twiddles a destination by its clip width
+       * (section 10) and would spread the row over a 16-high tile: it is
+       * rendered linear instead, the same bytes for one row.  Other levels
+       * with a side below 16 can't be rendered in the sampler's layout
+       * either way (docs/GL3.md). */
+      bool twiddled = util_is_power_of_two_nonzero(w) &&
+                      util_is_power_of_two_nonzero(h) && h > 1;
 
       t->va = res->bo.va + sgx_tex_offset(&res->base, level, layer);
       t->stride = twiddled ? w : align(w, 8);

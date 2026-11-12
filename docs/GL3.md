@@ -433,9 +433,18 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
 - **The FBO depth tests** (64): 28 pass, 31 skip (`ARB_depth_buffer_float`,
   `EXT_texture_array`), 5 fail with and without the cap, so they are known
   failures that don't come from it:
-  - `fbo-depth-*-tex1d` for the four depth formats: a 1D depth texture that
-    a render wrote is drawn black where green is expected; not diagnosed
-    (next on the list).
+  - `fbo-depth-*-tex1d` for the four depth formats: the failing half is the
+    1D **colour** texture the FBO rendered into (16×1): texels 0, 2, 8 and
+    10 come back green, the rest black. The PBE twiddles a destination by
+    its clip width (TEX.md section 10), so it puts texel x of a 16-wide
+    target where a 16×16 twiddled tile has (x, 0), x's bits in the odd
+    positions; the sampler reads a texture one texel high as a plain row
+    (section 1's tiles are min(w, h) square). Those are the only four
+    texels where the two agree. A texture level one texel high is now
+    rendered linear (`sgx_resource_target`; one row is the same either
+    way), **not yet on a board**. A power-of-two level with a side from 2 to 8 (32×4, say)
+    can't be rendered in the sampler's layout with either PBE mode and is
+    still wrong.
   - `fbo-depth-sample-compare`: shadow compares against a depth texture a
     render wrote; it prints no detail, not diagnosed.
 - `clipping@fixed-clip-enables` failed once on run 4's cap build and passed
