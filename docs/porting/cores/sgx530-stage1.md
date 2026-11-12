@@ -2033,3 +2033,47 @@ driver-side word changes plus the existing `aluwr`/`aluwr_o0`.
 `3d8e8a728ac5fd1c97cd3f2c91ce878fd0a4bd4ee1ddd722ee93c506d8053aa8`, pkg
 `c30c27a11f3589598a9c86acaf71c4b4715d47cb8e44f2f7de2ad5a89693f678` (72 B, crc
 0x8050de8b, temps 18, event entry 0x0).
+
+## §9 bisect run: gate 1 NOT confirmed; the leftover model breaks under §9
+
+The control ran (21:31–21:32 UTC, EDMPROTECT on, task launches on all three):
+
+| probe | launch | BIF_FAULT |
+|---|---|---|
+| `aluwr_o0` (output, retires) | full §9 | **0x0f373000** |
+| `aluwr` (temp r5) | full §9 | 0x0fa93000 |
+| `aluwr` (temp r5) | §9, word2=0 | 0x0fa93000 |
+| `aluwr_o0` (output) | §9, word2=0 | 0x0f373000 |
+
+**word2 (1 vs 0) changes nothing** — both probes are stable across it, so word 2 does
+not grant a temp write context.
+
+**My earlier "gate 1 likely passed" was premature; the control refutes the clean
+read, but the numbers are also internally inconsistent, so gate 1 is not decided
+either way yet.** The anchor `aluwr_o0` writes output o0 (retires, C), with r17
+patched to the control-block address and r5 a leftover, so o0 = r5 | ctlblk =
+0x0f373000 is the true OR. Under the simple model `aluwr` is then either that same
+0x0f373000 (temp retired) or r5's raw leftover (did not). It is neither: 0x0fa93000
+is **not a subset** of 0x0f373000 (extra bits 0x880000, bits 23 and 19), and a raw
+r5 leftover must be a subset of r5|ctlblk. So one of these holds under §9 and the
+stage-1 leftover map no longer applies: (a) r5's leftover differs between the two
+images, (b) the output write path does not give a clean `r5|ctlblk`, or (c) the
+load addressing is no longer identity. §9 reseeds the register file (the init DMAs
+the control block into sa, seeds pa0–2), so the stage-1 leftovers are simply void.
+
+**The decisive, model-free test: `sgx530_ldr5_ctl`.** It is `aluwr` with the `or`
+replaced by a `nop`, so `ld.a.d r3, r5, #0` reads r5's raw leftover under §9 with
+the identical image structure. Compare it to `aluwr` (same r5, same image bar the
+or): **different fault addresses ⇒ the or changed r5 ⇒ a temporary write retired;
+the same ⇒ r5 untouched ⇒ it did not.** This compares r5 to r5 and avoids o0 and
+all cross-probe leftover math. Image (asm.py oracle, core-rev 0x00010205): img
+`ed9b1e8088a5dc0bd2c28f5bbb6faa13c1501433b0ed3ef182ab07f251dfcbb9`, pkg
+`82a70edc22f0b92c134f7f5e9643b7b0ab848af156e63f4e69fbca5b936fc521` (crc 0x6a90d669).
+
+To fully decode all three numbers afterward I also need the ctlblk address r17 is
+patched to under §9 (the kernel session has it).
+
+**What is solid regardless:** §9 closes gate 2 (the task launches and runs, repeated
+and stable). If gate 1 turns out NOT solved, the stage-1 output-only-retire
+restructure (outputs as scratch) plus §9's correct launch is still a viable path,
+and host-kick remains the other fallback.
