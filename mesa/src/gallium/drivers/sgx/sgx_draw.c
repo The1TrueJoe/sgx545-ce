@@ -1622,8 +1622,7 @@ sgx_draw_vbo_impl(struct pipe_context *pctx, const struct pipe_draw_info *info,
             return;
       }
       /* pass type: a blend 1; discard 4, or 2 with a blend; a depthf
-       * (gl_FragDepth) 5, as the vendor driver's points with depthf (ISA.md;
-       * for triangles a guess, H10) */
+       * (gl_FragDepth) 5 (ISA.md, H10) */
       st.pass_type = fs->depth_pa >= 0       ? 5
                      : fs->discard_pa >= 0   ? (blend && blend->blend ? 2 : 4)
                      : blend && blend->blend ? 1

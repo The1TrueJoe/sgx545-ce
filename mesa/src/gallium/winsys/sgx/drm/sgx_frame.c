@@ -2650,7 +2650,7 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
       put_code(w, &n, code, count - 1);
       if (depth_pa >= 0)
          /* (p1) depthf pa<d>, sa3, sa4 [end]: h9-10 = 2 (p1) with a discard,
-          * 0 (every pixel) without (ISA.md, gl_FragDepth: guess) */
+          * 0 (every pixel) without (ISA.md, gl_FragDepth, H10) */
          put(w, &n, 0xf0000184u | (uint32_t)depth_pa << 14,
              discard_pa >= 0 ? 0xfb340404u : 0xfb340004u);
       else

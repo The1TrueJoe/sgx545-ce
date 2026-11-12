@@ -4,10 +4,11 @@
  */
 
 /*
- * Test H10 (docs/GL3.md): does depthf at the feedback point write
- * gl_FragDepth?  Run with SGX_DEBUG=fragdepth, which builds the program of
- * docs/ISA.md "Phases, visibility feedback and discard" (depthf pa<depth>,
- * sa3, sa4 [end], pass type 5; its form there is a guess).
+ * Test H10 (docs/ISA.md, gl_FragDepth): does depthf at the feedback point
+ * write gl_FragDepth?  The program is docs/ISA.md's "Phases, visibility
+ * feedback and discard" one (depthf pa<depth>, sa3, sa4 [end], pass type 5).
+ * It passed on a CE5300 board on 2026-11-12, and has been the driver's
+ * default since then.
  *
  * Each case is a 128x64 FBO with a colour and a 24-bit depth buffer, depth
  * cleared to 1:
@@ -24,7 +25,7 @@
  * quarter rows (they keep the clear: depth 1, black, then red); the ramp
  * written through a varying instead of gl_FragCoord.
  *
- *   SGX_DEBUG=fragdepth sgx_fragdepth
+ *   sgx_fragdepth
  *
  * zig cc -target x86_64-linux-gnu.2.36 -I<mesa include> -o sgx_fragdepth
  * sgx_fragdepth.c -ldl

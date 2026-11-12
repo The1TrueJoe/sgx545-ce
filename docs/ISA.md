@@ -2391,14 +2391,35 @@ backed above; this section only collects it.
   pa<z> the iterated z (above; with it in place, points discard on
   hardware). Our compiler leaves
   gl_FragDepth, clamped to [0, 1], in a pa register at the feedback nop for
-  a `depthf` there, pass type 5. **Guess**: that depthf's src0 is the depth
-  written; sa3/sa4 not traced. Needs hardware.
+  a `depthf` there, pass type 5. **depthf's src0 is the depth written**
+  (**hardware**, test H10, 2026-11-12, below); what sa3/sa4 mean beyond
+  carrying the depth test words is not traced.
   - The words for it: lo `0xf0000184 | depth_pa << 14` (src0 = pa<depth_pa>
     in l14-20, src1/src2 = sa3/sa4 as in atst8), hi `0xfb340404` for
     `(p1) depthf` (h9-10 = 2). In a program without a discard the compiler
     computes no p1, so `(p1)` would test whatever p1 holds: such a program
-    needs h9-10 = 0, hi `0xfb340004` (**guess**: an atst8 with h9-10 = 0
-    kills nothing, hardware, so depthf with 0 should keep every pixel).
+    uses h9-10 = 0, hi `0xfb340004`, and every pixel is kept (**hardware**,
+    H10).
+  - The program around it (the open driver's, `upload_fs` in the winsys):
+    phase 0 = `phas.i #phase1, #t [wait=1]`, then `pcoeff` when the program
+    also discards, otherwise `mov pa0, pa0 [skipinv rcnt]` in its place (as
+    the vendor driver's points path); the shader up to the feedback nop;
+    `depthf` [end] there; phase 1 = the colour out and `phas.i #0, #0 [end]`.
+    The draw's ISPA pass type is 5 for triangles too; sa3/sa4 hold the same
+    depth words as a discard's atst8 (STATE.md "Alpha test (ES1)").
+  - **H10** (a CE5300 board, `mesa/tests/sgx_fragdepth.c`): a 128×64 FBO
+    with 24-bit depth; a full quad at depth 0.5 writes gl_FragDepth =
+    x / 128 (from gl_FragCoord, or from a varying), depth test ALWAYS,
+    green; a second quad at 0.5 with LESS, red. Read back colour and depth
+    (ZLS). Without depthf every pixel stores 0.5 and the red quad covers
+    nothing. With it all three cases are exact, 8064 of 8064 pixels each
+    (the middle two columns left out), worst depth error 0: the ramp left of
+    the middle, 0.5 under the red right half; with a discard of the top 16
+    rows (`(p1) depthf`), those rows keep the clear and then take the red
+    quad. piglit's `glsl-1.10-fragdepth`, `glsl-bug-22603`, `drawpix-z`,
+    `early-z` and the `depthstencil-default_fb-copypixels` and
+    `-drawpixels-float-and-ushort` tests at 1, 2 and 4 samples all pass
+    (they failed without it); no GPU resets.
   - The clamp runs before the colour is written: the colour may be packed
     over an input the depth reads (pa0), so depth_pa is past every register
     the colour can take, `max(inputs, 1) + 1`.

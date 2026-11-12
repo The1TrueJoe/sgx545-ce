@@ -1169,16 +1169,13 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          }
       }
       /* gl_FragDepth waits in pa<depth_pa> at the feedback nop for a depthf
-       * there, whose form is a guess (ISA.md): only with SGX_DEBUG=fragdepth
-       * (test H10); otherwise the triangle's own depth */
-      if (out.writes_depth && so->code &&
-          (sgx_drv_debug & SGX_DEBUG_FRAG_DEPTH) && so->n_code &&
+       * there (ISA.md, test H10) */
+      if (out.writes_depth && so->code && so->n_code &&
           so->code[so->n_code - 1] == (uint64_t)0xf8000140u << 32) {
          so->depth_pa = out.depth_pa;
       } else if (out.writes_depth && !ctx->warned_frag_depth) {
-         fprintf(
-            stderr,
-            "sgx: gl_FragDepth not written yet (the triangle's depth is used)\n");
+         fprintf(stderr, "sgx: gl_FragDepth with no feedback point: the "
+                         "triangle's depth is used\n");
          ctx->warned_frag_depth = true;
       }
       so->uses_front_face = out.uses_front_face;
