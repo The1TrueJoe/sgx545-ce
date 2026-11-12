@@ -823,6 +823,43 @@ code base being unmapped would show as a pad, not a fault at `PDS_EXEC_BASE` + 0
 Agreed from this side: once the coordinator agrees, it goes in init-script part 2, logged
 as C for its effect. Its bit meanings stay G.
 
+## After the nineteenth attempt: the DOUTU task fetches from PDS_EXEC_BASE
+
+Attempt 19 (log 2026-11-12-0202):
+- **V1 (no DOUTU):** no fault, and the clock status went idle. So the fetch at
+  `PDS_EXEC_BASE` + 0 is the DOUTU's doing.
+- **V2 and V3:** with a page mapped there, the fault moved to the next page, 0x0d801000,
+  whatever the page held. Something reads linearly from `PDS_EXEC_BASE` + 0.
+- **The pads:** none fired, though every code base pointed at mapped code.
+
+Reading (G): the DOUTU starts a USSE task whose instruction fetch begins at
+`PDS_EXEC_BASE` + 0, not at a `USE_CODE_BASE`. The fault's b2 is then the USSE code fetch.
+The SGX530 resolves DOUTU word 0's code address against the PDS's base. Its field layout
+is still U.
+
+**Attempt 20: run the microkernel from there.** The SGX530 image's stage-1 path fits in
+its first 4 KiB:
+- the event entry and the ladder at 0;
+- init at 0x238, ending near 0x350.
+
+So alias exactly one page: map the code arena's page 0 read-only at 0x0d800000 (the
+same approval as attempt 19's one page).
+- **Expected if the task starts there:**
+  - `EVENT_TIMER` 0xa5a, then init's period with enable;
+  - the 0x28 marker;
+  - version 0x00010000;
+  - `INIT_STATUS` 1.
+- **Then the first timer tick** branches to `kick_end` at 0x1920, on page 1, and faults at
+  0x0d801000, b2. That fault is the expected end of this attempt, not a failure.
+- **Branch targets** count from the task's code base. If that base is `PDS_EXEC_BASE`, the
+  alias is the image's start, and the init path's branches land inside page 0.
+
+If init passes:
+- the next attempt aliases the whole image (pages 0-4);
+- then the DOUTU word-0 fields get mapped, so the task can start at the kernel code heap
+  without an alias.
+- V4 (the BRA page) is moot: the fetch is the USSE's.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
