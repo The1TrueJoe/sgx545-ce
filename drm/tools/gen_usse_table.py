@@ -48,11 +48,14 @@ POLICY = dict({n: 'USSE_REFUSE' for n in REFUSE}, **{
 ALLOW = {
     'br': {'PRED': range(7), 'LINK': [0]},	# no pn; no link (lapc is refused)
     'phas.i': {'WAIT': [0, 1, 2, 7], 'RATE': [0, 1, 2]},
-    'op0xd6': {'N': [0], 'F3_6': [0]},		# as the state-emit programs
+    'op0xd6': {'NVAL': [0], 'F3_6': [0]},	# as the state-emit programs
     # Only the program-start state (efo's F16 off, C10 on), which no compiler
     # changes: format control is then known everywhere without following it.
     'setfc': {'A0': [0], 'A1': [1]},
 }
+
+# Field names older descriptions used (new: old).
+OLD_NAMES = {'NVAL': 'N'}
 
 # How an operand's number bit 6 reads, by the expression of its MODE
 # parameter: a flag under format select (a bit of the word), a flag under C10
@@ -202,10 +205,12 @@ def leaf_forms(root):
 
 
 def entries(n, mask, match, fields):
-    allow = ALLOW.get(n, {})
-    for f in allow:
+    allow = {}
+    for name, vals in ALLOW.get(n, {}).items():
+        f = name if name in fields else OLD_NAMES.get(name)
         if f not in fields:
-            raise SystemExit('%s: ALLOW names no field %s' % (n, f))
+            raise SystemExit('%s: ALLOW names no field %s' % (n, name))
+        allow[f] = vals
     names = sorted(allow)
     for vals in itertools.product(*(allow[f] for f in names)):
         m, v = mask, match
