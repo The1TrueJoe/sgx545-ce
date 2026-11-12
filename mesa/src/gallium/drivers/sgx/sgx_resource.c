@@ -828,8 +828,6 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
          if (we)
             fprintf(stderr,
                     "sgx: a render into a mapped texture did not finish\n");
-         if (sgx_drv_debug & SGX_DEBUG_RB_SLEEP)
-            usleep(10000);
          SGX_DBG(SYNC,
                  "texture readback %s %ux%u level %u box %d,%d %dx%d: bo va %#x, rendered %#x, recording %s, waited %.3f ms (rc %d)\n",
                  util_format_short_name(prsc->format), prsc->width0,

@@ -54,8 +54,6 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "depth and stencil not kept across renders (no ZLS load or store)"},
    {"glsl130", SGX_DEBUG_GLSL130,
     "GLSL 1.30 and native integers, and so EXT_texture_integer (RG32 and RGBA32 sample wrong until the compiler fetches them word by word): for the GL 3.0 work's tests"},
-   {"rbsleep", SGX_DEBUG_RB_SLEEP,
-    "sleep 10 ms after a texture readback's wait for the render (does the render's fence come before its writes?)"},
    {"zlsdump", SGX_DEBUG_ZLS_DUMP,
     "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
