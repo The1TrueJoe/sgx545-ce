@@ -180,6 +180,7 @@ static const struct pvrsgx_core_family families[] = {
 		.event_pds_guessed = true,
 		/* Its task's stores to EDMPROTECT pages fault (stage 1, log 2026-11-12-0630). */
 		.data_no_edmprotect = true,
+		.kick = PVRSGX_KICK_HOST,
 		.cmds = &pvrsgx_cmd_core_sgx530,
 		.init_regs = sgx530_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),

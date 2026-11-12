@@ -30,6 +30,17 @@ struct pvrsgx_cmd_core;
 /* A BIF directory or table invalidate and a data invalidate never in one command. */
 #define PVRSGX_QUIRK_BRN_28889			BIT(0)
 
+/*
+ * How a render reaches the GPU. UKERNEL: the host writes a kernel CCB command
+ * and the EDM microkernel programs the TA/3D cores. HOST: the CPU programs the
+ * TA/3D cores itself, with no EDM task (docs/porting/cores/sgx530-host-kick.md)
+ * — the path for a single-context core whose EDM task can't retire writes.
+ */
+enum pvrsgx_kick {
+	PVRSGX_KICK_UKERNEL,
+	PVRSGX_KICK_HOST,
+};
+
 /* The USSE instruction set, for the shader validator's tables. */
 enum pvrsgx_isa {
 	PVRSGX_ISA_SGX545,
@@ -128,6 +139,8 @@ struct pvrsgx_core_family {
 	u32 features;
 	/** @isa: Its USSE instruction set. */
 	enum pvrsgx_isa isa;
+	/** @kick: How a render reaches the GPU (UKERNEL unless set). */
+	enum pvrsgx_kick kick;
 	/** @num_dir_lists: BIF directory lists (SGX_FEATURE_BIF_NUM_DIRLISTS). */
 	u32 num_dir_lists;
 	/** @va_bits: Device-virtual address bits (SGX_FEATURE_ADDRESS_SPACE_SIZE). */
@@ -184,6 +197,12 @@ struct pvrsgx_core_info {
 static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f)
 {
 	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
+}
+
+/* The CPU programs the TA/3D cores itself, with no EDM microkernel. */
+static inline bool pvrsgx_core_host_kick(const struct pvrsgx_core_family *f)
+{
+	return f->kick == PVRSGX_KICK_HOST;
 }
 
 extern bool pvrsgx_allow_unisolated;

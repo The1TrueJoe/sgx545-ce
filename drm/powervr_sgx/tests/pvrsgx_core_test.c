@@ -98,6 +98,9 @@ static void core_test_sgx530(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, f->regs->clkgatectl2, 0);
 	KUNIT_EXPECT_TRUE(test, pvrsgx_core_family_usable(f));
 	KUNIT_EXPECT_FALSE(test, pvrsgx_core_single_context(pvrsgx_core_family_get(545)));
+	/* The SGX530 drives the cores from the host; the SGX545 uses the microkernel. */
+	KUNIT_EXPECT_TRUE(test, pvrsgx_core_host_kick(f));
+	KUNIT_EXPECT_FALSE(test, pvrsgx_core_host_kick(pvrsgx_core_family_get(545)));
 	KUNIT_EXPECT_STREQ(test, pvrsgx_core_lookup(f, 0x01120000, 0x00010205)->name,
 			   "TI OMAP3630 (SGX530 1.2.5)");
 }
