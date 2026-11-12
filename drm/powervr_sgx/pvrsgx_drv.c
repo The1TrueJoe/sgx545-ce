@@ -50,7 +50,8 @@ void *pvrsgx_obj_array_get(const struct drm_powervr_sgx_obj_array *in, u32 obj_s
 
 		if (err) {
 			kvfree(out);
-			return ERR_PTR(err == -E2BIG ? -EINVAL : err);
+			/* -E2BIG: a larger struct this kernel doesn't know. */
+			return ERR_PTR(err);
 		}
 	}
 	return out;
@@ -113,6 +114,9 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
 			.pb_max_pages = 0x8000,
 			.max_ta_kicks = PVRSGX_MAX_TA_KICKS,
+			.va_bits = sdev->family->va_bits,
+			.caps = DRM_POWERVR_SGX_CAP_BACKWARD_BLITS,
+			.max_layers = 1,
 		};
 
 		return query_put(ptr, &args->size, &lim, sizeof(lim));
@@ -135,6 +139,24 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 	}
 	case DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET:
 		return pvrsgx_query_heap_info(sdev, ptr, &args->size);
+	case DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET: {
+		const struct pvrsgx_cmd_def *render = pvrsgx_cmd_def(sdev, PVRSGX_CMD_RENDER);
+		const struct pvrsgx_cmd_def *kick = pvrsgx_cmd_def(sdev, PVRSGX_CMD_TA_KICK);
+		const struct pvrsgx_cmd_def *xfer = pvrsgx_cmd_def(sdev, PVRSGX_CMD_TRANSFER);
+		struct drm_powervr_sgx_dev_query_commands c = {
+			.job_types = BIT(DRM_POWERVR_SGX_JOB_TYPE_NULL),
+		};
+
+		/* A render needs its kicks too; an unsupported command is refused. */
+		if (render && render->supported && kick && kick->supported)
+			c.job_types |= BIT(DRM_POWERVR_SGX_JOB_TYPE_RENDER);
+		if (xfer && xfer->supported)
+			c.job_types |= BIT(DRM_POWERVR_SGX_JOB_TYPE_TRANSFER);
+		c.render_exts = render ? pvrsgx_cmd_ext_mask(render) : 0;
+		c.ta_kick_exts = kick ? pvrsgx_cmd_ext_mask(kick) : 0;
+		c.transfer_exts = xfer ? pvrsgx_cmd_ext_mask(xfer) : 0;
+		return query_put(ptr, &args->size, &c, sizeof(c));
+	}
 	default:
 		return -EINVAL;
 	}

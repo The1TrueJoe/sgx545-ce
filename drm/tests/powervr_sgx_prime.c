@@ -17,19 +17,22 @@
  * cache lines would show. Frames take turns:
  *
  *   explicit  wait for the job's syncobj, then DIRTYFB;
- *   implicit  DIRTYFB at once: the KMS commit must wait for the job's fence in
- *             the shared dma_resv (on the test kernels the copy may land after
+ *   implicit  the job's out-fence onto the dma-buf (DMA_BUF_IOCTL_IMPORT_SYNC_FILE),
+ *             then DIRTYFB at once: the KMS commit must wait for it in the
+ *             shared dma_resv (on the test kernels the copy may land after
  *             the ioctl returns, so the check waits up to 2 s for it, but a
  *             stale pixel always fails);
- *   control   no BO list, DIRTYFB at once: the scanout may well be stale (not
- *             counted), which shows the implicit frames' check can fail. In
- *             a) the import isn't listed, so it gets no coherence (the uAPI
- *             rule: a job lists every import it touches): its buffer may be
- *             stale too, reported, not counted. In b) the buffer is ours,
- *             write-combined, and must be right listed or not.
+ *   control   no fence on the dma-buf and no cache range, DIRTYFB at once:
+ *             the scanout may well be stale (not counted), which shows the
+ *             implicit frames' check can fail. In a) the import isn't listed,
+ *             so it gets no coherence (the uAPI rule: a job lists the bytes of
+ *             every import it touches): its buffer may be stale too, reported,
+ *             not counted. In b) the buffer is ours, write-combined, and must
+ *             be right listed or not.
  *
- * The explicit and implicit frames list the buffer as written: in a) they
- * show that a listed import is flushed around the job.
+ * The explicit and implicit frames list the buffer's pixels row by row as a
+ * cache range. In a) they show that the listed bytes of an import are flushed
+ * around the job; in b) that a range of one of our own objects is accepted.
  *
  * -d holds each frame on the screen. Exit 0 when every counted frame is right
  * in both places.
@@ -43,6 +46,8 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <linux/dma-buf.h>
 
 #include <drm/drm.h>
 #include <drm/drm_fourcc.h>
@@ -184,7 +189,8 @@ static void kms_dirty(struct kms *k, uint32_t fb_id)
 	CHECK(xioctl(k->fd, DRM_IOCTL_MODE_DIRTYFB, &d));
 }
 
-static int prime_move(int from, uint32_t handle, int to, uint32_t *out)
+/* The object, exported from one device and imported into the other; *dmabuf keeps the fd. */
+static int prime_move(int from, uint32_t handle, int to, uint32_t *out, int *dmabuf)
 {
 	struct drm_prime_handle ex = { .handle = handle, .flags = DRM_CLOEXEC | DRM_RDWR };
 	struct drm_prime_handle im = {};
@@ -194,8 +200,8 @@ static int prime_move(int from, uint32_t handle, int to, uint32_t *out)
 		return e;
 	im.fd = ex.fd;
 	e = xioctl(to, DRM_IOCTL_PRIME_FD_TO_HANDLE, &im);
-	close(ex.fd);
 	*out = im.handle;
+	*dmabuf = ex.fd;
 	return e;
 }
 
@@ -207,11 +213,20 @@ static int64_t now_ns(void)
 	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
-/* Submit the frame, the colour buffer in its BO list if bo, and DIRTYFB before (or after) the wait. */
-static int submit_frame(struct sgx_ctx *c, struct kms *k, uint32_t fb_id, uint32_t bo, int dirty_first)
+/*
+ * Submit the frame and DIRTYFB before (or after) the wait. An import lists its
+ * w x h pixels, row by row, as a cache range if range. With dmabuf >= 0 the
+ * job's out-fence goes on the dma-buf as its write fence (rev3-commands 8.5),
+ * which the KMS commit of the DIRTYFB waits for.
+ */
+static int submit_frame(struct sgx_ctx *c, struct kms *k, uint32_t fb_id, uint32_t bo, int range,
+			unsigned rw, unsigned rh, uint32_t pitch, int dmabuf, int dirty_first)
 {
 	struct sgx_job j;
-	struct drm_powervr_sgx_bo_ref ref = { .handle = bo, .flags = DRM_POWERVR_SGX_BO_REF_FLAG_WRITE };
+	struct drm_powervr_sgx_cache_range cr = {
+		.handle = bo, .flags = DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ | DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE,
+		.offset = 0, .size = rw * 4, .stride = pitch, .rows = rh,
+	};
 	struct drm_powervr_sgx_ioctl_submit_jobs_args sj = {
 		.jobs = { .stride = sizeof(j.job), .count = 1, .array = (uintptr_t)&j.job },
 	};
@@ -220,12 +235,26 @@ static int submit_frame(struct sgx_ctx *c, struct kms *k, uint32_t fb_id, uint32
 	int e;
 
 	sgx_render_job(c, &j);
-	if (bo)
-		j.job.bo_refs = (struct drm_powervr_sgx_obj_array){
-			.stride = sizeof(ref), .count = 1, .array = (uintptr_t)&ref,
+	if (range)
+		j.job.cache_ranges = (struct drm_powervr_sgx_obj_array){
+			.stride = sizeof(cr), .count = 1, .array = (uintptr_t)&cr,
 		};
 	if ((e = xioctl(c->dev->fd, DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS, &sj)))
 		return e;
+	if (dmabuf >= 0) {
+		struct drm_syncobj_handle sh = {
+			.handle = c->syncobj, .flags = DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE,
+		};
+		struct dma_buf_import_sync_file is = { .flags = DMA_BUF_SYNC_WRITE };
+
+		if ((e = xioctl(c->dev->fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &sh)))
+			return e;
+		is.fd = sh.fd;
+		e = xioctl(dmabuf, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &is);
+		close(sh.fd);
+		if (e)
+			return e;
+	}
 	if (dirty_first)
 		kms_dirty(k, fb_id);
 	w.timeout_nsec = now_ns() + 2000000000ll;
@@ -321,6 +350,7 @@ int main(int argc, char **argv)
 		struct sgx_surface *s;
 		struct sgx_shader *vs, *fs;
 		uint32_t *map;
+		int dmabuf = -1;
 
 		if (path && path != pass)
 			continue;
@@ -341,7 +371,7 @@ int main(int argc, char **argv)
 			map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, k.fd, md.offset);
 			if (map == MAP_FAILED)
 				return 1;
-			CHECK(prime_move(k.fd, kms_handle, dev.fd, &sgx_handle));
+			CHECK(prime_move(k.fd, kms_handle, dev.fd, &sgx_handle, &dmabuf));
 			printf("a) simpledrm dumb buffer %u (%ux%u, pitch %u) -> powervr_sgx handle %u\n",
 			       kms_handle, stride, h, cd.pitch, sgx_handle);
 		} else {
@@ -358,7 +388,7 @@ int main(int argc, char **argv)
 			map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, dev.fd, mo.offset);
 			if (map == MAP_FAILED)
 				return 1;
-			CHECK(prime_move(dev.fd, sgx_handle, k.fd, &kms_handle));
+			CHECK(prime_move(dev.fd, sgx_handle, k.fd, &kms_handle, &dmabuf));
 			printf("b) powervr_sgx object %u (%u bytes) -> simpledrm handle %u\n", sgx_handle, size,
 			       kms_handle);
 		}
@@ -387,7 +417,8 @@ int main(int argc, char **argv)
 			sgx_set_framebuffer(c, s);
 			sgx_clear(c, clear, 1.0f);
 			if ((e = sgx_draw(c, &d)) ||
-			    (e = submit_frame(c, &k, fb_id, mode != 2 ? sgx_handle : 0, mode != 0))) {
+			    (e = submit_frame(c, &k, fb_id, sgx_handle, mode != 2, w, h, pitch,
+					      mode == 1 ? dmabuf : -1, mode != 0))) {
 				printf("%c) frame %u: render failed: %d\n", 'a' + pass - 1, f, e);
 				bad_frames++;
 				continue;
@@ -428,6 +459,7 @@ int main(int argc, char **argv)
 			xioctl(k.fd, DRM_IOCTL_MODE_RMFB, &id);
 		}
 		munmap(map, size);
+		close(dmabuf);
 	}
 	sgx_dev_close(&dev);
 	printf("%s\n", bad_frames ? "SOME FRAMES WRONG" : "all frames right");

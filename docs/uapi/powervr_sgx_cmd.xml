@@ -1,0 +1,141 @@
+<?xml version="1.0" ?>
+
+<!--
+SPDX-License-Identifier: MIT
+Copyright © 2026 Joseph Telaak
+-->
+
+<!--
+The client commands of the powervr_sgx uAPI (docs/uapi/rev3-commands.md).
+
+One source, read only by docs/uapi/gen_cmd.py, which emits:
+  - the command block of powervr_sgx_drm.h (structs, extension names);
+  - the kernel's check tables, per core (pvrsgx_cmd_defs.[ch]);
+  - the field table of docs/UAPI.md.
+
+<core>: a core the uAPI supports, with the values its checks depend on.
+  va_bits        device-virtual address bits: an address must be below 2^va_bits
+  pds_row_bytes  bytes per PDS data row (the pds_rows extent)
+  "unknown" for a value not yet measured: a command that depends on it is not
+  offered on that core (its job_types bit is clear, a submit is -EOPNOTSUPP).
+
+<command>: one per command struct. <extension>: core-specific fields, chained
+from a command's head.extensions; id is its DRM_POWERVR_SGX_EXT_* number
+(1..63), cores the cores that accept it.
+
+<field> attributes:
+  type     u32, s32, u64, f32 (IEEE-754 binary32 bits in a __u32)
+  check    none   the value only reaches a register
+           range  min <= value <= max; max_limit names a runtime limit instead
+           mask   value & ~mask == 0
+           addr   below 2^va_bits, aligned to "align", inside "heap" (default:
+                  any client heap); optional="true" lets 0 mean "none";
+                  "extent": bytes from it that must be mapped at submit: a
+                  number, rt_depth, rt_stencil, or pds_rows (pds_row_bytes per
+                  row of extent_field)
+  A <core name=""> child overrides any check attribute for that core, or
+  "unknown" for a value not yet measured on it.
+
+Rules (rev3-commands.md section 3):
+  - Fields are appended, never reordered or removed once merged.
+  - A field appended later must take 0 to mean "absent, as before"; a field
+    whose valid values exclude 0 goes into an extension.
+  - A field some core lacks is an extension, never a base field.
+  - Cross-field rules are in the kernel's per-command checks (pvrsgx_cmd_checks.c).
+-->
+
+<powervr_sgx_cmd>
+
+  <core name="sgx545" va_bits="32" pds_row_bytes="16"/>
+  <core name="sgx530" va_bits="28" pds_row_bytes="unknown"/>
+
+  <!-- The 3D part of a render job (drm_powervr_sgx_job.cmd). -->
+  <command name="render" job_type="RENDER">
+    <field name="depth_addr" type="u64" check="addr" optional="true" extent="rt_depth"
+           doc="Depth buffer the ZLS loads and stores, or 0"/>
+    <field name="stencil_addr" type="u64" check="addr" optional="true" extent="rt_stencil"
+           doc="Stencil buffer the ZLS loads and stores, or 0"/>
+    <field name="pixel_event_pds_addr" type="u64" check="addr" heap="pds_pixel" align="16"
+           extent="pds_rows" extent_field="pixel_event_pds_rows"
+           doc="PDS program run at the end of each tile (the pixel event)">
+      <core name="sgx530" align="unknown"/>
+    </field>
+    <field name="bg_pds_secondary_addr" type="u64" check="addr" heap="pds_pixel" align="16"
+           doc="Background object: secondary PDS program">
+      <core name="sgx530" align="unknown"/>
+    </field>
+    <field name="bg_pds_primary_addr" type="u64" check="addr" heap="pds_pixel" align="16"
+           doc="Background object: primary PDS program">
+      <core name="sgx530" align="unknown"/>
+    </field>
+    <field name="pixel_event_pds_rows" type="u32" check="range" min="1" max="63"
+           doc="Data rows of the pixel event program">
+      <core name="sgx530" max="unknown"/>
+    </field>
+    <field name="bg_pds_secondary_rows" type="u32" check="range" min="1" max="63"
+           doc="Data rows of the background secondary program">
+      <core name="sgx530" max="unknown"/>
+    </field>
+    <field name="bg_pds_primary_rows" type="u32" check="range" min="1" max="63"
+           doc="Data rows of the background primary program">
+      <core name="sgx530" max="unknown"/>
+    </field>
+    <field name="bg_depth_f32" type="f32" check="none"
+           doc="Depth the background object clears to"/>
+    <field name="depth_bias_units" type="s32" check="none"
+           doc="Constant depth bias (glPolygonOffset units)"/>
+    <field name="depth_bias_factor_f32" type="f32" check="none"
+           doc="Slope-scaled depth bias (glPolygonOffset factor)"/>
+  </command>
+
+  <!-- One TA kick of a render job (an element of drm_powervr_sgx_job.ta_kicks). -->
+  <command name="ta_kick">
+    <field name="vdm_base" type="u64" check="addr" align="4" extent="4"
+           doc="Start of the kick's VDM control stream">
+      <core name="sgx530" align="unknown"/>
+    </field>
+  </command>
+
+  <!-- A transfer job (drm_powervr_sgx_job.cmd). -->
+  <command name="transfer" job_type="TRANSFER">
+    <field name="bg_block_addr" type="u64" check="addr" align="16" extent="0x200"
+           doc="Background block: the blit's PDS program triple">
+      <core name="sgx530" align="unknown" extent="unknown"/>
+    </field>
+    <field name="pixel_event_pds_addr" type="u64" check="addr" heap="pds_pixel" align="16"
+           extent="pds_rows" extent_field="pixel_event_pds_rows"
+           doc="PDS program run at the end of each tile">
+      <core name="sgx530" align="unknown"/>
+    </field>
+    <field name="pixel_event_pds_rows" type="u32" check="range" min="1" max="63"
+           doc="Data rows of the pixel event program">
+      <core name="sgx530" max="unknown"/>
+    </field>
+    <field name="first_tile_x" type="u32" check="range" min="0" max_limit="tiles_x"
+           doc="First tile column to blit"/>
+    <field name="first_tile_y" type="u32" check="range" min="0" max_limit="tiles_y"
+           doc="First tile row to blit"/>
+    <field name="last_tile_x" type="u32" check="range" min="0" max_limit="tiles_x"
+           doc="Last tile column to blit"/>
+    <field name="last_tile_y" type="u32" check="range" min="0" max_limit="tiles_y"
+           doc="Last tile row to blit"/>
+    <field name="bg_depth_f32" type="f32" check="none"
+           doc="Depth the background object writes"/>
+  </command>
+
+  <!-- SGX545 register images: absent reads as all zero, rev 1's "off". -->
+  <extension name="SGX545_RENDER" id="1" command="render" cores="sgx545">
+    <!-- Bits 3-11 are the tile count, which the kernel fills. -->
+    <field name="zls_control" type="u32" check="mask" mask="0x001ff007"
+           doc="ZLS control register image; bits 3-11 are the kernel's"/>
+    <field name="flags_3d" type="u32" check="mask" mask="0x00000180"
+           doc="3D flags; bit 8 uses the stencil buffer"/>
+  </extension>
+
+  <extension name="SGX545_TA_KICK" id="2" command="ta_kick" cores="sgx545">
+    <!-- Bits 19, 22, 23 and 25. -->
+    <field name="ta_flags2" type="u32" check="mask" mask="0x02c80000"
+           doc="TA flags register image"/>
+  </extension>
+
+</powervr_sgx_cmd>

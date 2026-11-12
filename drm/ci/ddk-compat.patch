@@ -42,8 +42,8 @@ diff -ruN powervr_sgx.orig/pvrsgx_ccb.c powervr_sgx/pvrsgx_ccb.c
  	unsigned long timeout = jiffies + msecs_to_jiffies(500);
  
  	/* The vendor image has no entry for some types; the open one's table is the identity. */
--	if (type >= PVRSGX_CMD_MAX)
-+	if (type >= PVRSGX_CMD_MAX || (pvrsgx_fw_is_ddk(sdev) && !sdev->fw.host_kick[type]))
+-	if (type >= PVRSGX_KCMD_MAX)
++	if (type >= PVRSGX_KCMD_MAX || (pvrsgx_fw_is_ddk(sdev) && !sdev->fw.host_kick[type]))
  		return -EINVAL;
  
  	mutex_lock(&sdev->ccb_lock);
@@ -208,7 +208,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw.c powervr_sgx/pvrsgx_fw.c
  	if (err)
  		return err;
 +
-+	for (u32 t = 0; t < PVRSGX_CMD_MAX; t++)
++	for (u32 t = 0; t < PVRSGX_KCMD_MAX; t++)
 +		f->host_kick[t] = t;
  	return 0;
  }
@@ -343,11 +343,11 @@ diff -ruN powervr_sgx.orig/pvrsgx_fw_ddk.c powervr_sgx/pvrsgx_fw_ddk.c
 +MODULE_FIRMWARE("powervr_sgx/sgx545-ukernel-1.7.862890.bin");
 +
 +/* Host-kick entries in instructions, per command type. */
-+static const u32 host_kick[PVRSGX_CMD_MAX] = {
-+	[PVRSGX_CMD_TA] = 0x11d,
-+	[PVRSGX_CMD_TRANSFER] = 0x103,
-+	[PVRSGX_CMD_POWER] = 0xd4,
-+	[PVRSGX_CMD_PROCESS_QUEUES] = 0x156,
++static const u32 host_kick[PVRSGX_KCMD_MAX] = {
++	[PVRSGX_KCMD_TA] = 0x11d,
++	[PVRSGX_KCMD_TRANSFER] = 0x103,
++	[PVRSGX_KCMD_POWER] = 0xd4,
++	[PVRSGX_KCMD_PROCESS_QUEUES] = 0x156,
 +};
 +
 +/* pds1: if in0 == 0, DMA the control block into sa first (DOUTD 0x3c0003f); then enter at 0xdf0. */

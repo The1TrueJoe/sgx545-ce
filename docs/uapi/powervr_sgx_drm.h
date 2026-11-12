@@ -28,13 +28,19 @@ extern "C" {
  *    offset in hexadecimal. Padding and reserved fields must be zero; the
  *    kernel always checks them and returns -EINVAL otherwise.
  *  - User pointers and device-virtual addresses are __u64. A device-virtual
- *    address whose upper 32 bits are not zero is rejected: the GPU's address
- *    words are 32 bits wide.
+ *    address at or above 2^&drm_powervr_sgx_dev_query_limits.va_bits is
+ *    rejected.
  *  - Structs reached through &struct drm_powervr_sgx_obj_array can grow at the
  *    end. A short object is zero-extended. In an object longer than the kernel
  *    knows, the unknown bytes must be zero.
- *  - Command streams are not structs and are not defined in this header: see
- *    "PowerVR SGX command streams" below.
+ *  - Client commands grow the same way, through &drm_powervr_sgx_cmd_head.size,
+ *    and carry core-specific fields in extensions: see "PowerVR SGX client
+ *    commands" below.
+ *
+ * The DRM driver's minor version is the uAPI revision: 3. Revisions 1 and 2
+ * passed command streams to SUBMIT_JOBS at 0x0c and 0x0b; revision 3's is 0x0e,
+ * a number neither used, so an older binary's first submit fails with -EINVAL.
+ * (Downstream only: the upstream series starts at 1.0 with dense ioctl numbers.)
  */
 
 /**
@@ -91,8 +97,10 @@ struct drm_powervr_sgx_obj_array {
 #define DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE PVR_SGX_IOCTL(0x08, DRM_IOWR, get_context_state)
 #define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET PVR_SGX_IOCTL(0x09, DRM_IOWR, create_rt_dataset)
 #define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET PVR_SGX_IOCTL(0x0a, DRM_IOW, destroy_rt_dataset)
-#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0b, DRM_IOWR, submit_jobs)
+/* 0x0b was SUBMIT_JOBS with command streams (uAPI revision 2): retired, never reused. */
 #define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE PVR_SGX_IOCTL(0x0c, DRM_IOWR, upload_code)
+/* 0x0d was UPLOAD_CODE in uAPI revision 1: never reused. */
+#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0e, DRM_IOWR, submit_jobs)
 
 /**
  * DOC: PowerVR SGX IOCTL DEV_QUERY interface
@@ -165,9 +173,24 @@ struct drm_powervr_sgx_dev_query_limits {
 	/** @max_ta_kicks: Largest &drm_powervr_sgx_job.ta_kicks count. */
 	__u32 max_ta_kicks;
 
-	/** @_padding_1c: Reserved. This field must be zero. */
-	__u32 _padding_1c;
+	/**
+	 * @va_bits: Device-virtual address bits: every address a command names
+	 * is below 2^va_bits.
+	 */
+	__u32 va_bits;
+
+	/** @caps: ``DRM_POWERVR_SGX_CAP_*`` bits of this core. */
+	__u32 caps;
+
+	/** @max_layers: Largest number of render-target layers. */
+	__u32 max_layers;
 };
+
+/**
+ * DRM_POWERVR_SGX_CAP_BACKWARD_BLITS - A transfer may copy between overlapping
+ * ranges with the destination above the source.
+ */
+#define DRM_POWERVR_SGX_CAP_BACKWARD_BLITS _BITUL(0)
 
 /**
  * struct drm_powervr_sgx_dev_query_quirks - Hardware fixes userspace has to know
@@ -276,6 +299,34 @@ enum drm_powervr_sgx_dev_query {
 	 * @DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET: &struct drm_powervr_sgx_dev_query_heap_info.
 	 */
 	DRM_POWERVR_SGX_DEV_QUERY_HEAP_INFO_GET,
+	/**
+	 * @DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET: &struct drm_powervr_sgx_dev_query_commands.
+	 */
+	DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET,
+};
+
+/**
+ * struct drm_powervr_sgx_dev_query_commands - What this core accepts
+ *
+ * Fetched with %DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET. A job type whose bit is
+ * clear is refused with -EOPNOTSUPP: a value it depends on is not known for this
+ * core yet. An extension name outside its command's mask is refused the same way.
+ */
+struct drm_powervr_sgx_dev_query_commands {
+	/** @job_types: Bit n: &enum drm_powervr_sgx_job_type n is accepted. */
+	__u32 job_types;
+
+	/** @_padding_4: Reserved. This field must be zero. */
+	__u32 _padding_4;
+
+	/** @render_exts: Bit n: extension name n is accepted in a render command. */
+	__u64 render_exts;
+
+	/** @ta_kick_exts: Bit n: extension name n is accepted in a TA kick. */
+	__u64 ta_kick_exts;
+
+	/** @transfer_exts: Bit n: extension name n is accepted in a transfer command. */
+	__u64 transfer_exts;
 };
 
 /**
@@ -699,57 +750,198 @@ struct drm_powervr_sgx_ioctl_destroy_rt_dataset_args {
 };
 
 /**
- * DOC: PowerVR SGX command streams
+ * DOC: PowerVR SGX client commands
  *
- * The client's part of a GPU command is a stream of scalars, in the manner of the
- * upstream PowerVR driver's streams. The kernel copies the stream into kernel
- * memory, decodes it, checks every field and builds the firmware command from the
- * result.
+ * The client's part of a GPU command is one struct per command: &struct
+ * drm_powervr_sgx_cmd_render, &struct drm_powervr_sgx_cmd_ta_kick and &struct
+ * drm_powervr_sgx_cmd_transfer. Each starts with &struct drm_powervr_sgx_cmd_head:
+ * its size, and a chain of core-specific extensions. The kernel copies the
+ * command and its extensions, checks every field and builds the firmware command
+ * from the result; docs/UAPI.md lists how every word of the firmware command is
+ * produced.
  *
- * A stream is:
- *
- *  - A header of two __u32: the length of the main stream in bytes, header
- *    included, then a word that must be zero.
- *  - The main stream: the command's fields, in their defined order, each naturally
- *    aligned from the start of the stream. Its length must be exactly the one the
- *    kernel knows: a main stream never changes once released.
- *  - Optionally, extension streams. Each is announced by a __u32 header: bits
- *    29-31 the header type, bit 28 "another header follows", bits 0-27 one bit per
- *    extension stream, whose fields follow in bit order. Each header type appears
- *    at most once. New fields are only ever added as extension streams.
- *
- * Bytes skipped to align a field must be zero, and nothing may follow the last
- * stream. A stream is at most 4096 bytes and starts on an 8-byte boundary.
- *
- * Addresses in a stream are device-virtual addresses in the job's VM. A field the
- * kernel does not check is one whose value only reaches a hardware register, with
- * no effect outside the VM.
- *
- * The field lists are not in this header. They are in the stream definition file
- * (powervr_sgx_kmd_stream.xml in docs/uapi), which generates both the kernel's
- * decoder tables and the userspace stream writers. The streams are:
- *
- *  - CMD_RENDER: the 3D part of a render job, at &drm_powervr_sgx_job.cmd_stream.
- *  - CMD_TA_KICK: one tiling kick, at &drm_powervr_sgx_ta_kick.cmd_stream.
- *  - CMD_TRANSFER: a transfer job, at &drm_powervr_sgx_job.cmd_stream.
+ * Addresses are device-virtual addresses in the job's VM. A field the kernel
+ * does not check is one whose value only reaches a hardware register, with no
+ * effect outside the VM. The fields and their checks are defined once, in
+ * powervr_sgx_cmd.xml in docs/uapi, which generates the structs below and the
+ * kernel's check tables.
  */
+
+/* BEGIN commands: generated by docs/uapi/gen_cmd.py from powervr_sgx_cmd.xml */
 
 /**
- * struct drm_powervr_sgx_ta_kick - One tiling kick of a render job
+ * struct drm_powervr_sgx_cmd_head - The head of every command struct
  *
- * The first element of &drm_powervr_sgx_job.ta_kicks starts the scene. The last
- * one ends it, and the kernel starts the 3D after it.
+ * The kernel copies a command as copy_struct_from_user() does: a shorter
+ * struct is zero-filled, non-zero bytes past what the kernel knows are
+ * -E2BIG. A field appended later takes 0 to mean "absent".
  */
-struct drm_powervr_sgx_ta_kick {
-	/** @cmd_stream: User pointer to a CMD_TA_KICK stream. 8-byte aligned. */
-	__u64 cmd_stream;
+struct drm_powervr_sgx_cmd_head {
+	/** @size: sizeof() the struct as the caller built it. */
+	__u32 size;
 
-	/** @cmd_stream_len: Length of the stream, in bytes. */
-	__u32 cmd_stream_len;
+	/** @_padding_4: Reserved. This field must be zero. */
+	__u32 _padding_4;
 
-	/** @flags: Reserved, must be 0. */
-	__u32 flags;
+	/**
+	 * @extensions: User pointer to the first &struct drm_powervr_sgx_ext,
+	 * or 0.
+	 */
+	__u64 extensions;
 };
+
+/**
+ * struct drm_powervr_sgx_ext - The head of every command extension
+ *
+ * At most 16 in a chain, each name once. A name of another command is
+ * -EINVAL; a name this core doesn't accept is -EOPNOTSUPP
+ * (%DRM_POWERVR_SGX_DEV_QUERY_COMMANDS_GET lists the accepted ones).
+ */
+struct drm_powervr_sgx_ext {
+	/** @name: One of the ``DRM_POWERVR_SGX_EXT_*`` names. */
+	__u32 name;
+
+	/** @_padding_4: Reserved. This field must be zero. */
+	__u32 _padding_4;
+
+	/** @next: User pointer to the next extension, or 0. */
+	__u64 next;
+};
+
+/* &struct drm_powervr_sgx_ext_sgx545_render, for sgx545 */
+#define DRM_POWERVR_SGX_EXT_SGX545_RENDER 1
+/* &struct drm_powervr_sgx_ext_sgx545_ta_kick, for sgx545 */
+#define DRM_POWERVR_SGX_EXT_SGX545_TA_KICK 2
+
+/**
+ * struct drm_powervr_sgx_cmd_render - A render command
+ *
+ * Extensions: &struct drm_powervr_sgx_ext_sgx545_render.
+ */
+struct drm_powervr_sgx_cmd_render {
+	/** @head: The common head. */
+	struct drm_powervr_sgx_cmd_head head;
+
+	/** @depth_addr: Depth buffer the ZLS loads and stores, or 0. */
+	__u64 depth_addr;
+
+	/** @stencil_addr: Stencil buffer the ZLS loads and stores, or 0. */
+	__u64 stencil_addr;
+
+	/** @pixel_event_pds_addr: PDS program run at the end of each tile (the pixel event). */
+	__u64 pixel_event_pds_addr;
+
+	/** @bg_pds_secondary_addr: Background object: secondary PDS program. */
+	__u64 bg_pds_secondary_addr;
+
+	/** @bg_pds_primary_addr: Background object: primary PDS program. */
+	__u64 bg_pds_primary_addr;
+
+	/** @pixel_event_pds_rows: Data rows of the pixel event program. */
+	__u32 pixel_event_pds_rows;
+
+	/** @bg_pds_secondary_rows: Data rows of the background secondary program. */
+	__u32 bg_pds_secondary_rows;
+
+	/** @bg_pds_primary_rows: Data rows of the background primary program. */
+	__u32 bg_pds_primary_rows;
+
+	/**
+	 * @bg_depth_f32: Depth the background object clears to. IEEE-754
+	 * binary32 bits, any value.
+	 */
+	__u32 bg_depth_f32;
+
+	/** @depth_bias_units: Constant depth bias (glPolygonOffset units). */
+	__s32 depth_bias_units;
+
+	/**
+	 * @depth_bias_factor_f32: Slope-scaled depth bias (glPolygonOffset
+	 * factor). IEEE-754 binary32 bits, any value.
+	 */
+	__u32 depth_bias_factor_f32;
+};
+
+/**
+ * struct drm_powervr_sgx_cmd_ta_kick - A ta kick command
+ *
+ * Extensions: &struct drm_powervr_sgx_ext_sgx545_ta_kick.
+ */
+struct drm_powervr_sgx_cmd_ta_kick {
+	/** @head: The common head. */
+	struct drm_powervr_sgx_cmd_head head;
+
+	/** @vdm_base: Start of the kick's VDM control stream. */
+	__u64 vdm_base;
+};
+
+/**
+ * struct drm_powervr_sgx_cmd_transfer - A transfer command
+ */
+struct drm_powervr_sgx_cmd_transfer {
+	/** @head: The common head. */
+	struct drm_powervr_sgx_cmd_head head;
+
+	/** @bg_block_addr: Background block: the blit's PDS program triple. */
+	__u64 bg_block_addr;
+
+	/** @pixel_event_pds_addr: PDS program run at the end of each tile. */
+	__u64 pixel_event_pds_addr;
+
+	/** @pixel_event_pds_rows: Data rows of the pixel event program. */
+	__u32 pixel_event_pds_rows;
+
+	/** @first_tile_x: First tile column to blit. */
+	__u32 first_tile_x;
+
+	/** @first_tile_y: First tile row to blit. */
+	__u32 first_tile_y;
+
+	/** @last_tile_x: Last tile column to blit. */
+	__u32 last_tile_x;
+
+	/** @last_tile_y: Last tile row to blit. */
+	__u32 last_tile_y;
+
+	/** @bg_depth_f32: Depth the background object writes. IEEE-754 binary32 bits, any value. */
+	__u32 bg_depth_f32;
+};
+
+/**
+ * struct drm_powervr_sgx_ext_sgx545_render - Extension %DRM_POWERVR_SGX_EXT_SGX545_RENDER
+ *
+ * For &struct drm_powervr_sgx_cmd_render, on sgx545.
+ * Absent, its fields read as zero.
+ */
+struct drm_powervr_sgx_ext_sgx545_render {
+	/** @base: The common head. */
+	struct drm_powervr_sgx_ext base;
+
+	/** @zls_control: ZLS control register image; bits 3-11 are the kernel's. */
+	__u32 zls_control;
+
+	/** @flags_3d: 3D flags; bit 8 uses the stencil buffer. */
+	__u32 flags_3d;
+};
+
+/**
+ * struct drm_powervr_sgx_ext_sgx545_ta_kick - Extension %DRM_POWERVR_SGX_EXT_SGX545_TA_KICK
+ *
+ * For &struct drm_powervr_sgx_cmd_ta_kick, on sgx545.
+ * Absent, its fields read as zero.
+ */
+struct drm_powervr_sgx_ext_sgx545_ta_kick {
+	/** @base: The common head. */
+	struct drm_powervr_sgx_ext base;
+
+	/** @ta_flags2: TA flags register image. */
+	__u32 ta_flags2;
+
+	/** @_padding_14: Reserved. This field must be zero. */
+	__u32 _padding_14;
+};
+
+/* END commands */
 
 /**
  * DOC: PowerVR SGX IOCTL SUBMIT_JOBS interface
@@ -803,34 +995,66 @@ struct drm_powervr_sgx_sync_op {
 };
 
 /**
- * DOC: Flags for struct drm_powervr_sgx_bo_ref
+ * DOC: Flags for struct drm_powervr_sgx_cache_range
  *
- * .. c:macro:: DRM_POWERVR_SGX_BO_REF_FLAG_WRITE
+ * .. c:macro:: DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ
  *
- *    The job writes this object: the out-fence is added to its reservation
- *    object as a write fence and the job waits for all earlier fences on it.
- *    Without this flag the job reads it: the out-fence is added as a read fence
- *    and the job waits for earlier write fences.
+ *    The job reads the range.
+ *
+ * .. c:macro:: DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE
+ *
+ *    The job writes the range.
  */
-#define DRM_POWERVR_SGX_BO_REF_FLAG_WRITE _BITUL(0)
+#define DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ _BITUL(0)
+#define DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE _BITUL(1)
 
 /**
- * struct drm_powervr_sgx_bo_ref - An object a job takes part in implicit sync on
+ * struct drm_powervr_sgx_cache_range - Bytes of an import a job reads or writes
  *
- * Only objects shared with another client or process need an entry. An object
- * must be mapped in the job's VM to be useful, and that is not checked here.
+ * The GPU doesn't snoop the CPU caches, and an imported object's pages may be
+ * cached. The kernel keeps a job coherent with the CPU on the listed bytes
+ * only:
  *
- * Every object imported from another device that the job reads or writes
- * must be listed: the GPU doesn't snoop the CPU caches, and the kernel flushes
- * only listed imports around the job. An unlisted import may be read stale or
- * have its contents overwritten by dirty CPU cache lines.
+ *  - when the job is about to run, it writes back and drops the CPU's lines of
+ *    every range, so the GPU reads what the CPU wrote and no dirty line lands on
+ *    the job's output later;
+ *  - once the job's writes have reached memory, and before its out-fence
+ *    signals, it drops the lines of every range with
+ *    %DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE, which the CPU may have fetched
+ *    again meanwhile. A job whose out-fence carries an error gets no such
+ *    flush: its WRITE ranges are undefined.
+ *
+ * The range is @rows rows of @size bytes, @stride bytes apart, from @offset,
+ * widened to whole cache lines: one damage rectangle of a linear buffer is one
+ * entry. @rows 0 is one row. An entry for an object that isn't an import (ours
+ * are write-combined, and a dma-buf of this device imports as the original
+ * object) is checked and flushes nothing. No fence is attached.
+ *
+ * Bytes of an import the job changes but doesn't list have undefined contents
+ * afterwards, for the CPU and the GPU alike. That is never a leak: the kernel
+ * writes the whole import back once when it is imported, so a stale line or a
+ * stale DRAM word is the object's own earlier contents. Bytes a job rewrites
+ * unchanged (a render's tiles outside its draws, which it loaded) need no entry
+ * while the CPU doesn't write the object during the job.
  */
-struct drm_powervr_sgx_bo_ref {
+struct drm_powervr_sgx_cache_range {
 	/** @handle: GEM handle. */
 	__u32 handle;
 
-	/** @flags: ``DRM_POWERVR_SGX_BO_REF_FLAG_*`` flags. */
+	/** @flags: ``DRM_POWERVR_SGX_CACHE_RANGE_FLAG_*``, at least one. */
 	__u32 flags;
+
+	/** @offset: Byte offset of the first row. */
+	__u64 offset;
+
+	/** @size: Bytes per row. Must not be 0. */
+	__u64 size;
+
+	/** @stride: Bytes from one row to the next; at least @size when @rows > 1. */
+	__u32 stride;
+
+	/** @rows: Number of rows; 0 and 1 both mean one. */
+	__u32 rows;
 };
 
 /**
@@ -858,7 +1082,7 @@ enum drm_powervr_sgx_job_type {
 	/**
 	 * @DRM_POWERVR_SGX_JOB_TYPE_NULL: No GPU work. The firmware takes it in
 	 * queue order with the context's other jobs, and its out-fences signal
-	 * once it has. Runs on a context of either type; no stream, no flags,
+	 * once it has. Runs on a context of either type; no command, no flags,
 	 * no TA kicks, no RT dataset. For testing synchronisation (and for a
 	 * fence that follows everything queued before it).
 	 */
@@ -881,23 +1105,27 @@ struct drm_powervr_sgx_job {
 	 */
 	__u32 flags;
 
-	/** @cmd_stream_len: Length of the stream at @cmd_stream, in bytes. */
-	__u32 cmd_stream_len;
+	/** @_padding_c: Reserved. This field must be zero. */
+	__u32 _padding_c;
 
 	/**
-	 * @cmd_stream: User pointer to a CMD_RENDER or CMD_TRANSFER stream, by
-	 * @type. 8-byte aligned.
+	 * @cmd: User pointer to the type's command: &struct
+	 * drm_powervr_sgx_cmd_render or &struct drm_powervr_sgx_cmd_transfer.
 	 */
-	__u64 cmd_stream;
+	__u64 cmd;
 
 	/** @sync_ops: Array of &struct drm_powervr_sgx_sync_op. May be empty. */
 	struct drm_powervr_sgx_obj_array sync_ops;
 
-	/** @bo_refs: Array of &struct drm_powervr_sgx_bo_ref. May be empty. */
-	struct drm_powervr_sgx_obj_array bo_refs;
+	/**
+	 * @cache_ranges: Array of &struct drm_powervr_sgx_cache_range, at most
+	 * 64: the bytes of imports the job reads or writes. May be empty.
+	 */
+	struct drm_powervr_sgx_obj_array cache_ranges;
 
 	/**
-	 * @ta_kicks: Array of &struct drm_powervr_sgx_ta_kick. At least one
+	 * @ta_kicks: Array of &struct drm_powervr_sgx_cmd_ta_kick, each with
+	 * &drm_powervr_sgx_cmd_head.size equal to the stride. At least one
 	 * element and at most &drm_powervr_sgx_dev_query_limits.max_ta_kicks for a
 	 * render job, empty for a transfer job.
 	 */
