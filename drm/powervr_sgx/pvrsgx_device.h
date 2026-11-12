@@ -142,6 +142,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_EXEC0_ALIAS	BIT(15)	/* ... or the code arena's page 0 aliased */
 #define PVRSGX_SWEEP_CB15		BIT(16)	/* code base 15's address = @sweep_cb15 */
 #define PVRSGX_SWEEP_DOUTU_OR		BIT(17)	/* the event DOUTU word 0 |= @sweep_doutu0 */
+#define PVRSGX_SWEEP_TEMPS_FIELD	BIT(18)	/* its temporaries field (b24-31) = @sweep_doutu0 */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4

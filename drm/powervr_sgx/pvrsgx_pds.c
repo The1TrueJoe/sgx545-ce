@@ -155,6 +155,9 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	if (sw & (PVRSGX_SWEEP_TEMPS4 | PVRSGX_SWEEP_TEMPS0))
 		doutu = (doutu & ~PDS_DOUTU_TEMPS) |
 			FIELD_PREP(PDS_DOUTU_TEMPS, sw & PVRSGX_SWEEP_TEMPS4 ? 1 : 0);
+	if (sw & PVRSGX_SWEEP_TEMPS_FIELD)
+		doutu = (doutu & ~PDS_DOUTU_TEMPS) |
+			FIELD_PREP(PDS_DOUTU_TEMPS, sdev->sweep_doutu0);
 	/* The sweep's bit-weight test: the temporaries and one address bit only. */
 	if (b == PVRSGX_FW_PDS0 && sdev->sweep_doutu_bit)
 		doutu = (doutu & PDS_DOUTU_TEMPS) | BIT(sdev->sweep_doutu_bit - 1);
