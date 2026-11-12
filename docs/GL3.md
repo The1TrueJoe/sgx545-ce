@@ -419,13 +419,25 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
   from skip to pass (`fbo-deriv`, `depth-clear-precision-check`, five
   `fbo-alphatest-formats` intensity formats, and the 4x `alpha-blending`
   twice, `alpha-to-one-single-sample-buffer 4` and seven `interpolation 0`
-  tests); 10 FBO depth tests that never ran before pass. Four tests that
-  ARB_framebuffer_object lets run fail: `tex-miplevel-selection`, `-lod`, `-lod-bias`, and
-  `clip-and-scissor-blit 4 normal`.
+  tests); 10 FBO depth tests that never ran before pass.
+- **Known failures that the cap lets run** (they skipped before):
+  - `tex-miplevel-selection` (`-nobias -nolod`): the sampled level is one
+    below the base level at the top of the chain (level 4 for base level 5,
+    max level 5).
+  - `tex-miplevel-selection-lod` and `-lod-bias`: the LOD bias isn't
+    applied (level 0 where bias 1 selects level 1).
+  - `ext_framebuffer_multisample-clip-and-scissor-blit 4 normal`: a 4x blit
+    whose rectangles are clipped (source or destination off the
+    framebuffer) leaves the destination at its clear colour
+    (`sgx_blit_resolve`); not diagnosed further.
 - **The FBO depth tests** (64): 28 pass, 31 skip (`ARB_depth_buffer_float`,
-  `EXT_texture_array`), 5 fail with and without the cap: `tex1d` for the
-  four depth formats (the 1D depth texture draws nothing) and
-  `fbo-depth-sample-compare`.
+  `EXT_texture_array`), 5 fail with and without the cap, so they are known
+  failures that don't come from it:
+  - `fbo-depth-*-tex1d` for the four depth formats: a 1D depth texture that
+    a render wrote is drawn black where green is expected; not diagnosed
+    (next on the list).
+  - `fbo-depth-sample-compare`: shadow compares against a depth texture a
+    render wrote; it prints no detail, not diagnosed.
 - `clipping@fixed-clip-enables` failed once on run 4's cap build and passed
   on run 5 with the cap and without: not reproduced.
 
