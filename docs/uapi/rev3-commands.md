@@ -7,8 +7,9 @@ table (shared notes, sgx530-job-uapi-deltas-2026-11-11).
 
 Rev 3 replaces the client command streams (UAPI.md section 3) with one plain
 struct per command. It is independent of the explicit-sync work (M5/B3) and of
-VM_BIND: `sync_ops` and the VM ioctls stay as they are. `bo_refs` gains a range per
-entry for cache maintenance (section 8, from B3), which is pending Joseph's decision.
+VM_BIND: `bo_refs`, `sync_ops` and the VM ioctls stay as they are. The job gains
+`cache_ranges` for cache maintenance of imports (section 8, from B3), which is pending
+Joseph's decision.
 
 ## 1. What changes
 
@@ -373,74 +374,91 @@ wrong.
    - the uAPI suite gets the command cases.
 5. Hardware: the RC suites on the EA3 (dEQP, ff piglit, the hang test, the uAPI
    suite) against rev 1's numbers.
-6. **D6 ranges (pending Joseph).** Header, `layout.inc` and UAPI.md are done
-   (section 8). m2: the kernel rules in section 8, `bo_refs` read at the new
-   stride, and uAPI suite cases. The winsys then lists the damaged rows of
-   the scanout on X's blit jobs.
+6. **D6 cache ranges (pending Joseph).** The header, `layout.inc` and UAPI.md are
+   done (section 8). m2, on 881d8aeb:
+   - the kernel rules in section 8, replacing the per-job whole-import flush;
+   - the import-time write-back;
+   - KUnit cases for the range math, and uAPI suite cases.
+   Then the winsys lists the scanout's damage on X's blit jobs.
 
-## 8. Cache maintenance by range (D6, from B3)
+## 8. Cache ranges (D6, from B3)
 
-B3 (EA1, 720x480, X down) timed simpledrm's DIRTYFB: 4.2 ms/MB from its own cached
-dumb buffer and 199 ms/MB (a flat 5 MB/s, uncached reads) from our imported
+**Why.** B3 (EA1, 720x480, X down) timed simpledrm's DIRTYFB at 4.2 ms/MB from its own
+cached dumb buffer and 199 ms/MB (a flat 5 MB/s, uncached reads) from our imported
 write-combined buffer. So the scanout stays simpledrm's dumb buffer and the GPU blits
-into it. That makes the dumb buffer a cached import in X's VM, and flushing whole
-imports around jobs costs about 1.3 ms each way per 720x480 buffer: the 12 ms a frame of
-2026-11-09 when every mapped import was flushed. The fix is for a job to name what it
-touches, by range, so the cost follows the damage (usually a few KB) and not the buffer.
+into it. That makes the dumb buffer a cached import in X's VM. Flushing whole imports
+around jobs costs about 1.3 ms each way per 720x480 buffer: the 12 ms a frame of
+2026-11-09. A job names the bytes it touches instead, so the cost follows the damage.
 
-`struct drm_powervr_sgx_bo_ref` grows from 8 to 24 bytes:
+**The struct**, one per range, in `drm_powervr_sgx_job.cache_ranges` (appended at 0x50; a
+job stride of 80 leaves it empty):
 
 ```c
-struct drm_powervr_sgx_bo_ref {
-	__u32 handle;
-	__u32 flags;	/* DRM_POWERVR_SGX_BO_REF_FLAG_WRITE */
-	__u64 offset;	/* 0 when size is 0 */
-	__u64 size;	/* 0: the whole object */
+struct drm_powervr_sgx_cache_range {	/* 32 bytes */
+	__u32 handle;	/* an import */
+	__u32 flags;	/* READ (bit 0), WRITE (bit 1), at least one */
+	__u64 offset;	/* first row */
+	__u64 size;	/* bytes per row, not 0 */
+	__u32 stride;	/* bytes between rows, >= size when rows > 1 */
+	__u32 rows;	/* 0 or 1: one row */
 };
 ```
 
-The stride versions it: an 8-byte stride zero-extends to size 0, the whole object, which
-is what revision 2 and the first rev 3 drafts did. No new ioctl or job field.
+The range is 2D because a damage rectangle is rows of a linear buffer. A 64x16 rect at
+pitch 2944 is 4 KB as 16 rows of 256 bytes, against 47 KB as one span over the rows.
+There's no whole-object form: a client without damage lists `{0, object size}`, which
+is today's cost by choice.
 
-Kernel rules:
+**Kernel rules:**
 
 | case | result |
 |---|---|
-| flags other than `WRITE` | `-EINVAL` |
-| `size` 0 and `offset` not 0 | `-EINVAL` |
-| `offset + size` past the object, or overflowing | `-EINVAL` |
-| several entries for one object | allowed: each range is flushed, and the object gets one fence, a write fence if any entry has `WRITE` |
-| an entry for one of our own (write-combined) objects | implicit sync as before; the range flushes nothing |
+| more than 64 entries | `-EINVAL`, as the other arrays |
+| unknown handle | `-ENOENT` |
+| not an import (our own objects are write-combined) | `-EINVAL` |
+| `flags` 0, or bits other than `READ`/`WRITE` | `-EINVAL` |
+| `size` 0; `rows` > 1 with `stride` < `size` | `-EINVAL` |
+| `offset + (rows - 1) * stride + size` past the object, or overflowing | `-EINVAL` |
 
-Flushes, on an imported object's listed ranges only, widened to whole cache lines:
+The kernel takes a reference on each listed object at submit and drops it when the job
+is freed, as `pvrsgx_prime_imports()` does now. No fence is attached anywhere: sync is
+`sync_ops`, and `bo_refs` for implicit sync.
 
-- **Before the job:** write back and drop (`clflush`) every listed range. A GPU read then
-  sees the CPU's writes, and no dirty line can land on a GPU write later.
-- **After the job, before its out-fence signals:** drop every `WRITE` range again. The
-  CPU may have fetched those lines speculatively during the job. `READ` ranges need
-  nothing after.
-- **At import, once:** write back the whole object, before it can be mapped.
+**Flushes.** Each range is widened to whole cache lines. On x86, `clflush` writes back
+and drops, so both points run the same loop, with `mfence` around it.
 
-**An omitted range has undefined contents after the job,** for the CPU and the GPU: the
+- **Before the job:** every range. A GPU read then sees the CPU's writes, and no dirty
+  line can land on a GPU write later.
+- **After the job's writes have reached memory, before its out-fence signals:** every
+  `WRITE` range. The CPU may have fetched those lines speculatively during the job. The
+  µK's end-of-job data-cache flush is what puts the GPU's writes in memory first. Dropping
+  the lines any earlier would let a prefetch refill them stale.
+- **At import, once:** the whole object, before it can be mapped.
+
+**An unlisted byte has undefined contents after the job,** for the CPU and the GPU: the
 GPU may read stale DRAM, a dirty CPU line may overwrite its output, and the CPU may read
 a stale line. **It is never a security issue.** Our own objects' pages are flushed when
-they become write-combined, and an import is written back once at import time, so a
-stale line or DRAM word is always the same object's own earlier contents. The process
-could read those anyway. Without the import-time write-back, a freshly zeroed shmem page
-whose zeros are still in the cache would show the GPU the page's previous owner's data.
-That write-back is the one new cost: about 1.3 ms once per 720x480 import.
+they become write-combined, and an import is written back once at import time, so a stale
+line or DRAM word is always the same object's own earlier contents. The process could
+read those anyway. Without the import-time write-back, a freshly zeroed shmem page whose
+zeros are still in the cache would show the GPU the page's previous owner's data. That
+write-back is the one new cost: about 1.3 ms once per 720x480 import.
 
-Use (the winsys and X): each job that draws into the scanout lists it with
-`WRITE` and the damaged rows, `offset = y0 * pitch`, `size = (y1 - y0) * pitch`. Jobs that
-don't touch it list nothing. CPU writes into an import the GPU then reads need a `READ`
-range on that job.
+**Not covered:** writes by another process into a cached dma-buf the job reads. That's
+the same open problem panthor has, and it isn't solved here.
 
-Alternatives considered:
+**Use (the winsys and X):**
+
+- A job that draws into the scanout lists it `WRITE` with the damage: `offset = y0 *
+  pitch + x0 * 4`, `size = w * 4`, `stride = pitch`, `rows = h`.
+- Jobs that don't touch it list nothing.
+- A job that reads an import the CPU wrote through a map lists that range `READ`.
+
+**Alternatives considered:**
 
 - **A coherence flag on the `VM_BIND` mapping:** it flushes the whole flagged buffer on
   every job in the VM, which is the 12 ms again.
-- **A panthor-style `BO_SYNC` ioctl** (`{handle, op, offset, size}`, panthor and panfrost
-  in mainline): an established upstream shape, also by range. But userspace has to wait
-  for the job before the after-flush, a second ioctl per frame, and a missed call fails
-  the same way. It remains the fallback if reviewers object to cache work in the submit
-  path.
+- **A panthor-style `BO_SYNC` ioctl** (`{handle, op, offset, size}`, in mainline for
+  panthor and panfrost): an established upstream shape. But it's linear, so a rect is one
+  op per row, and it's a second ioctl, after waiting for each job. It remains the fallback
+  if reviewers object to cache work in the submit path.
