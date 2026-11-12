@@ -420,6 +420,48 @@ If that is still all zero, the next test comes from TI's DDK 1.4 `SGXInitialise`
 no init kick: after part 2 it starts `EVENT_TIMER` (enable plus the period), so init runs
 on the first timer event (0x2204b00f enables b29).
 
+## After the eighth attempt: the PDS reaches the DOUTU
+
+Attempt 8 (log 2026-11-11-2300) added the kicker increment, and the PDS started.
+- **`PDS_PC_BASE` is the PDS's program counter** (C). Writes don't stick. It reads dwords
+  relative to `PDS_EXEC_BASE`.
+- **Baseline: 0x005010d4.** ×4 = 0x01404350, the event program's offset + 0x10: its first
+  code word, the MOVS to DOUTU. The PDS sits there.
+- **Variant 1 (0xa6c = 2): 0x005010d8**, the HALT after it.
+- **Variants 5, 6 and 7 (DOUTU word 1 = 0, the 2-dword interleave, DM 2): 0x0000f75c**,
+  which doesn't point into our program.
+- The ladder never ran: no 0xa5a, no marker, heartbeat 0.
+
+So the kick reaches the PDS, and the PDS runs our entry program. In the baseline it stops
+at the DOUT that hands the task to the USSE, as if the USSE doesn't take it.
+- A DOUTU the USSE doesn't accept fits a PC stuck on the MOVS.
+- A PC at the HALT (variant 1) suggests the MOVS went out. The task still didn't run our
+  code, or ran it elsewhere.
+- The three variants that move the PC to the same unexplained value all change something
+  the USSE sees.
+
+**Attempt 9:**
+- **Image:** `sgx530_probe` with `code_base_probes=1`. Now that a task may start, a
+  probe landing would show where it started. The kernel maps only the probes that fit
+  the TI layout (1-64 B units).
+- **Logging:** `PDS_PC_BASE` sampled about every 10 ms in each variant, to tell a PC that
+  moves from one that sits.
+- **Variants,** from attempt 8's baseline:
+
+| # | Change | What it tests |
+|---|---|---|
+| 0 | none | the control |
+| 1 | 0xa6c = 2 | the PC went on to the HALT |
+| 5, 6, 7 | as before | the PC left our program |
+| 1+5, 1+6, 1+7 | together | the HALT reading with each USSE-side change |
+| 5+7, 1+5+7 | together | the two changes nearest the task's start |
+| T4 | DOUTU temporaries field = 1 (4 temps) | a task that asks for little. Step 1 needs only r0 |
+| 1+T4 | together | |
+| T0 | temporaries field 0 | the SGX545's vertex and state programs use 0 |
+
+A probe marker (`EVENT_TIMER` 0xb0k) in any variant means the task started at another
+code-base unit. 0xa5a means it started at our image.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
