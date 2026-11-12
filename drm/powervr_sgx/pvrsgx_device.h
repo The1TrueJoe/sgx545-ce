@@ -226,6 +226,10 @@ struct pvrsgx_device {
 	u8 sweep_vendor;
 	/** @sweep_doutu_bit: The sweep's lone DOUTU word-0 address bit, + 1; 0 none. */
 	u8 sweep_doutu_bit;
+	/** @sweep_doutu0: The sweep's DOUTU word 0 but the temporaries (@sweep_doutu_set). */
+	u32 sweep_doutu0;
+	/** @sweep_doutu_set: Whether @sweep_doutu0 applies. */
+	bool sweep_doutu_set;
 	/** @sweep_saved: Registers the sweep wrote, with their values before. */
 	struct pvrsgx_core_init_reg sweep_saved[8];
 	/** @sweep_nsaved: Entries in @sweep_saved. */
