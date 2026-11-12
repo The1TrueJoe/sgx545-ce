@@ -64,6 +64,12 @@ WAIT_BOUND = 0xffff          # every wait gives up after 65535 polls and logs it
 FEATURES = 0x4              # PVRSGX_UKFW_SINGLE_CONTEXT (bit 2, proposed): EDM on list
                              # 0, the PD table, the firmware PD restored, init on
                              # EVENT_KICK. Not SECURE: the firmware heaps are in every PD.
+                             # BIT COLLISION (sgx530-kernel, for the main port): on m2-drm
+                             # PVRSGX_UKFW_DONE_SEQ already owns bit 2 (0x4), so wip/multicore
+                             # (the 530-on-main series) moves SINGLE_CONTEXT to bit 3 (0x8),
+                             # patch value 6 still the PD table. When the 530 image lands on
+                             # main this must become 0x8. The sgx530 branch driver stays at
+                             # 0x4, so these images keep loading there; don't change it yet.
 INIT_DPM_CLEAR = []          # the SGX545's 0x65c/0x630 aren't named here (gap 13);
                              # stage 1 touches only named registers
 HEARTBEAT = 0x2a             # control block +0xa8: +1 per event, the watchdog's progress

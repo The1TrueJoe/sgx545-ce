@@ -476,6 +476,16 @@ def build(a):
             a.i("ba usse_loop")
             a.end()
             return a
+        if USSE_LDLOOP_PA0:
+            # gap-19 test T2 (sgx530-kernel): the pa0 load issued forever, so a directory
+            # switch on list 0 under the running task shows as a fault at PA0's page.
+            # phas.i first (USSE_PHAS), then L: ld.a.d r3, pa0, #0; wdf; ba L.
+            a.label("usse_loop")
+            a.i("ld.a.d r3, pa0, #0")
+            a.i("wdf")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_ALUWRITE:
             # does a non-limm ALU write land? or r5, r5, r17 = r5's leftover (0x0c004000)
             # | r17's (0x0fd79000) = 0x0fd7d000, then ld.a.d r3, r5, #0. Fault at
