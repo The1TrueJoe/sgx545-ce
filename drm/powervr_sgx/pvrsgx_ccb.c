@@ -53,22 +53,17 @@ u64 pvrsgx_ccb_consumed(struct pvrsgx_device *sdev)
 	return consumed;
 }
 
-int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
-		    const u32 data[6], u64 *seq)
+/* Write one command and ring the doorbell, with ccb_lock held. */
+static int ccb_write(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type, u32 cache_control,
+		     const u32 data[6], u64 *seq)
 {
 	u32 *ctl = ccbctl(sdev), *cmd, wo;
 	unsigned long timeout = jiffies + msecs_to_jiffies(500);
 
-	/* The vendor image has no entry for some types; the open one's table is the identity. */
-	if (type >= PVRSGX_KCMD_MAX)
-		return -EINVAL;
-
-	mutex_lock(&sdev->ccb_lock);
 	wo = ctl[CCB_WO];
 	while (((wo + 1) & (PVRSGX_CCB_SLOTS - 1)) ==
 	       (READ_ONCE(ctl[CCB_RO]) & (PVRSGX_CCB_SLOTS - 1))) {
 		if (time_after(jiffies, timeout)) {
-			mutex_unlock(&sdev->ccb_lock);
 			drm_err(&sdev->base, "kernel CCB full (wo %u ro %u)\n", wo, ctl[CCB_RO]);
 			return -EBUSY;
 		}
@@ -77,9 +72,8 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
 
 	cmd = (u32 *)sdev->fw.cpu[PVRSGX_FW_CCB] + wo * PVRSGX_CCB_CMD_WORDS;
 	cmd[0] = type;
-	cmd[1] = sdev->fw.cache_control;
+	cmd[1] = cache_control;
 	memcpy(&cmd[2], data, 6 * sizeof(u32));
-	sdev->fw.cache_control = 0;
 
 	/* Command, then offset, then doorbell. */
 	wmb();
@@ -94,17 +88,63 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
 	/* The command and the kicker count reach memory before the kick. */
 	wmb();
 	sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
-	mutex_unlock(&sdev->ccb_lock);
 	return 0;
 }
 
 /*
- * Unmapped is not unreachable: the BIF may keep a translation until it is
- * invalidated, and the microkernel invalidates only for a command it takes,
- * before it moves the read offset on. So what an unmap freed waits for that
- * command: the next one sent, since cache_control rides on it. After the GPU
- * is lost (stopped for good) nothing can translate any more.
+ * BRN_28889: a BIF directory or table invalidate and a data invalidate never
+ * go in one command. The BIF part goes first, alone, and the microkernel must
+ * have taken it before the data part is sent. An invalidate waiter
+ * (pvrsgx_ccb_after_invalidate()) waits for the first, which carries the BIF
+ * part.
  */
+static int ccb_split_inval(struct pvrsgx_device *sdev, u32 *cache_control)
+{
+	static const u32 none[6];
+	unsigned long timeout = jiffies + msecs_to_jiffies(500);
+	u64 seq;
+	int err;
+
+	if (!(sdev->family->quirks & PVRSGX_QUIRK_BRN_28889) ||
+	    !(*cache_control & PVRSGX_CC_INVAL_DATA) ||
+	    !(*cache_control & ~PVRSGX_CC_INVAL_DATA))
+		return 0;
+	err = ccb_write(sdev, PVRSGX_KCMD_PROCESS_QUEUES, *cache_control & ~PVRSGX_CC_INVAL_DATA,
+			none, &seq);
+	if (err)
+		return err;
+	while (pvrsgx_ccb_consumed(sdev) < seq) {
+		if (time_after(jiffies, timeout)) {
+			drm_err(&sdev->base, "BIF invalidate not taken (BRN_28889)\n");
+			return -ETIMEDOUT;
+		}
+		usleep_range(100, 200);
+	}
+	*cache_control = PVRSGX_CC_INVAL_DATA;
+	return 0;
+}
+
+int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
+		    const u32 data[6], u64 *seq)
+{
+	u32 cache_control;
+	int err;
+
+	/* The vendor image has no entry for some types; the open one's table is the identity. */
+	if (type >= PVRSGX_KCMD_MAX)
+		return -EINVAL;
+
+	mutex_lock(&sdev->ccb_lock);
+	cache_control = sdev->fw.cache_control;
+	err = ccb_split_inval(sdev, &cache_control);
+	if (!err)
+		err = ccb_write(sdev, type, cache_control, data, seq);
+	if (!err)
+		sdev->fw.cache_control = 0;
+	mutex_unlock(&sdev->ccb_lock);
+	return err;
+}
+
 void pvrsgx_ccb_after_invalidate(struct pvrsgx_device *sdev, struct pvrsgx_inval_wait *w,
 				 u32 cache_control)
 {
@@ -162,3 +202,7 @@ void pvrsgx_ccb_inval_reap(struct pvrsgx_device *sdev, bool all)
 		w->done(w);
 	}
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_ccb_test.c"
+#endif
