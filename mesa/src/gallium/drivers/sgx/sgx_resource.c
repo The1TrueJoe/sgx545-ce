@@ -521,6 +521,10 @@ sgx_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
       sgxws_bo_free(screen->dev, &res->bo);
       for (unsigned i = 0; i < res->n_spares; i++)
          sgxws_bo_free(screen->dev, &res->spare[i].bo);
+      if (res->n_spares)
+         p_atomic_add(&screen->spare_bytes,
+                      -(int64_t)res->n_spares *
+                         (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
       free(res->spare);
       sgxws_bo_free(screen->dev, &res->cube0);
       simple_mtx_unlock(&screen->lock);
@@ -777,6 +781,8 @@ spare_get(struct sgx_context *ctx, struct sgx_resource *res, uint32_t done)
       return NULL;
    }
    simple_mtx_unlock(&screen->lock);
+   p_atomic_add(&screen->spare_bytes,
+                (int64_t)align(MAX2(sgx_tex_size(&res->base), 1), 4096));
    sp->use_seq = 0;
    sp->n_dirty = SGX_ALT_ALL;
    res->n_spares++;
