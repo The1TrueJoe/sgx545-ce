@@ -511,6 +511,21 @@ z scale.
     control stays at the ES2 value `01555620`. The flat-shademodel test
     probe reads (0, 255, 0), the provoking vertex's color; the 96 clipflat
     subtests and gl-1.0-dlist-shademodel pass, with no GPU resets.
+  - **With a texture as well** (capture: `e1tex`, ES1 GL_MODULATE, an 8×8
+    RGBA texture, per-vertex color):
+    - The texture coordinate follows the color. Output select is
+      `0x000a3800`: o0-o3 position, o4-o7 color, o8-o9 the coordinate.
+    - TSP word 0 = `0x15`: set 0 = 5 (the color), set 1 = 2.
+    - One merged DOUTI, `67c10201`, iterates the color and samples the
+      texture. Its sample half's set field (bits 0-4, set + 1) is **1**:
+      the value tc0 gets in a draw without a color, though TSP word 0 counts
+      this coordinate as set 1 (which would give 2). So the sample index
+      counts the coordinate sets with the color left out.
+    - DOUTU word 1 is `03000004` (one iteration, one sample). The pixel
+      program is `sop2 o0, pa0, pa1`: the color in pa0, the texel in pa1.
+    - Not covered: a coordinate set *iterated* (not sampled) next to the
+      color, so whether the iterate half's source leaves the color out as
+      well is unknown.
   - That b11 is what turns the first set into the color source is a
     **guess**: every working draw has it, and none has been run without it.
     No second color source (0x21) has been seen.
