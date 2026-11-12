@@ -141,7 +141,7 @@ void pvrsgx_fw_dump_status_words(struct pvrsgx_device *sdev)
 	const u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
 
 	drm_info(&sdev->base,
-		 "microkernel: init 0x%x version 0x%08x wait %u timeouts %u heartbeat %u\n",
+		 "microkernel: init 0x%x version 0x%08x wait 0x%x timeouts %u heartbeat %u\n",
 		 pvrsgx_fw_hostctl(sdev, HOSTCTL_INIT_STATUS), READ_ONCE(t[0x18]),
 		 READ_ONCE(t[0x28]), READ_ONCE(t[0x29]), READ_ONCE(t[0x2a]));
 }
@@ -565,9 +565,10 @@ static void bringup_diag(struct pvrsgx_device *sdev, const char *when)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 
 	drm_info(&sdev->base,
-		 "%s: clock status 0x%08x event status 0x%08x BIF req 0x%x int 0x%x\n",
+		 "%s: clock status 0x%08x event status 0x%08x BIF req 0x%x int 0x%x timer 0x%08x\n",
 		 when, sgx_rd(sdev, cr->clkgatestatus), sgx_rd(sdev, SGX_CR_EVENT_STATUS),
-		 sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT), sgx_rd(sdev, SGX_CR_BIF_INT_STAT));
+		 sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT), sgx_rd(sdev, SGX_CR_BIF_INT_STAT),
+		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
 	if (sdev->ocp)
 		drm_info(&sdev->base,
 			 "%s: OCP revision 0x%08x sysconfig 0x%08x debug config 0x%08x status 0x%08x\n",
