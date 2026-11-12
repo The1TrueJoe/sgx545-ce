@@ -1638,17 +1638,26 @@ restructure rested on: it is positive, so the restructure is viable (see
   both the one-row and two-row layouts, while the same DOUTU words *without* a preceding DOUTA
   run. So the earlier "second data row's interleave" guess is **not** the cause.
 
-**Reading (G):** the fault is not the PDS data-row interleave; it is the DOUTA-before-DOUTU
-ordering in the probe's hand-built PDS — the DOUTA appears to consume or rewrite what the
-following MOVS DOUTU reads, or this PDS needs the DOUTU issued first. The driver's real `pds3`
-puts its DOUTAs first and works (attempt 40 wrote PA0 through it), so its MOVS construction
-differs from the probe's. Whether the one-row DOUTA actually wrote 0x0e860000 to PA0 is
-unknown — no PA0 read followed it in the same boot. A plain PA0 baseline load after it would
-tell (PA0 reads 0x0e860000 if it did); deferred to the coordinator.
+A plain PA0 baseline load after the one-row DOUTA (10:38 UTC, same boot, log 41 / 8f8e2933)
+read **0x0e860000**: the one-row DOUTA **did** write PA0 (C). So the DOUTA lands; it is the
+DOUTU after it that issues at code base 0.
 
-**Net:** the microkernel now has a task-writable file (outputs). The multi-DOUTA PDS
-construction for the probe needs its ordering fixed, but the driver's own PDS already sets
-attributes correctly, so attribute setup for the restructure is not blocked on it.
+**Reading (G):** the fault is not the PDS data-row interleave (one- and two-row forms fail the
+same way); it is a **DOUTA-before-DOUTU** effect — a DOUTA in the same PDS program disturbs the
+following DOUTU's word 0.
+
+**Correction to the earlier note:** an earlier version of this entry said the driver's `pds3`
+sets PA0 on the SGX530 and so attribute setup is unblocked. That is wrong. On the SGX530 the
+driver's event register points at **`pds0` (a bare DOUTU + HALT, `pds_ours()`); `pds3` has
+never run there.** Attempt 40's PA0 write was a **standalone probe DOUTA program**, separate
+from the launch DOUTU, and the attribute **persisted** between the two invocations. So **no
+single program has yet been shown to do a DOUTA then a DOUTU on the SGX530** — the one thing
+the restructure's attribute setup needs. This is an open problem, analysed in
+[sgx530-attr-restructure.md](sgx530-attr-restructure.md) §6.
+
+**Net:** the microkernel now has a task-writable file (outputs). Attribute *input* works
+(DOUTA writes PA0, and it persists), but DOUTA-then-launch in one program is unproven on the
+530 and is the next PDS problem to solve (or to sidestep via the observed persistence).
 
 ## Abort conditions
 

@@ -493,6 +493,26 @@ def build(a):
             a.i("ba usse_loop")
             a.end()
             return a
+        if USSE_OUTSWEEP:
+            # how many output registers are task-writable, and does st read an output
+            # as its data source? Write o0..o{N-1} with `or oN, r5, r17` (= 0x0fd7d000
+            # if the output took the write, attempt 41's o0 value), then store each to a
+            # control-block scratch word at 0x18 + 4n (the 0x18..0x37 scratch range,
+            # UKERNEL.md). The host reads the scratch words: 0x0fd7d000 => that output is
+            # writable AND st reads it as a data source; its leftover => not. o0 is the
+            # control (attempt 41 proved it writable via ld). Self-loops, so emit-at-end
+            # is untested (it needs the task to end). N <= 8 keeps the stores in scratch.
+            a.patch(17, "ctlblk")
+            for n in range(USSE_OUTSWEEP):
+                a.i(f"or o{n}, r5, r17")
+            for n in range(USSE_OUTSWEEP):
+                a.i(f"st.a.d r17, #{0x18 + 4 * n}, o{n} [moe]")
+            a.i("idf")
+            a.i("wdf")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_LIMMTEST is not None:
             # does limm write its destination on the 530? limm rK, #0xa5a then
             # str rK to EVENT_TIMER (str reads the register). EVENT_TIMER = 0xa5a =>
