@@ -2,10 +2,9 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * Host test of the command copy and checks (docs/uapi/rev3-commands.md
- * sections 3 and 4): every rule must reject the command that breaks it, and a
- * good command must come through with its values. Built and run by
- * docs/uapi/check.sh.
+ * Host test of the command copy and checks: every rule must reject the command
+ * that breaks it, and a good command must come through with its values. Built
+ * and run by check.sh.
  */
 
 #include <stdio.h>

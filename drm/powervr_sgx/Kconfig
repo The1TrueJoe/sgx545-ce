@@ -18,8 +18,8 @@ config DRM_POWERVR_SGX
 	  with DRM_POWERVR_SGX_GMA500). The GPU runs a microkernel loaded
 	  with request_firmware().
 
-	  Not compatible with the vendor services driver (SGX545_CE): bind one
-	  or the other.
+	  Not compatible with the out-of-tree PowerVR services driver
+	  (SGX545_CE): bind one or the other.
 
 	  If M is selected the module will be called powervr_sgx.
 

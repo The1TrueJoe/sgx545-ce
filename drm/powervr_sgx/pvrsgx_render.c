@@ -52,7 +52,7 @@
 #define VDM_CTL			0xa2
 #define F32_1E_6		0x358637bd
 #define RT_FLAGS		0x88
-#define RT_FLAGS_4X		0xeaa26e26	/* as the vendor stack's 4x renders */
+#define RT_FLAGS_4X		0xeaa26e26	/* the RT flags of a 4x render */
 #define RT_MAX_DIM		2048
 
 static u32 f32_one(void)
@@ -99,13 +99,12 @@ static void pb_init(struct pvrsgx_pb *pb)
 
 /*
  * The device's parameter buffer: PB, free list, PB descriptor and block list,
- * shared by every render context of every client, as the vendor's GPL kernel
- * services share one PB descriptor (pb.c, SGXAddSharedPBDescKM). The DPM's
- * free-list state is one set of registers that the microkernel doesn't switch
- * between PBs, so two PBs would run each other's lists off their ends. The DPM
- * numbers PB pages from the 3D-params heap base, so the PB starts there, at the
- * same address in every VM (pvrsgx_pb_map). The first context sets the size;
- * later requests for another size are refused.
+ * shared by every render context of every client. The DPM's free-list state is
+ * one set of registers that the microkernel doesn't switch between PBs, so two
+ * PBs would run each other's lists off their ends. The DPM numbers PB pages from
+ * the 3D-params heap base, so the PB starts there, at the same address in every
+ * VM (pvrsgx_pb_map). The first context sets the size; later requests for
+ * another size are refused.
  */
 static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
@@ -727,8 +726,8 @@ static u32 pds_word(u64 pds, u64 addr, u32 rows)
  * dataset are ours.
  *
  * One kick both starts the scene and renders it (TA flags 0x63, the form Mesa
- * uses). Two kicks are the vendor stack's form of a single-draw frame: 0x71
- * runs the stream, 0x62 runs the terminate words and starts the 3D.
+ * uses). A single-draw frame can also take two kicks: 0x71 runs the stream,
+ * 0x62 runs the terminate words and starts the 3D.
  */
 /*
  * A restart (a reset, or a runtime resume) starts a fresh microkernel, but a
@@ -800,9 +799,9 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 						    in->bg_pds_primary_rows);
 
 		/*
-		 * The background object's PDS words, as the vendor microkernel copies them
-		 * at the 3D start (secondary, middle, primary): the open microkernel
-		 * leaves them to the host, so it never runs on the job's directory.
+		 * The background object's PDS words (secondary, middle, primary),
+		 * written by the host so the microkernel never runs on the job's
+		 * directory.
 		 */
 		b = kobj_cpu(s->bgblock[p]);
 		b[0] = pds_word(pds, in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);

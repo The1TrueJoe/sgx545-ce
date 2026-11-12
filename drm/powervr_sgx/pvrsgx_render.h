@@ -59,9 +59,9 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_rt_numbers n;
 	/*
 	 * Per RT-data entry, which alternates by frame parity, so one frame's TA
-	 * can be built while the other's 3D still reads its own (as the vendor stack keeps
-	 * them): render details, their words, the dependency block and its syncs,
-	 * and the background object, which the 3D fetches per tile.
+	 * can be built while the other's 3D still reads its own: render details,
+	 * their words, the dependency block and its syncs, and the background
+	 * object, which the 3D fetches per tile.
 	 */
 	struct pvrsgx_kobj *rd[2], *rd_w8[2], *rd_w4[2], *hwsync[2];
 	struct pvrsgx_kobj *rd_sync[2], *hwsync_access[2], *bgblock[2];

@@ -10,8 +10,8 @@
 struct pvrsgx_cmd_core;
 
 /*
- * Core features, as the SGX_FEATURE_* names of the GPL DDK's
- * sgxfeaturedefs.h. Only those the driver's design depends on are listed.
+ * Core features, as the SGX_FEATURE_* names of the GPL sgxfeaturedefs.h.
+ * Only those the driver's design depends on are listed.
  */
 /* One page directory per client: BIF directory lists beyond list 0. */
 #define PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS	BIT(0)
@@ -22,11 +22,11 @@ struct pvrsgx_cmd_core;
 /*
  * The EDM reaches PDS code anywhere. Without it, the kernel code and PDS
  * vertex heaps lie within 64 MiB above the PDS pixel heap (PDS_EXEC_BASE):
- * the GPL DDK's sgxconfig.h refuses any other layout.
+ * the GPL sgxconfig.h refuses any other layout.
  */
 #define PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE	BIT(3)
 
-/* Errata the kernel works around (the GPL DDK's FIX_HW_BRN_*). */
+/* Errata the kernel works around (the GPL headers' FIX_HW_BRN_*). */
 /* A BIF directory or table invalidate and a data invalidate never in one command. */
 #define PVRSGX_QUIRK_BRN_28889			BIT(0)
 
@@ -67,7 +67,7 @@ struct pvrsgx_heap_layout {
  * struct pvrsgx_core_regs - Registers that move or change between SGX5xx cores
  *
  * The other registers in pvrsgx_regs.h sit at the same offsets with the same
- * fields on SGX535, 540, 544 and 545 (the GPL DDK's sgx5xxdefs.h). A register
+ * fields on SGX535, 540, 544 and 545 (the GPL sgx5xxdefs.h). A register
  * a core lacks is 0.
  */
 struct pvrsgx_core_regs {
@@ -92,7 +92,7 @@ struct pvrsgx_core_regs {
 	u32 bif_bank0;
 	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
 	u32 use_code_base_addr_shift;	/* USE_CODE_BASE's address unit, log2 bytes */
-	u32 vendor_b30;			/* unnamed, 0x100 in the SGX545's vendor script */
+	u32 vendor_b30;			/* unnamed, 0x100 at start on the SGX545 */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;
@@ -103,7 +103,7 @@ struct pvrsgx_core_regs {
 	u32 edm_task_reg1;
 };
 
-/* One write of the vendor init script. */
+/* One write of a core's init script. */
 struct pvrsgx_core_init_reg {
 	u16 reg;
 	u32 val;

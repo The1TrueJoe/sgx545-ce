@@ -82,8 +82,8 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
 	} else {
 		/*
-		 * Whether the data store interleaves one word at a time is unknown
-		 * (G): the memory row [doutu, 0, 0, 2] gives DOUTU (doutu, 2, 0)
+		 * Whether the data store interleaves one word at a time is unknown:
+		 * the memory row [doutu, 0, 0, 2] gives DOUTU (doutu, 2, 0)
 		 * under either layout.
 		 */
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);

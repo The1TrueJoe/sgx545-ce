@@ -244,7 +244,7 @@ static void t_query_gpu_info(int fd)
 	/* The cores in the driver's table: 1.0.14 (CE5300) or 1.0.13 (Cedarview). */
 	assert_true((i.core_revision & 0xffffff) == 0x1000e ||
 		    (i.core_revision & 0xffffff) == 0x1000d);
-	assert_eq(i.fw_interface_version, DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7);
+	assert_eq(i.fw_interface_version, DRM_POWERVR_SGX_FW_IF_V1);
 	assert_eq(i._padding_c, 0);
 }
 

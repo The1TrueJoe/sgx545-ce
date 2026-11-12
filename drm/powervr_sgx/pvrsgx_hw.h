@@ -16,8 +16,8 @@
 #define SGX_CLKG_ALL(mask, mode)		((mask) / 3 * (mode))
 
 /*
- * SGX545 registers not in the GPL header; the names are ours, from what the
- * microkernel and the vendor init script do with them. Code reaches them
+ * SGX545 registers not in the GPL header; the names are the driver's, from
+ * what the microkernel and the init script do with them. Code reaches them
  * through the core table.
  */
 #define SGX545_CR_EVENT_PDS_ENABLE		0x0a58	/* host events start the event program */

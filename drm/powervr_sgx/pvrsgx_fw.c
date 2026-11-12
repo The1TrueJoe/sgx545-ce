@@ -3,11 +3,11 @@
 
 /*
  * Loading and starting the microkernel: the buffers, constants, PDS programs
- * and init scripts it needs, which the vendor's user-space init and services
- * driver set up between them.
+ * and init scripts it needs.
  *
- * The host interface is the vendor's SGXMKIF as of DDK 1.7. The microkernel
- * file's header lists its entry points and patch sites.
+ * The host interface is version 1 of the microkernel's own
+ * (DRM_POWERVR_SGX_FW_IF_V1). The microkernel file's header lists its entry
+ * points and patch sites.
  */
 
 #include <drm/drm_print.h>
@@ -83,8 +83,8 @@ enum ukfw_patch_value {
 #define UKERNEL_TIMER_HZ	1000
 
 /*
- * Where each buffer lives: the addresses the vendor driver's allocator gives,
- * kept so traces compare one for one with a vendor driver's.
+ * Where each buffer lives: its offset in the kernel data or code arena, and
+ * its size.
  */
 static const struct {
 	bool code;
@@ -97,7 +97,7 @@ static const struct {
 	/* Right after the control block, which fills 0x3000-0x30ff. */
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
-	/* The image at 0, then the PDS programs from its end (0xcf70 for the vendor's). */
+	/* The image at 0, then the PDS programs from its end. */
 	[PVRSGX_FW_UKERNEL] = { true, 0x0000, 0 },
 	[PVRSGX_FW_PDS0] = { true, 0x000, 0x18 },
 	[PVRSGX_FW_PDS1] = { true, 0x020, 0x38 },
@@ -406,12 +406,11 @@ static int fw_arenas(struct pvrsgx_device *sdev)
 	u32 pds_base;
 	int err;
 
-	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
+	f->interface = DRM_POWERVR_SGX_FW_IF_V1;
 
 	/*
-	 * The PTE flags the vendor's GPL kernel services give the same buffers
-	 * (mmu.c, from EDM_PROTECT and read-only allocations): data read-write,
-	 * code read-only.
+	 * The PTE flags: data read-write and EDM-protected where the core allows
+	 * it, code read-only.
 	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, h->kernel_data.base, DATA_ARENA_SIZE,
 				SGX_MMU_PTE_CACHECONSISTENT |
@@ -494,8 +493,9 @@ static u32 use_code_base_val(struct pvrsgx_device *sdev, u64 addr, u32 dm)
 
 /*
  * The event program's address as the event PDS base register takes it. A core
- * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there, the 64 MiB the
- * GPL DDK lets PDS code lie above PDS_EXEC_BASE: an offset from it (G).
+ * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there, the 64 MiB above
+ * PDS_EXEC_BASE that PDS code may lie in: taken as an offset from that base,
+ * which is an assumption.
  */
 static u32 event_pds_addr(struct pvrsgx_device *sdev)
 {
@@ -552,7 +552,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       use_code_base_val(sdev, h->kernel_code.base, USE_CODE_BASE_DM_UKERNEL));
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
-	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);	/* unnamed, as the vendor script */
+	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);	/* unnamed; its start value */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
 	sgx_wr(sdev, cr->event_pds_data0, 1);
