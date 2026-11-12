@@ -400,9 +400,34 @@ FBO depth tests (`fbo-depth-*`, `fbo-depthstencil-*` under
 `ext_texture_array@fbo-depth-array`) were in a chunk where `piglit-runner`
 panicked (`lib.rs:1163`, an unwrap of `None`, not a box fault).
 
-`mixed_framebuffer_sizes` stays off until the gate passes: `copypixels` and
-`drawpixels-float-and-ushort` need gl_FragDepth (a `depthf` hardware test
-first), and `fbo-depthtex` the sampler refresh.
+Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-0800-gl3-driver.md`):
+
+- **gl_FragDepth** is written: `depthf` at the feedback point, pass type 5
+  (ISA.md, test H10, exact on hardware), the driver's default since
+  a012e986. The ten tests that write it pass, the gate's `copypixels` and
+  `drawpixels-float-and-ushort` at 1, 2 and 4 samples included.
+- **A depth texture rendered into** is sampled from its ZLS buffer: a draw
+  reads it into the CPU copy and rewrites level 0's sampled copy first
+  (`sgx_resource_zls_for_sampling`). `fbo-depthtex` passes.
+- **`mixed_framebuffer_sizes` is on** (5de10967), so ARB_framebuffer_object
+  and `GL_RENDERBUFFER_SAMPLES`. On the final stack (a012e986), against runs
+  2 and 3, nothing goes from pass to fail in the gate (157 tests), the
+  multisample list (156), the fixed-function list or the GL 2.1 list. 17
+  tests go from fail to pass (the gl_FragDepth ones, `fbo-depthtex`,
+  `fbo-alphatest-nocolor` and `-ff`, and the 4x `samples`,
+  `renderbuffer-samples`, `renderbufferstorage-samples` and `dlist`) and 17
+  from skip to pass (`fbo-deriv`, `depth-clear-precision-check`, five
+  `fbo-alphatest-formats` intensity formats, and the 4x `alpha-blending`
+  twice, `alpha-to-one-single-sample-buffer 4` and seven `interpolation 0`
+  tests); 10 FBO depth tests that never ran before pass. Four tests that
+  ARB_framebuffer_object lets run fail: `tex-miplevel-selection`, `-lod`, `-lod-bias`, and
+  `clip-and-scissor-blit 4 normal`.
+- **The FBO depth tests** (64): 28 pass, 31 skip (`ARB_depth_buffer_float`,
+  `EXT_texture_array`), 5 fail with and without the cap: `tex1d` for the
+  four depth formats (the 1D depth texture draws nothing) and
+  `fbo-depth-sample-compare`.
+- `clipping@fixed-clip-enables` failed once on run 4's cap build and passed
+  on run 5 with the cap and without: not reproduced.
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
