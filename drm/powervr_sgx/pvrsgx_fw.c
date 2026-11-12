@@ -427,7 +427,7 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       (PVRSGX_HEAP_KERNEL_CODE >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_UKERNEL);
 	sgx_wr(sdev, cr->pds_exec_base, PVRSGX_HEAP_PDS_PIXEL);
-	sgx_wr(sdev, 0xb30, 0x100);	/* unnamed, as the vendor script */
+	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);	/* unnamed, as the vendor script */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
 	sgx_wr(sdev, cr->event_pds_data0, 1);
@@ -447,7 +447,7 @@ static void deinit_script(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE2, 0);
 	sgx_wr(sdev, SGX_CR_CLKGATECTL, 0);
-	sgx_wr(sdev, cr->clkgatectl2, 0);
+	sgx_wr_opt(sdev, cr->clkgatectl2, 0);
 }
 
 /*
@@ -513,7 +513,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
 	       (SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO) & ~cr->clkgatectl_dpm) |
 	       field_prep(cr->clkgatectl_dpm, SGX_CLKG_ON));
-	sgx_wr(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
+	sgx_wr_opt(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
 	sgx_wr(sdev, cr->event_pds_enable, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
 
@@ -525,7 +525,11 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
-	sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
+	/* The init kick; a core with one kick register (BRN_22934) takes it there. */
+	if (cr->event_kick2)
+		sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
+	else
+		sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
