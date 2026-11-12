@@ -523,6 +523,39 @@ static int check_event_pds(struct pvrsgx_device *sdev)
 	return 0;
 }
 
+/*
+ * Bring-up only, off by default: point code bases 0-14 at the landing pads of
+ * the SGX530 bases image (pad n at code offset 0x4380 + 0x80 n writes
+ * EVENT_TIMER = 0xc00 + n), so a task that goes through another base than 15
+ * says which. The usual data masters (1 for 0-9, 0 for 10-14), or all 3.
+ */
+static bool code_base_pads;
+module_param(code_base_pads, bool, 0444);
+MODULE_PARM_DESC(code_base_pads, "Point code bases 0-14 at the SGX530 bases image's landing pads");
+
+#define PAD0_OFFSET	0x4380
+#define PAD_STRIDE	0x80
+
+static bool pads_wanted(struct pvrsgx_device *sdev)
+{
+	return code_base_pads && sdev->family->event_pds_guessed;
+}
+
+static void pads_set(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 base = (u32)pvrsgx_heaps(sdev)->kernel_code.base + PAD0_OFFSET;
+
+	for (u32 n = 0; n < 15; n++) {
+		u32 dm = sdev->sweep_flags & PVRSGX_SWEEP_PADS_DM3 ? 3 :
+			 n < 10 ? USE_CODE_BASE_DM_PIXEL : 0;
+
+		sgx_wr(sdev, use_code_base(sdev, n),
+		       (base + n * PAD_STRIDE) >> USE_CODE_BASE_ADDR_SHIFT |
+		       dm << cr->use_code_base_dm_shift);
+	}
+}
+
 /* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
 static int init_script_part2(struct pvrsgx_device *sdev)
 {
@@ -543,14 +576,18 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
 	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
-	for (u32 i = 0; i < 10; i++)
-		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
-		       ((u32)(h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_DM_PIXEL << dm);
-	for (u32 i = 0; i < 4; i++)
-		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
-		       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-		       USE_CODE_BASE_ADDR_SHIFT);
+	if (pads_wanted(sdev)) {
+		pads_set(sdev);
+	} else {
+		for (u32 i = 0; i < 10; i++)
+			sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
+			       ((u32)(h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
+				USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_DM_PIXEL << dm);
+		for (u32 i = 0; i < 4; i++)
+			sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
+			       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
+			       USE_CODE_BASE_ADDR_SHIFT);
+	}
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
@@ -746,6 +783,7 @@ MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a gue
 #define DM	PVRSGX_SWEEP_DM2
 #define T4	PVRSGX_SWEEP_TEMPS4
 #define T0	PVRSGX_SWEEP_TEMPS0
+#define P3	PVRSGX_SWEEP_PADS_DM3
 
 static const struct {
 	u32 flags;
@@ -764,6 +802,12 @@ static const struct {
 	{ T4, "4 temporaries" },
 	{ D1 | T4, "data 2, 4 temporaries" },
 	{ T0, "0 temporaries" },
+	/* With code_base_pads: the pads' data masters all 3. */
+	{ P3, "pads DM 3" },
+	{ P3 | D1, "pads DM 3, data 2" },
+	{ P3 | W0, "pads DM 3, word 1 = 0" },
+	{ P3 | DM, "pads DM 3, base 15 DM 2" },
+	{ P3 | D1 | W0, "pads DM 3, data 2, word 1 = 0" },
 };
 
 #undef D1
@@ -772,6 +816,7 @@ static const struct {
 #undef DM
 #undef T4
 #undef T0
+#undef P3
 
 /*
  * Whether the diagnostic ladder ran: its EVENT_TIMER write (0xa5a, timer
@@ -788,6 +833,7 @@ static bool ladder_seen(struct pvrsgx_device *sdev)
 	u32 timer = sgx_rd(sdev, SGX_CR_EVENT_TIMER);
 
 	return timer == LADDER_TIMER || (timer >= 0xb00 && timer <= 0xb09) ||
+	       (timer >= 0xc00 && timer <= 0xc0e) ||
 	       READ_ONCE(t[0x28]) == LADDER_MARKER || READ_ONCE(t[0x2a]);
 }
 
@@ -812,6 +858,51 @@ static bool ladder_ran(struct pvrsgx_device *sdev, const char *name)
 	return seen;
 }
 
+/*
+ * The sweep's last step, if nothing ran: does this core report a BIF fault
+ * at all? Point EVENT_KICKER at the hole below the kernel code heap, where
+ * nothing is mapped, kick, and log BIF_INT_STAT, BIF_FAULT and
+ * BIF_MEM_REQ_STAT every 10 ms; then the recovery reset, which completes
+ * faulting requests on its scratch page.
+ */
+static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	u32 hole = h->pds_vertex.end, st[10], fa[10], rq[10];
+	int err;
+
+	if (hole >= h->kernel_code.base)
+		return 0;
+	sgx_wr(sdev, sdev->cr->event_pds_enable, 0);
+	sdev->sweep_flags = 0;
+	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
+	pvrsgx_reset(sdev, true);
+	err = init_script_part2(sdev);
+	if (err)
+		return err;
+	sgx_wr(sdev, SGX_CR_EVENT_KICKER, hole);
+	hc[HOSTCTL_INIT_STATUS] = 0;
+	/* The host control word is in memory before the kick. */
+	wmb();
+	init_kick(sdev);
+	for (unsigned int i = 0; i < ARRAY_SIZE(st); i++) {
+		usleep_range(10000, 11000);
+		st[i] = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+		fa[i] = sgx_rd(sdev, SGX_CR_BIF_FAULT);
+		rq[i] = sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT);
+	}
+	drm_info(&sdev->base,
+		 "fault check, EVENT_KICKER 0x%08x: BIF int %x %x %x %x %x %x %x %x %x %x\n",
+		 hole, st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7], st[8], st[9]);
+	drm_info(&sdev->base,
+		 "fault check: BIF fault %x %x %x %x %x %x %x %x %x %x req %x %x %x %x %x %x %x %x %x %x\n",
+		 fa[0], fa[1], fa[2], fa[3], fa[4], fa[5], fa[6], fa[7], fa[8], fa[9],
+		 rq[0], rq[1], rq[2], rq[3], rq[4], rq[5], rq[6], rq[7], rq[8], rq[9]);
+	sgx_wr(sdev, SGX_CR_EVENT_KICKER, sdev->fw.addr[PVRSGX_FW_KICKER]);
+	pvrsgx_reset(sdev, true);
+	return 0;
+}
+
 static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
@@ -820,6 +911,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 	int err;
 
 	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
+		if ((sweep[v].flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
+			continue;
 		if (v) {
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
@@ -852,7 +945,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 		bringup_diag(sdev, when);
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
-	return 0;
+	return fault_check(sdev, hc);
 }
 
 /*

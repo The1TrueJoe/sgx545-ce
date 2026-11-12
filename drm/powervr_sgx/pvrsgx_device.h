@@ -128,6 +128,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_DM2		BIT(3)	/* code base 15's data master = 2 */
 #define PVRSGX_SWEEP_TEMPS4		BIT(4)	/* the event DOUTU asks for 4 temporaries */
 #define PVRSGX_SWEEP_TEMPS0		BIT(5)	/* ... or none */
+#define PVRSGX_SWEEP_PADS_DM3		BIT(6)	/* code bases 0-14 at the pads, all DM 3 */
 
 /**
  * struct pvrsgx_device - The SGX545
