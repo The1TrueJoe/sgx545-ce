@@ -13,7 +13,7 @@ literal layouts in `uapi/layout.inc`. The client commands are defined in
 
 **Status (2026-11-12):** revision 4, DRM version 1.0, is in progress on
 `wip/uapi-r4-kernel` and `wip/uapi-r4-mesa`: dense ioctl numbers, `VM_BIND` without
-fences, and the upstream header without the transfer job (section 2.1). `dev` has revision 3
+fences, and the upstream header without the transfer and NULL jobs (section 2.1). `dev` has revision 3
 (merge 77057bb1, DRM 0.3) until they merge: the plain per-command structs (section 3.1),
 the D6 per-job cache ranges (section 10, D6), the kernel and the Mesa winsys, tested on
 CE5300 boards. Revisions 1 and 2, the command streams, are retired.
@@ -112,16 +112,16 @@ kernel whose major version isn't 1.
 | 1 | 0.1 | command streams through `SUBMIT_JOBS` at 0x0c, `UPLOAD_CODE` at 0x0d, `VM_MAP` and `VM_UNMAP` |
 | 2 | 0.1 | `VM_BIND` replaces `VM_MAP` and `VM_UNMAP`; the ioctls after it renumbered (`SUBMIT_JOBS` 0x0b, `UPLOAD_CODE` 0x0c) |
 | 3 | 0.3 | plain per-command structs with extension chains (section 3.1), `SUBMIT_JOBS` at 0x0e; one PB per device; explicit sync with per-job cache ranges (D6) |
-| 4 | 1.0 | ioctls renumbered from 0 with no gaps (`UPLOAD_CODE` 0x0b, `SUBMIT_JOBS` 0x0c); `VM_BIND` takes no fences (`sync_ops` must be empty); the transfer job out of the upstream header, its type value reserved |
+| 4 | 1.0 | ioctls renumbered from 0 with no gaps (`UPLOAD_CODE` 0x0b, `SUBMIT_JOBS` 0x0c); `VM_BIND` takes no fences (`sync_ops` must be empty); the transfer and NULL jobs out of the upstream header, their type values reserved |
 
 Revision 3 moved `SUBMIT_JOBS` to a number neither earlier revision used, so an older
 binary's first submit failed with `-EINVAL`. From revision 4 the version check does that job: a revision-3 Mesa requires minor
 version 3 or later and refuses 1.0, and a revision-4 Mesa refuses 0.x.
 
 The transfer job (`DRM_POWERVR_SGX_JOB_TYPE_TRANSFER`, transfer contexts,
-`drm_powervr_sgx_cmd_transfer`) stays in the downstream driver for the kernel's tests; Mesa
-doesn't use it. The upstream header reserves its job type value, so adding it later is
-a minor-version change.
+`drm_powervr_sgx_cmd_transfer`) and the NULL job (D11) stay in the downstream driver for
+the kernel's tests; Mesa uses neither. The upstream header reserves their job type values,
+so adding one later is a minor-version change.
 
 ### DEV_QUERY
 
@@ -331,7 +331,7 @@ otherwise kernel constants in this version (G12).
 
 | field | meaning |
 |---|---|
-| `type` | `RENDER`, or downstream `TRANSFER` (section 2.1) |
+| `type` | `RENDER`, or downstream `TRANSFER` and `NULL` (section 2.1) |
 | `context_handle` | context of the matching type |
 | `flags` | per type: transfer has `DST_TWIDDLED`, render has none yet |
 | `cmd` | a `drm_powervr_sgx_cmd_render` or `drm_powervr_sgx_cmd_transfer` (section 3) |
@@ -1156,10 +1156,11 @@ leaves room for growth later with no uAPI change. It may be wrong for Minecraft-
 work that still goes through the scheduler and signals its fences, for IGT, fence and
 scheduler tests without a GPU workload. It can be dropped before the RFC if reviewers object.
 
-**Open for revision 4 (U9, 2026-11-12):** Mesa has no user for it; only the kernel's tests
-submit NULL jobs. Reviewers ask for a userspace user of each uAPI item, so the upstream
-header may reserve its type value, as it does the transfer job's (section 2.1).
-`GET_CONTEXT_STATE` has one: Mesa's reset status for `ARB_robustness`.
+**Revised for revision 4 (U9, 2026-11-12): out of the upstream header, its type value
+reserved.** Mesa has no user for it; only the kernel's tests submit NULL jobs, and reviewers
+ask for a userspace user of each uAPI item. The downstream driver keeps it for those tests,
+as it keeps the transfer job (section 2.1). `GET_CONTEXT_STATE` stays: Mesa's reset status
+for `ARB_robustness` uses it.
 
 ### D12. Code objects and the upload ioctl
 

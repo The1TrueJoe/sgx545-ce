@@ -16,7 +16,7 @@ starts at 1.0 and the ioctl numbers are dense from 0.
 - CREATE_CONTEXT, GET_CONTEXT_STATE, CREATE_RT_DATASET: render
   contexts, render target data, and the guilty/innocent state after a
   reset.
-- SUBMIT_JOBS: render and NULL jobs with syncobj waits and signals.
+- SUBMIT_JOBS: render jobs with syncobj waits and signals.
   A job's commands are plain structs, with an extension chain for the
   fields only one core has; the kernel copies them, checks every field
   and builds the firmware's command from them. Userspace
