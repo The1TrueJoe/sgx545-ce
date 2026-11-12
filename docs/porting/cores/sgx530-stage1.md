@@ -975,6 +975,40 @@ confirm the flat +0x8000 vs +0 split.
   `PDS_EXEC_BASE` and set word 0's offset. This departs from TI's layout; flag it to the
   coordinator before committing.
 
+## After the twenty-third attempt: the fix — USE_CODE_BASE is addr >> 8
+
+Attempt 23 (log 2026-11-12-0300) found the root cause. Code base 15 steers the EDM fetch,
+and the mapping is `fetch = (CB15 << 8) & 0x0fffffff` (C):
+
+| CB15 | fetch | model (CB15 << 8, 28-bit) |
+|---|---|---|
+| 0x1d8000 | 0x0d800000 | 0x0d800000 |
+| 0 | 0 | 0 |
+| 0x100000 | 0 | 0 (bit 20 << 8 = bit 28, masked) |
+
+So **the SGX530 encodes `USE_CODE_BASE` as `addr >> 8` (256 B units), not `>> 7` like the
+SGX545.** `USE_CODE_BASE_ADDR_SHIFT` is a register-field shift; the address granularity is
+the hardware's, and it is a power of two larger on the SGX530.
+
+The driver sets code base 15 = `kernel_code >> 7` = 0x1d8000. Under `<< 8` that is
+`PDS_EXEC_BASE`, so every attempt fetched the EDM task from `PDS_EXEC_BASE` + 0. That single
+wrong shift is the whole of why stage 1 never started: the PDS ran, the DOUTU started a USSE
+task, and the task fetched from the wrong page.
+
+**The fix (SGX530 only):** program `USE_CODE_BASE` with `addr >> 8`. For code base 15 that is
+`kernel_code >> 8` = 0xec000, whose fetch is `0x0ec00000` = the kernel code heap, the image.
+The same applies to the pixel and vertex code bases in init-script part 2. The heap stays at
+TI's layout; no alias.
+
+**Attempt 24: the fix, confirmed on hardware.**
+1. Code base 15 = 0xec000 (`kernel_code >> 8`), DM unchanged, the normal word. Expected: the
+   microkernel runs — `EVENT_TIMER` 0xa5a then init's period, the 0x28 marker, version
+   0x00010000, heartbeat, `INIT_STATUS` 1. Stage 1 passes.
+2. Two cells to pin the shift: code base 15 = 0x1b0000 (fetch 0x0b000000) and 0xec001 (fetch
+   0x0ec00100), logged by fault page.
+3. If stage 1 passes, the driver change is `USE_CODE_BASE` encoding `addr >> 8` for the
+   SGX530, every code base in part 2, recorded as C.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
