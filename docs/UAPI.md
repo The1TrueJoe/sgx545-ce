@@ -29,7 +29,7 @@ hardware that `docs/` does not establish.
 
 | tag | meaning |
 |---|---|
-| **hardware** | Run on an EA: a replay with one field changed, or a frame of our own, compared with a prediction. STATE.md's [C]. |
+| **hardware** | Run on an Intel Atom CE5300 board: a replay with one field changed, or a frame of our own, compared with a prediction. STATE.md's [C]. |
 | **capture** | Seen in DDK captures, or a formula checked against them. STATE.md's [D]. Includes UKERNEL.md's offline runs against captured and generated frames, which `docs/UKERNEL.md` section 10 says are not confirmed on hardware yet. |
 | **gap** | `docs/` does not establish it. The text says what the draft assumes, and section 11 lists the gap. STATE.md's [G] is a gap. |
 | **design** | A choice this document makes, not a fact about the GPU. |
@@ -45,25 +45,26 @@ hardware that `docs/` does not establish.
   surfaces. These live in its VM and are read under its page directory. (capture for
   where they live, gap for what isolates them)
 - **A job is a validated copy, not a pointer.** Userspace passes the client's part of a
-  command as a stream of scalars. The kernel copies it, checks it field by field and
-  builds the firmware command in kernel memory. It never reads a firmware-visible structure
+  command as plain structs (`drm_powervr_sgx_cmd_*` and their extensions, section 3.1). The
+  kernel copies each one once, checks it field by field and builds the firmware command in
+  kernel memory. It never reads a firmware-visible structure
   back from memory the client can write. (design)
 - **A word nobody can name is not client-controlled.** Where STATE.md tags a command
   word [G], the kernel writes the value the captures show and there is no uAPI field.
-  When a word gets a name and a test, an extension stream carries it (section 3.1).
+  When a word gets a name and a test, a core's extension struct carries it (section 3.1).
   (design, D5)
-- **The uAPI does not expose the host interface.** Streams carry meanings, not SGXMKIF
-  offsets, so the firmware interface can change without touching this header. (design,
+- **The uAPI does not expose the host interface.** Command fields carry meanings, not
+  SGXMKIF offsets, so the firmware interface can change without touching this header. (design,
   D8)
 
 What this replaces on the client side (`docs/DRIVER-UPSTREAM.md` section 4):
 
 | today, in the winsys | with this uAPI |
 |---|---|
-| services heaps and allocation attributes | GEM objects, `VM_MAP` |
+| services heaps and allocation attributes | GEM objects, `VM_BIND` |
 | CCB ring, `SGXMKIF_CMDTA` | `SUBMIT_JOBS` with `drm_powervr_sgx_cmd_ta_kick` and `drm_powervr_sgx_cmd_render` |
 | render details, RT data, region headers, tail pointers, RT numbers | `CREATE_RT_DATASET`, kernel-built |
-| parameter buffer, descriptor, block list, free list, thresholds | `CREATE_CONTEXT.param_buffer_pages`, kernel-built |
+| parameter buffer, descriptor, block list, free list, thresholds | kernel-built, one per device; the first render context's `param_buffer_pages` sets its size |
 | HW render context | `CREATE_CONTEXT`, kernel-built |
 | allocations that reproduce the DDK's kernel-data layout | gone: kernel-owned memory is never reused while the microkernel can still reach it (section 7.5) |
 | sync objects polled on the CPU, HW device sync lists, pending-value counts | syncobjs and out-fences |
@@ -85,15 +86,16 @@ kerneldoc; `Documentation/gpu/powervr_sgx/uapi.rst` pulls it in the way
 | 0x02 | `GET_BO_MMAP_OFFSET` | RW | fake mmap offset | design, pvr shape |
 | 0x03 | `CREATE_VM_CONTEXT` | RW | one page directory | capture: per-context PD |
 | 0x04 | `DESTROY_VM_CONTEXT` | W | | |
-| 0x05 | `VM_MAP` | W | map at a client-chosen address in a heap | design |
-| 0x06 | `VM_UNMAP` | W | remove a mapping | design |
-| 0x07 | `CREATE_CONTEXT` | RW | render or transfer queue, with its firmware state and PB | capture: contexts and PB per STATE.md 6, TEX.md 10 |
-| 0x08 | `DESTROY_CONTEXT` | W | | |
-| 0x09 | `GET_CONTEXT_STATE` | RW | guilty, innocent or OK after a reset | design; `drm-uapi.rst` "Device reset" |
-| 0x0a | `CREATE_RT_DATASET` | RW | everything tiling a target of a given size needs | capture: STATE.md 6 |
-| 0x0b | `DESTROY_RT_DATASET` | W | | |
-| 0x0c | `SUBMIT_JOBS` | RW | render scenes and transfers, syncobj in/out, BO refs | capture: TEX.md 3, STATE.md 1 |
-| 0x0d | `UPLOAD_CODE` | RW | copy USSE code into a code object and validate it (D9, D12) | hardware: P1 (7.2); design |
+| 0x05 | `VM_BIND` | W | map and unmap ranges at client-chosen addresses in the heaps, synchronously | design, pvr shape |
+| 0x06 | `CREATE_CONTEXT` | RW | render or transfer queue, with its firmware state; the first render context creates the device's PB | capture: contexts and PB per STATE.md 6, TEX.md 10 |
+| 0x07 | `DESTROY_CONTEXT` | W | | |
+| 0x08 | `GET_CONTEXT_STATE` | RW | guilty, innocent or OK after a reset | design; `drm-uapi.rst` "Device reset" |
+| 0x09 | `CREATE_RT_DATASET` | RW | everything tiling a target of a given size needs | capture: STATE.md 6 |
+| 0x0a | `DESTROY_RT_DATASET` | W | | |
+| 0x0b | | | retired: `SUBMIT_JOBS` with command streams (revision 2), never reused | |
+| 0x0c | `UPLOAD_CODE` | RW | copy USSE code into a code object and validate it (D9, D12) | hardware: P1 (7.2); design |
+| 0x0d | | | retired: `UPLOAD_CODE` of revision 1, never reused | |
+| 0x0e | `SUBMIT_JOBS` | RW | render scenes and transfers, syncobj in/out, cache ranges of imports | capture: TEX.md 3, STATE.md 1 |
 
 ### DEV_QUERY
 
@@ -117,10 +119,10 @@ to write-combined until coherency is established (G19).
 
 An imported dma-buf is a data object. It maps in every heap except the USSE ones.
 `GET_BO_MMAP_OFFSET` refuses it, because its CPU mapping is the dma-buf's. The GPU
-addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
+addresses 32 bits of physical memory, so without an IOMMU `VM_BIND` refuses to map an import
 with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
 GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, not even through
-cache-consistent PTEs (EA1, 2026-11-09), and an import's pages may be cached on the CPU
+cache-consistent PTEs (a CE5300 board, 2026-11-09), and an import's pages may be cached on the CPU
 side. **So a job lists the bytes of imports it reads or writes in `cache_ranges`** (D6;
 `READ`, `WRITE` or both, rows of bytes at a stride, so one damage rectangle is one entry).
 The kernel flushes only those bytes:
@@ -189,25 +191,33 @@ picks a code base: 0-13 cover exactly the two USSE heaps, and 14 and 15 point at
 in a client VM (with the open microkernel; under the DDK microkernel base 15 is the
 kernel code heap, P3). Per-draw PDS programs stay in ordinary objects.
 
-### VM contexts, VM_MAP, VM_UNMAP
+### VM contexts, VM_BIND
 
 Same shape as pvr: the client manages the address space and picks each mapping's
-address, and the kernel tracks mappings with `drm_gpuvm`.
+address, and the kernel tracks mappings with `drm_gpuvm`. `VM_BIND` takes an array of
+`{op, handle, bo_offset, device_addr, size, flags}`, each a `MAP` or an `UNMAP`, and
+`sync_ops`. `DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC` is required: the ioctl waits for its
+`sync_ops` waits, applies the ops and returns when they are done, and its signals get an
+already signaled fence. The ops apply in array order and all or none of them do: every op is
+checked, and everything it needs allocated, before any mapping changes.
 
 Rules the kernel enforces:
 
-- Range page-aligned, not empty, entirely inside one heap from `HEAP_INFO_GET`, and
-  inside the object. Otherwise `-EINVAL`.
-- No overlap with an existing mapping, or `-EEXIST`.
+- A map's range is page-aligned, not empty, entirely inside one heap from
+  `HEAP_INFO_GET`, and inside the object. Otherwise `-EINVAL`.
+- A map doesn't overlap an existing mapping (`-EEXIST`), and the ops of one call don't
+  overlap each other (`-EINVAL`).
 - `device_addr` below 4 GiB. The GPU's address words are 32 bits (capture: every address
   in STATE.md, PDS.md and TEX.md).
-- `VM_UNMAP` takes effect before it returns for new jobs. The object's pages stay
-  allocated until the translation caches are invalidated (UKERNEL.md section 6,
-  "BIF cache invalidate") and every job submitted before the unmap has finished. This
-  is what stops a stale translation reaching a page the system has given to someone
-  else.
+- An unmap removes every mapping in its range, splitting one that straddles either end;
+  its `handle` and `bo_offset` are 0, and a range with nothing mapped is not an error.
+- An unmap's page tables change before the ioctl returns, so a job still running on the
+  range faults inside this VM. The object's pages stay allocated until the translation
+  caches are invalidated (UKERNEL.md section 6, "BIF cache invalidate") and every job
+  submitted before the unmap has finished. This is what stops a stale translation
+  reaching a page the system has given to someone else.
 
-`VM_MAP.flags` is reserved. The USSE heaps take only code objects, a code object maps
+An op's `flags` are reserved. The USSE heaps take only code objects, a code object maps
 only into a USSE heap, and code objects are mapped read-only on the GPU (D12). A
 read-only flag for other objects can come later.
 
@@ -219,10 +229,15 @@ read-only flag for other objects can come later.
 |---|---|---|
 | HW render context | 68 bytes | STATE.md 6; PD address at byte 8, CCB, CCB control, PB descriptor, scratch block |
 | command ring and control | 0x10420 + 8 bytes | STATE.md 6 |
+| scratch block | 0x40 bytes in the 3D params range | STATE.md 6 |
+
+and, once per device, with the first render context:
+
+| structure | size | formula |
+|---|---|---|
 | PB | `(param_buffer_pages or default) + 0x22` pages | STATE.md 6 |
 | free list | 0x40000 bytes | STATE.md 6 |
 | PB descriptor and block list | 0x3c + 0x10 bytes | STATE.md 6 |
-| scratch block | 0x40 bytes in the 3D params range | STATE.md 6 |
 
 For a transfer context: the 0xb4-byte HW transfer context and a 0x104c8-byte ring with
 its 8-byte control (TEX.md section 10).
@@ -230,13 +245,16 @@ its 8-byte control (TEX.md section 10).
 `priority` maps onto `drm_sched` entity priority. The SGX has no documented preemption,
 so priority orders jobs and does not interrupt them (gap, G16).
 
-`param_buffer_pages` is the requested size, the number STATE.md 6 calls "requested": the
-kernel adds the 0x22 pages and derives the thresholds. Because the free list's page
-indexes are 16 bits with `0xffff` as the end marker (capture), a PB and everything else
-in the 3D params range together stay under 0x10000 pages. A second render context in the
-same VM takes its PB from the same 256 MiB and gets `-ENOSPC` when it no longer fits.
-Whether two PBs in one VM work at all is a gap (G15). The first driver may have to allow
-only one render context per VM until that is tested.
+**One PB for the device**, shared by every render context of every client, as the
+vendor's kernel services share one PB descriptor. The DPM's free-list state is one set of
+registers that the microkernel doesn't switch between PBs, so two PBs run each other's
+lists off their ends (hardware). The DPM numbers PB pages from the 3D-params heap base, so
+the PB starts there, at the same address in every VM. `param_buffer_pages` is the requested
+size, the number STATE.md 6 calls "requested" (0 is `pb_default_pages`): the first render
+context sets it, and later requests are ignored. The kernel adds the 0x22 pages and
+derives the thresholds. Because the free list's page indexes are 16 bits with `0xffff` as
+the end marker (capture), the PB and everything else in the 3D params range together stay
+under 0x10000 pages.
 
 `DESTROY_CONTEXT` waits for the context's jobs, then runs the firmware cleanup
 (UKERNEL.md section 3, type 5), then frees. If the cleanup never completes, the kernel
@@ -455,7 +473,7 @@ The cmd+0x08 and +0x10 words are packed by the kernel as
 `rows<<26 | (addr - PDS_PIXEL base)>>4`, and cmd+0x0c takes the constant `0x00030001`
 (capture; meaning gap, G12). Which unit consumes these three words is a gap (G11).
 
-**The stream carries the 3D values once.** STATE.md's deferred render-details updates
+**The render command carries the 3D values once.** STATE.md's deferred render-details updates
 exist because later kicks can only send what changed. Here the kernel writes the full
 set when it builds the job and uses deferred updates only where its firmware path needs
 them.
@@ -475,7 +493,7 @@ Cross-field rule: `first_tile_x <= last_tile_x` and `first_tile_y <= last_tile_y
 
 `DRM_POWERVR_SGX_SUBMIT_JOB_TRANSFER_DST_TWIDDLED` in `drm_powervr_sgx_job.flags` sets
 cmd+0xa8 = 8 (hardware, TEX.md 10). Like pvr's per-command flags, it is a job flag, not a
-stream field.
+command field.
 
 Transfer words the kernel fills, with no client field (capture, TEX.md 3 and 10):
 
@@ -513,7 +531,7 @@ Mesa fills the structs from the header; it has no generated code of its own.
 
 ## 4. How every word of the firmware commands is produced
 
-Column **how**: `U` from the stream, `K-obj` a kernel object's address, `K-calc` computed
+Column **how**: `U` from the client's command or its extension, `K-obj` a kernel object's address, `K-calc` computed
 by the kernel, `K-const` a captured constant.
 
 ### 4.1 TA command (STATE.md section 1)
@@ -649,10 +667,11 @@ asserts with literal numbers, so that both targets passing means the layouts are
 negative control (`-DCHECK_NEGATIVE`, a `__u64` after a lone `__u32`) has to fail on both
 targets. It also compiles the header as C++ and checks this table against `layout.inc`.
 
-Streams have no C layout. Their offsets are in section 3.2, generated from the XML. Each
-field is naturally aligned from the stream's start, so a stream is the same bytes on both
-targets by construction. `check.sh` checks the rest: the committed kernel tables match the
-XML, the decoder compiles for both targets, and the stream test passes.
+The commands and their extensions are structs like the rest, in the table below; their
+field offsets are also in section 3.2, generated from the XML. `check.sh` checks the rest:
+the generated header block, the committed kernel tables and the section 3.2 table match the
+XML, the command checker compiles for both targets, and the host command test
+(`uapi/cmd/test`) passes.
 
 <!-- layout-table begin: generated by docs/uapi/gen_table.py -->
 | struct | size | members: `offset name (size)` |
@@ -712,10 +731,11 @@ HWPerf has no uAPI.
    VM. **This is the real boundary for every address in section 7.4 class B.**
 2. **Kernel-owned firmware structures.** No GEM handle, no CPU mapping, no client-writable
    VA, so the microkernel never dereferences anything a client wrote.
-3. **Copy and check.** Streams are copied once into kernel memory, so there is no
-   read-after-check window on firmware commands.
-4. **Reserved VA.** `VM_MAP` refuses anything outside the client heaps, so a client can't
-   create a mapping at a firmware address.
+3. **Copy and check.** Each command and extension is copied once into kernel memory
+   (`copy_struct_from_user()`), so there is no read-after-check window on firmware
+   commands.
+4. **Reserved VA.** `VM_BIND` refuses to map anything outside the client heaps, so a
+   client can't create a mapping at a firmware address.
 
 ### 7.2 Four hardware premises this design needs
 
@@ -797,8 +817,8 @@ reads them back and never trusts their contents.
 
 ### 7.4 Every userspace-supplied address
 
-**Class A:** copied by the kernel from a stream into a firmware command. The kernel can
-check it.
+**Class A:** copied by the kernel from a command or extension struct into a firmware
+command. The kernel can check it.
 
 | address | checks | dereferenced by | if it is wrong |
 |---|---|---|---|
@@ -808,8 +828,8 @@ check it.
 | `bg_pds_secondary_addr`, `bg_pds_primary_addr` | in `PDS_PIXEL`, aligned | HW (PDS) | fault or hang |
 | `bg_block_addr` (transfer) | below 2^32, aligned, 0x200 bytes mapped | HW (ISP) | fault or hang |
 | transfer `pixel_event_pds_addr` | as above | HW (PDS) | fault or hang |
-| `VM_MAP.device_addr` | below 2^32, page aligned, inside one heap, no overlap | kernel | `-EINVAL` or `-EEXIST` |
-| `sync_ops`, `cache_ranges`, `ta_kicks`, `jobs`, `cmd` and the extension chains, `DEV_QUERY.pointer`, `quirks`, `heaps` | CPU user pointers: `copy_from_user` | kernel | `-EFAULT` |
+| `VM_BIND` op `device_addr` | below 2^32, page aligned, inside one heap, no overlap | kernel | `-EINVAL` or `-EEXIST` |
+| `sync_ops`, `cache_ranges`, `ta_kicks`, `jobs`, `cmd` and the extension chains, `VM_BIND` `ops`, `DEV_QUERY.pointer`, `quirks`, `heaps` | CPU user pointers: `copy_from_user` | kernel | `-EFAULT` |
 
 **Class B:** inside client memory, read by the hardware at draw time. The kernel doesn't
 look at these and can't: the client can change them after submit, and a shader can compute
@@ -840,10 +860,10 @@ These all rely on the PD and the premises. No validation in the kernel helps, sh
 | Forged fence | Fence words sit in the sync range, kernel-only (P2). Fences are signaled from the interrupt path by the kernel, after reading firmware state it validates as data | design |
 | Host reads hostile values | Everything the host reads from GPU-writable memory is range-checked: ring offsets modulo the ring, status words as bitmasks. A compromised firmware is a separate problem, but a shader that reaches kernel memory must not become a kernel bug | design |
 | Starvation by holding a scene open | Not possible: a render job is a whole scene (D3) | design |
-| Unbounded firmware work per ioctl | `max_ta_kicks`, stream length capped at 4 KiB, ring space accounted with `drm_sched` credits | design |
+| Unbounded firmware work per ioctl | `max_ta_kicks`, each command and extension at most 4 KiB, at most 16 extensions per chain, at most 64 cache ranges per job, ring space accounted with `drm_sched` credits | design |
 | Reset loop | A guilty context is refused from then on (section 8). A client can create new contexts, so a hang rate limit per file may be needed | gap for whether it is needed |
 | Failed recovery | The open microkernel discards surviving state rather than rescanning it (UKERNEL.md 5a). If re-init fails the device is lost: `-EIO` and a wedged event | capture for the DDK's failure; gap for the open path on hardware |
-| Foreign dma-buf outside the MMU's physical reach | `VM_MAP` refuses an import whose pages the DMA layer bounced (no IOMMU) or that lie above 4 GiB | design; the bounced case is untested (the EA has no memory above 4 GiB) |
+| Foreign dma-buf outside the MMU's physical reach | `VM_BIND` refuses to map an import whose pages the DMA layer bounced (no IOMMU) or that lie above 4 GiB | design; the bounced case is untested (the CE5300 boards tested have no memory above 4 GiB) |
 | Non-zeroed memory | shmem pages are zero. Kernel-owned PB, region headers and tail pointers are zeroed before they are mapped | design |
 | Sticky TA state across contexts | "Every group of the TA state block is sticky" (STATE.md). A client's first block must carry every group it relies on. Not a kernel duty, but IGT should exercise it | capture for one client; gap across clients (G6) |
 
@@ -902,22 +922,23 @@ kernel's scheduler timeout, are gaps (G17). The draft uses the scheduler timeout
 |---|---|
 | Struct layouts, on both targets | **Proven** by the compile (`uapi/check.sh`) |
 | Command copy, extensions, per-field and cross-field checks | **Tested** on the host against the reference checker (`uapi/cmd/test`), in the kernel (KUnit, the uAPI tests) and on hardware |
-| Ioctl set and shape | **Follows pvr**; the reasoning is sound, but no code has run against it |
+| Ioctl set and shape | **Follows pvr**; implemented in the kernel and used by the Mesa driver on hardware |
 | Heap bases | **capture** |
 | USSE reach, PDS address formats, request bases, free-list limit | **capture and hardware** |
-| Client stream fields | **capture or hardware** per row; each has been poked or diffed. Whether they are *enough* for Mesa won't be known until M3 |
+| Client command fields | **capture or hardware** per row; each has been poked or diffed. Enough for the GL driver so far (M3); a feature that needs an unnamed word gets a new extension (D5) |
 | Kernel-filled constants | **capture** for the values; the meanings are gaps. A value right for the probe frames may be wrong for some GL state |
 | Heap sizes other than USSE | **Guess**: next base as an upper bound |
 | Scene-level jobs | **Design**; rests on two kicks per frame as captured. N-kick scenes need a capture of the middle-kick flags |
-| One PB per context, more than one in a VM | **Guess**: the single-PB path is all that is proven |
+| One PB for the device, shared by every context | **hardware**: two PBs ran each other's free lists off their ends; one shared PB doesn't |
 | Isolation | **Unproven**: rests on P1 to P4 |
 | HWR behavior | **Design**, on a recovery path known only offline |
 
 ## 10. Decisions for Joseph
 
 Joseph went through all ten on 2026-11-02; each section starts with what was decided. Two
-changed the draft: the name (D1, `powervr_sgx`) and the stream encoding (D2). Both are now
-applied, in sections 2, 3 and 6, `uapi/powervr_sgx_drm.h` and the stream definition
+changed the draft: the name (D1, `powervr_sgx`) and the command encoding (D2), which
+revision 3 revised again (2026-11-11) to plain structs. D6 was replaced on 2026-11-12. All
+are applied, in sections 2, 3 and 6, `uapi/powervr_sgx_drm.h` and the command definition
 `uapi/powervr_sgx_cmd.xml`. Where D2 needed something the other decisions don't
 settle, it is a gap (G26, G27), not a change to them. D9's register-write test has run (D9).
 
@@ -939,7 +960,7 @@ alternative and the better one if Imagination wants the family name kept togethe
 added later. Mesa's directory is the Mesa maintainers' call (`AGENTS.md` section 3.7). The
 placeholder is one search-and-replace from any of these, until something merges.
 
-### D2. Stream encoding
+### D2. Command encoding
 
 **Revised (Joseph, 2026-11-11): plain per-command structs with a core
 extension chain** (uAPI revision 3, [`uapi/rev3-commands.md`](uapi/rev3-commands.md)),
@@ -1015,7 +1036,7 @@ it must name every one (CREATE_BO, GET_BO_MMAP_OFFSET, imports): the kernel flus
 **Replaced (Joseph, 2026-11-12: "per-job ranges"; rev 3, M5):** the BO list goes. A job
 lists the bytes of imports it touches in `cache_ranges` (the job fields table: rows of bytes at a
 stride, read and/or write, at most 64, no fence), and sync is explicit only, through
-`sync_ops` and the dma-buf sync-file ioctls above. B3 (EA1, 720x480, X down) measured
+`sync_ops` and the dma-buf sync-file ioctls above. B3 (a CE5300 board, 720x480, X down) measured
 simpledrm's DIRTYFB at 4.2 ms/MB from its own dumb buffer and 199 ms/MB from our imported
 write-combined buffer, and clflush at 0.85 us/KB. So the scanout stays simpledrm's cached
 dumb buffer, the GPU blits into it, and the flush follows the damage, not the buffer.
@@ -1144,7 +1165,7 @@ Facts the design needs that `docs/` doesn't have.
 | G8 | Heap sizes, and which ranges are hardware requirements; whether PDS programs can run outside their heaps | heap table, `HEAP_INFO` | NOTES.md |
 | G9 | Scene shape: does one kick with both first and last work? Does the VDM stream have a jump? | D3, `ta_kicks` minimum | STATE.md 2 |
 | G10 | Minimum alignments: VDM base, PDS, USSE, DMA (also listed in DRIVER-UPSTREAM.md section 3) | validators | GEN.md |
-| G11 | Where cmd+0x08 to +0x10 go: the render path's block words 0-2 are 0, and UKERNEL.md section 7 has no register for them | stream | UKERNEL.md |
+| G11 | Where cmd+0x08 to +0x10 go: the render path's block words 0-2 are 0, and UKERNEL.md section 7 has no register for them | render command | UKERNEL.md |
 | G12 | Unnamed words. TA flags: STATE.md section 1 refers to a bit table that isn't there; `0x71`/`0x62` there, `0x63`/`0x10` in DRIVER-UPSTREAM.md; no middle-kick value. TA flags 2, 3D flags, cmd+0x20, +0x28-0x37, +0x48-0x50, +0x254, +0x26c-0x298; rd+0x08, 0x0c, 0x1c, 0x24, 0x44, 0x54, 0x64, 0x6c-0xc8, 0xcc; PDS middle word. GEN.md lists `+0x104` under render details, STATE.md under the TA command | D5, what Mesa can do | STATE.md |
 | G13 | ZLS: the load enable, field widths, range of the offsets, which bits touch the stencil address | `zls_control` allow-list | TEX.md 7 |
 | G14 | Render target limits: maximum width and height, TE field widths, multisample numbers | `LIMITS`, `CREATE_RT_DATASET` | STATE.md 4, 6 |
