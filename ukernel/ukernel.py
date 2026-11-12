@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """An open SGX545 USSE microkernel, in assembly.
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """Assemble the open microkernel (ukernel.py) into the binary srvinit loads
 and a manifest of its entry offsets.

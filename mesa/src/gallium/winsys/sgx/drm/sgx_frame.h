@@ -84,6 +84,9 @@ struct sgxws_dev {
    unsigned slots;
    int dry_run;
    unsigned ta_split; /* sgxws_dev_options */
+   /* buffers allocated; of those, the backend's cache gave; and cached ones
+    * of the size passed over, still in use (SGX_STATS) */
+   unsigned bo_allocs, bo_cached, bo_busy;
 };
 
 /* the PBE writes the target twiddled, not in rows */

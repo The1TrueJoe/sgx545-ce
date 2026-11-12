@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """ISA coverage gate (docs/UKERNEL-TOOLING.md §6, step 5): every instruction the
 microkernel assembles must be covered by Mesa's description (sgx.xml, written

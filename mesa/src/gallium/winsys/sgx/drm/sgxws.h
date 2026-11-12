@@ -311,6 +311,8 @@ struct sgxws_stats {
    uint64_t gpu_indices, gpu_verts; /* what the VDM was given: indices, and the
                                        vertices they index */
    unsigned state_sent, state_skipped; /* draws' TA state blocks */
+   unsigned bo_allocs, bo_cached, bo_busy; /* buffers allocated; from the
+                                              cache; cached ones still in use */
 };
 
 /* debugging aids the driver passes on (its SGX_DEBUG options) */
