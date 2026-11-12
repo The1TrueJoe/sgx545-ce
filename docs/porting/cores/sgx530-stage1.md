@@ -384,6 +384,42 @@ The image stays `sgx530_diag`: the first marker to land, `EVENT_TIMER` 0xa5a, na
 the variant. If none lands, the result still rules out each single change. The next
 step would then be pairs, starting with 1 or 2 combined with 5.
 
+## After the seventh attempt: the kicker word
+
+None of attempt 7's ten variants started a task (log 2026-11-11-2238). Each started clean:
+`CLKGATESTATUS` was back to 0x00010000 after every reset.
+
+**`PDS_PC_BASE` is probably a status register.** The GPL DDK 1.7 kernel (in-repo
+`sgxinit.c:1039`) never writes it. It reads it only in its hang dump, next to
+`EVENT_STATUS` and the BIF status registers. Read as the PDS's current program (G), its
+0 at every sample means the PDS never started a program. The kick never reached it.
+
+**The likely cause (K).** The same `sgxinit.c` (lines 373-384) handles a core without
+`SGX_FEATURE_MULTI_EVENT_KICK`, which includes the SGX530. Its init kick sets the
+event-kicker word to `(kicker + 1) & 0xff`, with a write barrier and the PDump comment
+"First increment of the SGX event kicker value", and only then writes `EVENT_KICK`. The
+CCB doorbell does the same. Our start zeroed the kicker and kicked without incrementing
+it.
+
+That fits all seven attempts, if the hardware dispatches a kick only when the word at
+`EVENT_KICKER` has changed:
+- the USE domain wakes;
+- the BIF reads a mapped word, with no fault;
+- the PDS never runs.
+
+The SGX545 starts on `EVENT_KICK2`, which doesn't go through the kicker, so it never
+showed.
+
+**Attempt 8:**
+- the init kick increments the kicker word first;
+- attempt 6's settings (TI layout, 0xa68 as an offset from `PDS_EXEC_BASE`, 24
+  temporaries);
+- the `sgx530_diag` image, unchanged.
+
+If that is still all zero, the next test comes from TI's DDK 1.4 `SGXInitialise`. It has
+no init kick: after part 2 it starts `EVENT_TIMER` (enable plus the period), so init runs
+on the first timer event (0x2204b00f enables b29).
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
