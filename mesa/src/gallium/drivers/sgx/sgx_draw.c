@@ -146,21 +146,35 @@ begin_frame(struct sgx_context *ctx, bool zs_cleared)
    struct sgxws_target t;
    struct sgxws_rt *rt;
    uint32_t rw, rh;
+   unsigned level = 0, layer = 0;
 
-   if (!ctx->framebuffer.nr_cbufs || !cbuf->texture) {
+   if (ctx->framebuffer.nr_cbufs && cbuf->texture) {
+      res = sgx_resource(cbuf->texture);
+      level = cbuf->level;
+      layer = cbuf->first_layer;
+   } else if (ctx->framebuffer.zsbuf.texture && ctx->dummy_cb) {
+      /* depth only: the context's own colour buffer (set_framebuffer_state) */
+      res = sgx_resource(ctx->dummy_cb);
+   } else {
       SGX_DBG(DRAW, "no colour buffer bound\n");
       return false;
    }
-   res = sgx_resource(cbuf->texture);
-   if (!sgx_resource_target(screen, res, cbuf->level, cbuf->first_layer, &t)) {
+   if (!sgx_resource_target(screen, res, level, layer, &t)) {
       SGX_DBG(DRAW, "colour buffer %s %ux%u is not a render target\n",
-              util_format_short_name(cbuf->texture->format),
-              cbuf->texture->width0, cbuf->texture->height0);
+              util_format_short_name(res->base.format), res->base.width0,
+              res->base.height0);
       return false;
    }
    t.scanout = res->wrapped;
-   rw = u_minify(res->base.width0, cbuf->level);
-   rh = u_minify(res->base.height0, cbuf->level);
+   /* the render is the framebuffer's size: with attachments of different
+    * sizes that is the smallest (st takes their intersection), which may be
+    * less than the colour buffer's */
+   rw = u_minify(res->base.width0, level);
+   rh = u_minify(res->base.height0, level);
+   if (ctx->framebuffer.width && ctx->framebuffer.height) {
+      rw = MIN2(rw, ctx->framebuffer.width);
+      rh = MIN2(rh, ctx->framebuffer.height);
+   }
    /* 4x: rendered at 2x2 samples a pixel and resolved as the tiles are
     * stored, so the colour buffer holds the resolved pixels */
    t.samples = MAX2(res->base.nr_samples, 1);

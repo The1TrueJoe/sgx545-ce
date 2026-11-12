@@ -232,6 +232,15 @@ style), unless it says capture. In order of how much each unblocks:
   path needs nothing.
 - **H8, seamless cube filtering.** A LINEAR sample on a cube map's face edge,
   with the T0 and T3 bits that no capture sets swept one at a time.
+- **H9, the ZLS buffer's layout** (`mesa/tests/sgx_zls_layout.c`,
+  `SGX_DEBUG=zlsdump`, `tools/zls_layout.py`). The depth and stencil a render
+  stores exist only in its ZLS buffer, in an order no doc gives. Depth
+  readback, CopyPixels, DrawPixels into depth, depth/stencil blits and the
+  4x resolve all need that order. A depth plane whose every value names its
+  window position, plus stencil in 8×8 blocks, is drawn at 1x and 4x and
+  at two sizes that aren't whole tiles. The buffer is written out after the
+  render, and the script fits the order. Unblocks ARB_framebuffer_object
+  (with mixed attachment sizes) and the depth/stencil resolve.
 
 ### Results (a CE5300 board, 2026-11-11)
 
@@ -344,7 +353,17 @@ rev 3 baseline (78 fail, 16638 pass). The fixed-function piglit list loses
 five crashes (`getteximage-depth`, `texsubimage-depth-formats`,
 `teximage-errors` pass, `copyteximage 1d/2d` fail). Two tests,
 `fbo-alphatest-nocolor` and its `-ff` variant, now start and fail: a
-framebuffer with no colour buffer isn't drawn (`begin_frame`).
+framebuffer with no colour buffer wasn't drawn (`begin_frame`).
+
+Since then, not yet on a board: a framebuffer with only a depth buffer
+renders into a colour buffer of the context's own (`dummy_cb`, made in
+`set_framebuffer_state` at the framebuffer's size and the depth buffer's
+samples), and a render is the framebuffer's size, the attachments'
+intersection. A ZLS buffer is still loaded only by a render of the size
+that stored it, so a depth buffer used at two render sizes loses its
+contents but can't be corrupted. `mixed_framebuffer_sizes` stays off until
+H9 gives the ZLS layout and depth readback, depth blits and the 4x
+depth/stencil resolve are built on it.
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);

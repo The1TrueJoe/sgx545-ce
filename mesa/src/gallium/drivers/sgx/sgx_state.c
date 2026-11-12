@@ -367,6 +367,37 @@ sgx_set_framebuffer_state(struct pipe_context *pctx,
    struct sgx_context *ctx = sgx_context(pctx);
 
    util_copy_framebuffer_state(&ctx->framebuffer, fb);
+   /* depth only: a colour buffer of the context's own to render into
+    * (begin_frame), at least the framebuffer's size, with the depth buffer's
+    * samples.  Made here, not in begin_frame, which runs with the screen
+    * lock held, as destroying the old one takes it. */
+   if (fb->nr_cbufs && fb->cbufs[0].texture)
+      return;
+   if (!fb->zsbuf.texture || !fb->width || !fb->height)
+      return;
+   unsigned samples = MAX2(fb->zsbuf.texture->nr_samples, 1);
+   struct pipe_resource *d = ctx->dummy_cb;
+
+   if (d && d->width0 >= fb->width && d->height0 >= fb->height &&
+       MAX2(d->nr_samples, 1) == samples)
+      return;
+
+   struct pipe_resource templ = {
+      .target = PIPE_TEXTURE_2D,
+      .format = PIPE_FORMAT_B8G8R8A8_UNORM,
+      .width0 = MAX2(fb->width, d ? d->width0 : 0),
+      .height0 = MAX2(fb->height, d ? d->height0 : 0),
+      .depth0 = 1,
+      .array_size = 1,
+      .nr_samples = samples > 1 ? samples : 0,
+      .nr_storage_samples = samples > 1 ? samples : 0,
+      .bind = PIPE_BIND_RENDER_TARGET,
+   };
+
+   if (d && ctx->recording == sgx_resource(d))
+      ctx->recording = NULL; /* its frame goes with it (resource destroy) */
+   pipe_resource_reference(&ctx->dummy_cb, NULL);
+   ctx->dummy_cb = pctx->screen->resource_create(pctx->screen, &templ);
 }
 
 static void

@@ -52,6 +52,8 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "a sample is merged only into the previous iteration of its own set, not of another"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
+   {"zlsdump", SGX_DEBUG_ZLS_DUMP,
+    "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
     "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
    DEBUG_NAMED_VALUE_END};

@@ -175,6 +175,11 @@ struct sgx_context {
     * render needs a ZLS buffer, one per sample (sgx_draw.c zls_target) */
    struct sgxws_bo ms_zls;
    uint32_t ms_zls_bytes;
+   /* the colour buffer of a framebuffer with none (depth only): renders
+    * need a target, so they write this one, which nothing reads.  Sized in
+    * set_framebuffer_state to the framebuffer, with its depth buffer's
+    * samples. */
+   struct pipe_resource *dummy_cb;
    uint64_t rt_used[SGX_MAX_RTS], rt_clock;       /* when each was last taken */
    unsigned num_rts;
    struct sgx_resource *recording; /* the target of the frame being recorded */
