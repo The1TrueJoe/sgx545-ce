@@ -11,6 +11,11 @@ symlink) and the tests build against it. `uapi/check.sh` compiles it for i386 an
 literal layouts in `uapi/layout.inc`. The client commands are defined in
 [`uapi/powervr_sgx_cmd.xml`](uapi/powervr_sgx_cmd.xml) (section 3).
 
+**Status (2026-11-12):** revision 3 is on `dev` (merge 77057bb1, DRM minor 3): the plain
+per-command structs (section 3.1), the D6 per-job cache ranges (section 10, D6), the
+kernel and the Mesa winsys, tested on CE5300 boards. Revision 2, the command streams, is
+retired: nothing on `dev` builds or accepts it.
+
 Identifiers spell the driver name in full: `drm_powervr_sgx_*` and
 `DRM_IOCTL_POWERVR_SGX_*`. `pvr` is the prefix of upstream's Rogue driver, whose module is
 `powervr`, so a shorter `drm_pvr_sgx_*` would read as part of the Rogue uAPI (D1).
@@ -896,7 +901,7 @@ kernel's scheduler timeout, are gaps (G17). The draft uses the scheduler timeout
 | part | status |
 |---|---|
 | Struct layouts, on both targets | **Proven** by the compile (`uapi/check.sh`) |
-| Command copy, extensions, per-field and cross-field checks | **Tested** on the host against the reference checker (`uapi/cmd/test`); not yet in a kernel |
+| Command copy, extensions, per-field and cross-field checks | **Tested** on the host against the reference checker (`uapi/cmd/test`), in the kernel (KUnit, the uAPI tests) and on hardware |
 | Ioctl set and shape | **Follows pvr**; the reasoning is sound, but no code has run against it |
 | Heap bases | **capture** |
 | USSE reach, PDS address formats, request bases, free-list limit | **capture and hardware** |
