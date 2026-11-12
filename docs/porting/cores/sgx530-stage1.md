@@ -2111,3 +2111,36 @@ result differs from the destination's leftover; `xor` guarantees it.
 
 **Unchanged:** gate 2 (the task launches and runs) is solid, and word2 is not the
 write-context lever.
+
+## DEFINITIVE: gate 1 SOLVED — temporary writes retire under §9 (C)
+
+`sgx530_xorr5` ran under the full §9 vlaunch (21:53 UTC, clean, task launches,
+one load, EDMPROTECT on). **BIF_FAULT = 0x00a90000**, exactly the predicted
+`r5 ^ r17 = 0x0fa93000 ^ 0x0f003000`. The xor changed r5, so **the temporary write
+retired**. The §9 vendor launch (8-word interleave + DOUTU words 0x0020000f /
+0x04000000 / 1 + `0xa6c`=3 / `0xa70`=0x00013d01 + EDMPROTECT) **solves the
+write-retire blocker** for the register file. Gate 2 (launch) + gate 1 (temp retire)
+both closed on hardware. The output-only restructure is no longer the only path.
+
+**Next, in the coordinator's priority order, three new probes (all golden-safe,
+aluwr byte-identical, 530 tests pass):**
+
+1. **`sgx530_stor5` — does a store COMMIT to EDMPROTECT memory? (priority 1).** Stores
+   r5 (reads give 0x0fa93000) to `[ctlblk + 0x200]` — r17 is loader-patched to ctlblk,
+   a mapped EDMPROTECT base §9 does NOT seed (the stage-1 stout stored to pa0, which §9
+   overwrites, so its fault was spurious). Host reads ctlblk+0x200: **0x0fa93000** ⇒
+   store committed (task is the EDM requestor under §9 word1); **0/unchanged** ⇒
+   silently dropped; **BIF 0x4004** ⇒ EDMPROTECT rejected it. The driver must confirm
+   ctlblk+0x200 is a mapped EDMPROTECT scratch dword (past the 0x128 control block,
+   within its page) and zero it first; if a safer offset exists, it rebuilds.
+   img `1bdf3addc866603db08e7a95b71b16a072829c73881afe4f587861b526fe2726`, pkg `6b34d9d70c591c5a799fa6f0bea5ae863b9c3cfea2d12a86aae6d7752efc688c` (crc 0x80684725).
+2. **`sgx530_xorpa0` — does a pa write retire?** `xor pa0, r5, r17`; fault at
+   **0x00a90000** ⇒ pa retires, anything else ⇒ pa0's leftover (did not). The vendor
+   task writes PA2, so this matters. img `1fcbe46b2a7a8c5a78c0e5c3ef062d15394c96be5b4bf1f1bec6f2fa42b6ae68`, pkg `1da7bee13c560145d09412a6225b4a3a0e164e719287c54fc077ab00e254b9db` (crc 0x22b2a39b).
+3. **The bisect for the minimal launch word**, with **`sgx530_xorr5`** as the test (NOT
+   the or-based aluwr — it is degenerate under the subset trap). Order from
+   vendor-setup §3: **word2 first (REDO: the earlier word2=0 used aluwr, so its "inert"
+   verdict is void)**, then word1 (0x04000000 → 2), then word0 bit21. For each, run
+   xorr5 with that word reverted: **0x00a90000** ⇒ still retires (that word not the
+   lever), **0x0fa93000** ⇒ retire broke (that word is necessary). No new image — the
+   vl_* params already exist.

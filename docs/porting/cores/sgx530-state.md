@@ -21,6 +21,34 @@ and only the output/emit path (which bypasses that context) works. The register-
 because the microkernel must read the CCB/control block (loads) and persist state (stores), and
 neither works. Unblocking the 530 needs the task-context setup the vendor driver uses.
 
+## UPDATE 2026-11-12: the §9 vendor launch SOLVES the write-retire blocker
+
+Everything from "What works" down was measured under the **pre-§9 launch** and
+describes the task **without** an EDM write context. The vendor launch
+([sgx530-vendor-setup.md](sgx530-vendor-setup.md) §9) supplies that context, and the
+blocker is now **solved** for the register file:
+
+- **Gate 2 (launch) closed (C).** Under the 8-word PDS interleave + the vendor DOUTU
+  words (word0 0x0020000f, word1 0x04000000, word2 1), `0xa6c`=3 / `0xa70`=0x00013d01,
+  EDMPROTECT on, the task launches and runs — USE goes busy, no code-base-0 fault.
+- **Gate 1 (temporary writes retire) SOLVED (C, `sgx530_xorr5`, 21:53 UTC).**
+  `xor r5, r5, r17` faults at **0x00a90000** = r5 ^ r17 (leftover 0x0fa93000 ^ ctlblk
+  0x0f003000), the predicted "the write landed" value, so the xor changed r5 —
+  temporaries retire. The earlier or-based `aluwr`/`aluwr_pa0w` read 0x0fa93000 and
+  looked like no-retire, but that was a **subset trap**: ctlblk (r17 = 0x0f003000) ⊆
+  r5's leftover made `or r5,r5,r17` a value-no-op. `xor` is non-identity there (see
+  the runbook's "subset trap" section).
+
+Still being confirmed under §9, in order:
+- **pa-bank retire** — `sgx530_xorpa0` (xor into pa0); the vendor task writes PA2.
+- **memory stores commit to EDMPROTECT** — `sgx530_stor5` (store r5 to [ctlblk], a
+  base §9 does not seed, unlike the stout probe's pa0); the microkernel needs this for
+  sync objects and status words.
+
+So the gates table below is the **pre-§9** picture. The output-only restructure it
+motivated is **no longer required** if pa retire and stores also return under §9; the
+open microkernel can then run on the 530 with the vendor launch folded into init.
+
 ## What works (C, on hardware)
 
 - **The task executes.** Two per-core differences, both confirmed and fixed:

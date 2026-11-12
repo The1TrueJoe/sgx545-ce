@@ -357,6 +357,9 @@ USSE_ALU_OP = "or"           # aluwr: the bitwise op. 'xor' makes the write a no
                              # when r17 (ctlblk) is a subset of r5's leftover, where 'or' is a value-no-op
                              # and can't detect a retire. (cores/sgx530_xorr5.py)
 USSE_STOUT = None           # 'o0': or it then st it to [pa0] (a driver-DOUTA-set scratch addr): st-from-output (cores/sgx530_stout_o0.py)
+USSE_STOR_OFF = None        # §9-valid store test: st r5 to [ctlblk + 4*(off+1)], r17 patched to ctlblk (a
+                            # mapped EDMPROTECT addr §9 does NOT seed, unlike pa0). Does a store commit to
+                            # EDMPROTECT memory under §9's launch? (cores/sgx530_stor5.py)
 USSE_ODIST = None           # read o{N} after writing o0..o9 distinct values: are the outputs distinct regs or aliases? (cores/sgx530_odist0.py)
 USSE_ODIST_N = 10           # how many outputs the odist sweep writes (11 includes o10 for the margin-1 check)
 

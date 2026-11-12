@@ -509,6 +509,25 @@ def build(a):
             a.i("ba usse_loop")
             a.end()
             return a
+        if USSE_STOR_OFF is not None:
+            # §9-valid store test (coordinator priority 1): does a task store COMMIT to
+            # EDMPROTECT memory under the vendor launch? stout stored to [pa0], but §9
+            # seeds pa0, so its fault was spurious. Here r17 is loader-patched to ctlblk
+            # (a mapped EDMPROTECT address §9 does NOT seed), and we store r5 (reads give
+            # its known leftover 0x0fa93000) to [ctlblk + 4*(off+1)] (st.a.d dword units,
+            # ISA.md). The host reads that dword: 0x0fa93000 => the store committed to
+            # EDMPROTECT memory (the task IS the EDM requestor under §9); 0/unchanged =>
+            # silently dropped; a BIF store fault (0x4004) => it reached the MMU and
+            # EDMPROTECT rejected it (not the EDM requestor). off targets a scratch dword
+            # past the control block's live fields; the driver confirms it is mapped.
+            a.patch(17, "ctlblk")
+            a.i(f"st.a.d r17, #{USSE_STOR_OFF}, r5")
+            a.i("idf")
+            a.i("wdf")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_STOUT:
             # does st read an output as its data source? That needs a mapped store
             # base, which limm cannot provide on the 530, so use PA0: a standalone
