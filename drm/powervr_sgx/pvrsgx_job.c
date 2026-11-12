@@ -43,7 +43,6 @@
 
 #define PVRSGX_MAX_JOBS		64
 #define PVRSGX_MAX_SYNC_OPS	64
-#define PVRSGX_MAX_BO_REFS	256
 static unsigned int job_timeout_ms = 2000;
 module_param(job_timeout_ms, uint, 0444);
 MODULE_PARM_DESC(job_timeout_ms, "How long a job may run before the GPU is reset (default 2000 ms)");
@@ -396,10 +395,6 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
 	kfree(job->hw_fence_mem);	/* never run */
-	for (u32 b = 0; b < job->nbos; b++)
-		drm_gem_object_put(job->bos[b]);
-	kvfree(job->bos);
-	kvfree(job->bo_flags);
 	pvrsgx_prime_put(job);
 	pvrsgx_render_job_fini(job);
 	context_put(job->ctx);
@@ -645,9 +640,6 @@ int pvrsgx_ioctl_get_context_state(struct drm_device *drm, void *data, struct dr
 /* What one job needs from its submission, held until it is pushed. */
 struct job_args {
 	struct pvrsgx_job *job;
-	struct drm_gem_object **bos;
-	u32 *bo_flags;
-	u32 nbos;
 	struct pvrsgx_signal *signals;
 	u32 nsignals;
 	/* Earlier jobs of this submit whose signals this job waits on. */
@@ -660,10 +652,6 @@ struct job_args {
 
 static void job_args_fini(struct job_args *ja)
 {
-	for (u32 i = 0; i < ja->nbos; i++)
-		drm_gem_object_put(ja->bos[i]);
-	kvfree(ja->bos);
-	kvfree(ja->bo_flags);
 	for (u32 i = 0; i < ja->nsignals; i++) {
 		if (ja->signals[i].syncobj)
 			drm_syncobj_put(ja->signals[i].syncobj);
@@ -758,40 +746,6 @@ out:
 	return err;
 }
 
-static int job_bo_refs(struct drm_file *file, struct job_args *ja,
-		       const struct drm_powervr_sgx_obj_array *arr)
-{
-	struct drm_powervr_sgx_bo_ref *refs;
-	int err = 0;
-
-	refs = pvrsgx_obj_array_get(arr, sizeof(*refs), PVRSGX_MAX_BO_REFS);
-	if (IS_ERR_OR_NULL(refs))
-		return PTR_ERR_OR_ZERO(refs);
-
-	ja->bos = kvcalloc(arr->count, sizeof(*ja->bos), GFP_KERNEL);
-	ja->bo_flags = kvcalloc(arr->count, sizeof(*ja->bo_flags), GFP_KERNEL);
-	if (!ja->bos || !ja->bo_flags) {
-		err = -ENOMEM;
-		goto out;
-	}
-	for (u32 i = 0; i < arr->count; i++) {
-		if (refs[i].flags & ~DRM_POWERVR_SGX_BO_REF_FLAG_WRITE) {
-			err = -EINVAL;
-			break;
-		}
-		ja->bos[i] = drm_gem_object_lookup(file, refs[i].handle);
-		if (!ja->bos[i]) {
-			err = -ENOENT;
-			break;
-		}
-		ja->bo_flags[i] = refs[i].flags;
-		ja->nbos++;
-	}
-out:
-	kvfree(refs);
-	return err;
-}
-
 static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *in,
 		      struct job_args *ja, const struct job_args *prev, u32 nprev)
 {
@@ -864,12 +818,9 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 	err = job_sync_ops(file, ja, &in->sync_ops, prev, nprev);
 	if (err)
 		return err;
-	err = job_bo_refs(file, ja, &in->bo_refs);
+	err = pvrsgx_prime_ranges(file, &in->cache_ranges, job);
 	if (err)
 		return err;
-	/* Cache ranges aren't implemented yet: refuse them, never ignore them. */
-	if (in->cache_ranges.count)
-		return -EINVAL;
 	return pvrsgx_validate_job(sdev, job);
 }
 
@@ -900,8 +851,6 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
-		err = err ?: pvrsgx_prime_imports(ja[i].bos, ja[i].nbos, &ja[i].job->imports,
-						  &ja[i].job->nimports);
 		if (err) {
 			args->failed_index = i;
 			goto out;
@@ -929,25 +878,6 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 			drm_exec_retry_on_contention(&exec);
 			if (err)
 				goto out_exec;
-			for (u32 b = 0; b < ja[i].nbos; b++) {
-				err = drm_exec_prepare_obj(&exec, ja[i].bos[b], n);
-				drm_exec_retry_on_contention(&exec);
-				if (err)
-					goto out_exec;
-			}
-		}
-	}
-
-	for (u32 i = 0; i < n; i++) {
-		for (u32 b = 0; b < ja[i].nbos; b++) {
-			bool write = ja[i].bo_flags[b] & DRM_POWERVR_SGX_BO_REF_FLAG_WRITE;
-
-			err = drm_sched_job_add_implicit_dependencies(&ja[i].job->base,
-								      ja[i].bos[b], write);
-			if (err) {
-				args->failed_index = i;
-				goto out_exec;
-			}
 		}
 	}
 
@@ -975,10 +905,6 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 
 		dma_resv_add_fence(drm_gpuvm_resv(&job->ctx->vm->gpuvm), done,
 				   DMA_RESV_USAGE_BOOKKEEP);
-		for (u32 b = 0; b < ja[i].nbos; b++)
-			dma_resv_add_fence(ja[i].bos[b]->resv, done,
-					   ja[i].bo_flags[b] & DRM_POWERVR_SGX_BO_REF_FLAG_WRITE ?
-					   DMA_RESV_USAGE_WRITE : DMA_RESV_USAGE_READ);
 		for (u32 s = 0; s < ja[i].nsignals; s++) {
 			struct pvrsgx_signal *sig = &ja[i].signals[s];
 
@@ -989,13 +915,6 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 				drm_syncobj_replace_fence(sig->syncobj, done);
 			}
 		}
-		/* The job keeps its list: run_job and completion flush the imports. */
-		job->bos = ja[i].bos;
-		job->bo_flags = ja[i].bo_flags;
-		job->nbos = ja[i].nbos;
-		ja[i].bos = NULL;
-		ja[i].bo_flags = NULL;
-		ja[i].nbos = 0;
 		drm_sched_entity_push_job(&job->base);
 		ja[i].job = NULL;	/* the scheduler owns it now */
 		pushed++;

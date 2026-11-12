@@ -4,59 +4,28 @@
 /*
  * Buffers imported from other devices. The GPU doesn't snoop the CPU caches
  * and can only reach the low 4 GiB, so an import needs a reachability check
- * when it is mapped and cache flushes around every job that might touch it.
+ * when it is mapped, and cache flushes of the bytes each job lists
+ * (&drm_powervr_sgx_job.cache_ranges) around it.
  */
 
 #include <drm/drm_cache.h>
+#include <drm/drm_file.h>
 #include <drm/drm_gem_shmem_helper.h>
 
 #include <linux/device.h>
 #include <linux/dma-buf.h>
 #include <linux/ktime.h>
+#include <linux/overflow.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
+#include <uapi/drm/powervr_sgx_drm.h>
+
+#include "pvrsgx_drv.h"
 #include "pvrsgx_gem.h"
 #include "pvrsgx_job.h"
 #include "pvrsgx_prime.h"
 #include "pvrsgx_trace.h"
-
-/*
- * The imported objects in a job's BO list, each once and referenced, for the
- * job to flush around itself. *out is NULL when there are none.
- */
-int pvrsgx_prime_imports(struct drm_gem_object **bos, u32 nbos,
-			 struct drm_gem_object ***out, u32 *n)
-{
-	struct drm_gem_object **objs;
-	u32 count = 0;
-
-	*out = NULL;
-	*n = 0;
-	for (u32 b = 0; b < nbos; b++)
-		count += drm_gem_is_imported(bos[b]);
-	if (!count)
-		return 0;
-	objs = kmalloc_array(count, sizeof(*objs), GFP_KERNEL);
-	if (!objs)
-		return -ENOMEM;
-	count = 0;
-	for (u32 b = 0; b < nbos; b++) {
-		u32 i;
-
-		if (!drm_gem_is_imported(bos[b]))
-			continue;
-		for (i = 0; i < count && objs[i] != bos[b]; i++)
-			;
-		if (i < count)
-			continue;
-		drm_gem_object_get(bos[b]);
-		objs[count++] = bos[b];
-	}
-	*out = objs;
-	*n = count;
-	return 0;
-}
 
 /*
  * The GPU's MMU takes 32-bit addresses. An import was mapped for our device,
@@ -76,35 +45,117 @@ bool pvrsgx_prime_reachable(struct sg_table *sgt)
 	return true;
 }
 
+#define PVRSGX_MAX_CACHE_RANGES	64
+
+#define CACHE_RANGE_FLAGS	(DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ | \
+				 DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE)
+
+/* A range's flags, and its rows inside an object of obj_size bytes. */
+static int cache_range_check(const struct drm_powervr_sgx_cache_range *r, u64 obj_size)
+{
+	u32 rows = max(r->rows, 1u);
+	u64 span, end;
+
+	if (!r->flags || (r->flags & ~CACHE_RANGE_FLAGS) || !r->size)
+		return -EINVAL;
+	if (rows > 1 && r->stride < r->size)
+		return -EINVAL;
+	if (check_mul_overflow((u64)(rows - 1), (u64)r->stride, &span) ||
+	    check_add_overflow(span, r->size, &span) ||
+	    check_add_overflow(r->offset, span, &end) || end > obj_size)
+		return -EINVAL;
+	return 0;
+}
+
+/* The job's cache ranges, checked, each holding a reference on its object. */
+int pvrsgx_prime_ranges(struct drm_file *file, const struct drm_powervr_sgx_obj_array *arr,
+			struct pvrsgx_job *job)
+{
+	struct drm_powervr_sgx_cache_range *in;
+	int err = 0;
+
+	in = pvrsgx_obj_array_get(arr, sizeof(*in), PVRSGX_MAX_CACHE_RANGES);
+	if (IS_ERR_OR_NULL(in))
+		return PTR_ERR_OR_ZERO(in);
+	job->ranges = kvcalloc(arr->count, sizeof(*job->ranges), GFP_KERNEL);
+	if (!job->ranges) {
+		err = -ENOMEM;
+		goto out;
+	}
+	for (u32 i = 0; i < arr->count; i++) {
+		struct pvrsgx_cache_range *r = &job->ranges[i];
+
+		r->obj = drm_gem_object_lookup(file, in[i].handle);
+		if (!r->obj) {
+			err = -ENOENT;
+			break;
+		}
+		job->nranges++;
+		err = cache_range_check(&in[i], r->obj->size);
+		if (err)
+			break;
+		/*
+		 * Our own objects are write-combined: nothing to flush. A re-imported
+		 * dma-buf of ours comes back as such an object, so it isn't refused.
+		 */
+		r->import = drm_gem_is_imported(r->obj);
+		r->offset = in[i].offset;
+		r->size = in[i].size;
+		r->stride = in[i].stride;
+		r->rows = max(in[i].rows, 1u);
+		r->write = in[i].flags & DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE;
+	}
+out:
+	kvfree(in);
+	return err;
+}
+
 /*
  * The GPU's accesses don't snoop the CPU caches, not even through
- * cache-consistent PTEs. Our own objects
- * are write-combined on the CPU; an import may be cached, so flush each import
- * the job lists before it runs (no dirty line lands on its output later) and
- * after (no stale line hides it). Userspace lists every import a job touches.
- * An importer may not touch the attachment's pages, so the flushes go through
- * the exporter's own CPU mapping, taken at import.
+ * cache-consistent PTEs. Our own objects are write-combined on the CPU; an
+ * import may be cached. Before a job every range it lists is written back and
+ * dropped (the GPU reads what the CPU wrote, no dirty line lands on its output
+ * later), and after it the ranges it wrote are dropped again (no stale line
+ * hides its output). An importer may not touch the attachment's pages, so the
+ * flushes go through the exporter's own CPU mapping, taken at import.
  */
-static u64 import_flush(struct drm_gem_object *obj)
+static u64 range_flush(const struct pvrsgx_cache_range *r)
 {
-	struct iosys_map *map = &to_pvrsgx_bo(obj)->import_map;
+	const struct iosys_map *map = &to_pvrsgx_bo(r->obj)->import_map;
 
 	/* I/O memory isn't cached. */
-	if (map->is_iomem)
+	if (!r->import || map->is_iomem)
 		return 0;
-	drm_clflush_virt_range(map->vaddr, obj->size);
-	return obj->size;
+	if (r->rows == 1 || r->stride == r->size) {
+		drm_clflush_virt_range(map->vaddr + r->offset, r->size * r->rows);
+	} else {
+		for (u32 y = 0; y < r->rows; y++)
+			drm_clflush_virt_range(map->vaddr + r->offset + (u64)y * r->stride,
+					       r->size);
+	}
+	return r->size * r->rows;
+}
+
+/* The whole of an import, at import. */
+static void import_flush(struct drm_gem_object *obj)
+{
+	const struct iosys_map *map = &to_pvrsgx_bo(obj)->import_map;
+
+	if (!map->is_iomem)
+		drm_clflush_virt_range(map->vaddr, obj->size);
 }
 
 void pvrsgx_prime_flush(struct pvrsgx_job *job, bool after)
 {
 	u64 t0 = trace_pvrsgx_flush_imports_enabled() ? ktime_get_ns() : 0, bytes = 0;
 
-	for (u32 i = 0; i < job->nimports; i++)
-		bytes += import_flush(job->imports[i]);
-	if (job->nimports)
+	for (u32 i = 0; i < job->nranges; i++) {
+		if (!after || job->ranges[i].write)
+			bytes += range_flush(&job->ranges[i]);
+	}
+	if (job->nranges)
 		trace_pvrsgx_flush_imports(job->hw_fence ? job->hw_fence->seqno : 0,
-					   job->nimports, bytes,
+					   job->nranges, bytes,
 					   t0 ? ktime_get_ns() - t0 : 0, after);
 }
 
@@ -126,9 +177,9 @@ struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
 	}
 	to_pvrsgx_bo(obj)->import_map = map;
 	/*
-	 * A listed import is flushed around each job, an unlisted one never: what
-	 * the CPU still holds of it (its zeroing, say) reaches memory now, or the
-	 * GPU could see the pages' earlier contents.
+	 * Only the bytes a job lists are flushed around it: what the CPU still
+	 * holds of the rest (its zeroing, say) reaches memory now, or the GPU
+	 * could see the pages' earlier contents.
 	 */
 	import_flush(obj);
 	return obj;
@@ -136,7 +187,11 @@ struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
 
 void pvrsgx_prime_put(struct pvrsgx_job *job)
 {
-	for (u32 i = 0; i < job->nimports; i++)
-		drm_gem_object_put(job->imports[i]);
-	kfree(job->imports);
+	for (u32 i = 0; i < job->nranges; i++)
+		drm_gem_object_put(job->ranges[i].obj);
+	kvfree(job->ranges);
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_prime_test.c"
+#endif

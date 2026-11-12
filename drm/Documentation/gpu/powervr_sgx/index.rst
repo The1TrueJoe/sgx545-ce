@@ -142,9 +142,11 @@ jobs simply run; nothing is resubmitted. A render job is a scene of one or two T
 follows them. A transfer job is a blit. Userspace describes either with one
 struct per command and a chain of core-specific extensions, which the kernel
 copies and checks field by field, from tables generated per core, before it
-writes the microkernel's command. Jobs wait for and signal binary and timeline syncobjs,
-and they take implicit dependencies from the reservation objects of the buffers
-they reference.
+writes the microkernel's command. Jobs wait for and signal binary and timeline syncobjs;
+sync is explicit only, and a shared buffer's reservation gets no fence from the
+driver (userspace moves fences through the dma-buf's sync-file ioctls). The GPU
+doesn't snoop the CPU caches, so a job lists the bytes of imports it reads or
+writes, and the driver flushes those around it.
 
 Recovery
 ========

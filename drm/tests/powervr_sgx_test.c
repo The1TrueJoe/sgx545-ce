@@ -695,24 +695,78 @@ static void t_null_job_many(int fd)
 	printf("  600 null jobs in %lld ms\n", (long long)(now_ns() - t0) / 1000000);
 }
 
-static void t_null_job_bo_ref(int fd)
+#define CR_RD DRM_POWERVR_SGX_CACHE_RANGE_FLAG_READ
+#define CR_WR DRM_POWERVR_SGX_CACHE_RANGE_FLAG_WRITE
+
+/* Cache ranges, rev3-commands.md section 8.2, in its order; our own objects flush nothing. */
+static void t_null_job_cache_ranges(int fd)
 {
-	uint32_t vm = create_vm(fd), bo = create_bo(fd, PAGE, 0);
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, 2 * PAGE, 0);
 	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER), s = syncobj(fd);
 	struct drm_powervr_sgx_sync_op op = SIGNAL(s);
-	struct drm_powervr_sgx_bo_ref refs[] = {
-		{ .handle = bo, .flags = DRM_POWERVR_SGX_BO_REF_FLAG_WRITE }, { .handle = bo },
-	};
+	struct drm_powervr_sgx_cache_range r[65], one = { .handle = bo, .flags = CR_WR, .size = PAGE };
+	struct { struct drm_powervr_sgx_cache_range r; uint64_t tail; } big = { .r = one };
 	struct drm_powervr_sgx_job j = null_job(ctx, &op, 1);
+#define CR(...) do { r[0] = one; r[0] = (struct drm_powervr_sgx_cache_range){ __VA_ARGS__ }; } while (0)
 
-	j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(2, refs);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, r);
+	/* accepted: a non-import, linear, 2D to the object's last byte, rows 0, a duplicate */
+	CR(.handle = bo, .flags = CR_RD | CR_WR, .offset = 0, .size = 2 * PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	CR(.handle = bo, .flags = CR_WR, .offset = 64, .size = 256, .stride = 1024, .rows = 8);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	CR(.handle = bo, .flags = CR_RD, .offset = 2 * PAGE - 256 - 7 * 1024, .size = 256, .stride = 1024, .rows = 8);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	r[1] = r[0];
+	j.cache_ranges.count = 2;
 	assert_eq(submit(fd, &j, 1, NULL), 0);
 	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
-	refs[0].flags = 2;
+	j.cache_ranges.count = 1;
+
+	/* the array: count over 64, stride 0, a tail the kernel doesn't know; a zero tail is fine */
+	for (int i = 0; i < 65; i++)
+		r[i] = one;
+	j.cache_ranges.count = 65;
 	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
-	refs[0].flags = 0;
-	refs[1].handle = 0xdead;
+	j.cache_ranges.count = 64;
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array){ .stride = 0, .count = 1, .array = (uintptr_t)r };
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &big);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	big.tail = 1;
+	assert_eq(submit(fd, &j, 1, NULL), -E2BIG);
+	/* a shorter element zero-extends: stride and rows 0 are one row */
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array){ .stride = 24, .count = 1, .array = (uintptr_t)r };
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, r);
+
+	/* the handle first, then flags, size, stride, bounds */
+	CR(.handle = 0xdead, .flags = 0, .size = 0);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+	CR(.handle = bo, .flags = 0, .size = PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD | 4, .size = PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .size = 0);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .size = 256, .stride = 128, .rows = 2);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = 1, .size = 2 * PAGE);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = 2 * PAGE - 256 - 7 * 1024 + 1, .size = 256, .stride = 1024, .rows = 8);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = ~0ull - 7, .size = 16);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	CR(.handle = bo, .flags = CR_RD, .offset = 0, .size = 64, .stride = ~0u, .rows = ~0u);
+	assert_eq(submit(fd, &j, 1, NULL), -EINVAL);
+	/* the second entry fails the job; nothing was queued */
+	r[0] = one;
+	r[1] = one;
+	r[1].handle = 0xdead;
+	j.cache_ranges.count = 2;
+	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
+#undef CR
 }
 
 /* The VM goes away while a context still runs jobs in it. */
@@ -804,7 +858,7 @@ static void t_submit_other_file(int fd)
 	int fd2 = open_dev();
 	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER), ctx2, s2, bo2;
 	struct drm_powervr_sgx_sync_op op;
-	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_cache_range range;
 	struct drm_powervr_sgx_job j;
 
 	/* fd2's handles above any of fd's */
@@ -817,14 +871,14 @@ static void t_submit_other_file(int fd)
 	s2 = syncobj(fd2);
 	bo2 = create_bo(fd2, PAGE, 0);
 	op = (struct drm_powervr_sgx_sync_op)SIGNAL(s2);
-	ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo2 };
+	range = (struct drm_powervr_sgx_cache_range){ .handle = bo2, .flags = CR_RD, .size = PAGE };
 
 	j = null_job(ctx2, NULL, 0);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
 	j = null_job(ctx, &op, 1);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
 	j = null_job(ctx, NULL, 0);
-	j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
+	j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &range);
 	assert_eq(submit(fd, &j, 1, NULL), -ENOENT);
 	close(fd2);
 }
@@ -1328,7 +1382,7 @@ static void t_reserved_bits(int fd)
 	uint32_t xctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_TRANSFER);
 	uint32_t pds = create_bo(fd, PAGE, 0), gen = create_bo(fd, PAGE, 0), s = syncobj(fd), rtds;
 	struct drm_powervr_sgx_sync_op op;
-	struct drm_powervr_sgx_bo_ref ref;
+	struct drm_powervr_sgx_cache_range range;
 	struct drm_powervr_sgx_job j;
 	struct rcmd r;
 	struct xcmd x;
@@ -1419,11 +1473,13 @@ static void t_reserved_bits(int fd)
 			j = null_job(ctx, &op, 1);
 			BIT_REJECT("sync op handle type", b, submit(fd, &j, 1, NULL));
 		}
-		if (b >= 1) {
-			ref = (struct drm_powervr_sgx_bo_ref){ .handle = bo, .flags = 1u << b };
+		if (b >= 2) {
+			range = (struct drm_powervr_sgx_cache_range){
+				.handle = bo, .flags = CR_RD | 1u << b, .size = PAGE,
+			};
 			j = null_job(ctx, NULL, 0);
-			j.bo_refs = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &ref);
-			BIT_REJECT("BO ref flags", b, submit(fd, &j, 1, NULL));
+			j.cache_ranges = (struct drm_powervr_sgx_obj_array)DRM_POWERVR_SGX_OBJ_ARRAY(1, &range);
+			BIT_REJECT("cache range flags", b, submit(fd, &j, 1, NULL));
 		}
 	}
 
@@ -1502,7 +1558,7 @@ static const struct {
 	{ "submit-null-job-timeline", t_null_job_timeline },
 	{ "submit-null-job-chain", t_null_job_chain },
 	{ "submit-null-job-many", t_null_job_many },
-	{ "submit-null-job-bo-ref", t_null_job_bo_ref },
+	{ "submit-null-job-cache-ranges", t_null_job_cache_ranges },
 	{ "submit-null-job-vm-destroyed", t_null_job_vm_destroyed },
 	{ "submit-invalid", t_submit_invalid },
 	{ "context-state-invalid", t_context_state_invalid },

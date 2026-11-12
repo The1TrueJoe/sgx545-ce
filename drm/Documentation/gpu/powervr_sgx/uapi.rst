@@ -120,14 +120,14 @@ SUBMIT_JOBS
    :doc: Flags for struct drm_powervr_sgx_sync_op
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
-   :doc: Flags for struct drm_powervr_sgx_bo_ref
+   :doc: Flags for struct drm_powervr_sgx_cache_range
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
    :doc: Flags for &drm_powervr_sgx_job.flags
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
    :identifiers: drm_powervr_sgx_sync_op
-                 drm_powervr_sgx_bo_ref
+                 drm_powervr_sgx_cache_range
                  drm_powervr_sgx_job_type
                  drm_powervr_sgx_job
                  drm_powervr_sgx_ioctl_submit_jobs_args
