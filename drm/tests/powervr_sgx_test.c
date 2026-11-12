@@ -264,7 +264,7 @@ static void t_query_limits_quirks(int fd)
 	uint32_t size = sizeof(l);
 
 	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &l, &size), 0);
-	assert_true(l.rt_max_width && l.rt_max_height && l.rt_max_samples == 1);
+	assert_true(l.rt_max_width && l.rt_max_height && (l.rt_max_samples == 1 || l.rt_max_samples == 4));
 	assert_true(l.pb_min_pages <= l.pb_default_pages && l.pb_default_pages <= l.pb_max_pages);
 	assert_eq(l.va_bits, 32);
 	assert_eq(l.max_layers, 1);
@@ -1118,10 +1118,24 @@ static void t_rtds_invalid(int fd)
 	struct drm_powervr_sgx_ioctl_create_rt_dataset_args a = {
 		.context_handle = ctx, .width = 64, .height = 64, .samples = 1,
 	};
+	struct drm_powervr_sgx_dev_query_limits l = {};
+	uint32_t size = sizeof(l);
 	int err;
 
+	/* 0, 1 and 4 samples; 4 only up to the core's limit */
+	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &l, &size), 0);
+	for (uint32_t s = 2; s <= 8; s++) {
+		if (s == 4)
+			continue;
+		a.samples = s;
+		do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	}
 	a.samples = 4;
-	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
+	if (l.rt_max_samples >= 4)
+		assert_eq(xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a), 0);	/* freed with the file */
+	else
+		do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EOPNOTSUPP);
+	a.handle = 0;
 	a.samples = 1;
 	a.flags = 1;
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET, &a, EINVAL);
