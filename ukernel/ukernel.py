@@ -463,6 +463,23 @@ def build(a):
         if USSE_PHAS:
             a.phas()
         a.patch(17, "ctlblk")
+        if USSE_MIRROR:
+            # mirror the real entry's preamble exactly (both patches, the heartbeat
+            # load) to isolate the real image's first-load fault, then store what was
+            # read to a readable marker and loop
+            a.patch(14, "pdtable")
+            moe = " [moe]" if USSE_MOE else ""           # USSE_MOE=False drops [moe]
+            a.i(f"ld.a.d r3, r17, #{HEARTBEAT}{moe}")      # the real entry's first load
+            a.i("wdf")
+            a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r3{moe}")   # 0x28 = what the load read
+            a.i("idf")
+            a.i("wdf")
+            a.i(f"limm r0, #{DIAG_TIMER}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r0")          # EVENT_TIMER, if we get here
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         a.i(f"limm r0, #{USSE_MARK_A}")
         a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r0 [moe]")   # 0x28, before str
         a.i("idf")
