@@ -800,7 +800,12 @@ program fetch at offset 0 (G). Either another event source that 0xa74 enables di
 program whose address register is unset, or the DOUTU itself triggers a second PDS
 program, as the SGX545's task setup can.
 
-**Attempt 19,** all with 0xa74 = 0x208200, the `sgx530_bases` image and the pads:
+**Attempt 19.** 0xa74 = 0x208200 is now part of the SGX530's init-script part 2 (kernel
+43831efb), so every start includes it. 0xabc, 0xa00, 0xa78, 0xaac, 0xa7c and 0xa80 stay out.
+The run uses the `sgx530_bases` image with `code_base_pads=1`: every code base 0-15 then
+points at mapped code, so a USSE task fetching through any base lands on a pad or the
+ladder instead of faulting. That answers the coordinator's question too: the DOUTU task's
+code base being unmapped would show as a pad, not a fault at `PDS_EXEC_BASE` + 0.
 
 | Variant | Change | Tells |
 |---|---|---|
@@ -810,7 +815,8 @@ program, as the SGX545's task setup can.
 | V3 | the same page holding data row + HALT | the fault should go away with no task, if it's a program fetch |
 
 - The page at 0x0d800000 is `PDS_EXEC_BASE`'s first page, the PDS pixel heap's start,
-  which is empty at init. Map it for this test only.
+  which is empty at init. Map exactly that one page, for this test only (approved under the
+  standing go), with the recovery reset first.
 - A ladder or a pad landing in V2 starts the microkernel.
 
 **Making 0xa74 part of the SGX530's start.** It is the first setup write shown to matter.
