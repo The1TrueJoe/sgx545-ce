@@ -785,20 +785,34 @@ static const char *const sweep_name[] = {
 /* EVENT_TIMER's enable bit (both GPL headers); the period is in b0-23. */
 #define EVENT_TIMER_ENABLE	BIT(24)
 
-/* Whether EVENT_TIMER leaves the value the host left there within 100 ms. */
-static bool timer_moved(struct pvrsgx_device *sdev, u32 host)
-{
-	u32 t;
+/*
+ * Whether the diagnostic entry's ladder ran within 100 ms: its EVENT_TIMER
+ * write (0xa5a, timer off), its wait-word marker, or the heartbeat. An enabled
+ * timer counts down by itself, so a changed EVENT_TIMER alone proves nothing.
+ */
+#define LADDER_TIMER		0xa5a
+#define LADDER_MARKER		0xd1a60001
 
-	return !read_poll_timeout(sgx_rd, t, t != host, 1000, 100000, false, sdev,
-				  SGX_CR_EVENT_TIMER);
+static bool ladder_seen(struct pvrsgx_device *sdev)
+{
+	const u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+
+	return sgx_rd(sdev, SGX_CR_EVENT_TIMER) == LADDER_TIMER ||
+	       READ_ONCE(t[0x28]) == LADDER_MARKER || READ_ONCE(t[0x2a]);
+}
+
+static bool ladder_ran(struct pvrsgx_device *sdev)
+{
+	bool seen;
+
+	return !read_poll_timeout(ladder_seen, seen, seen, 1000, 100000, false, sdev);
 }
 
 static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	/* The clock status before the first kick, what a reset should return to. */
-	u32 idle = clk_idle, clk, host = 0;
+	u32 idle = clk_idle, clk;
 	char when[64];
 	int err;
 
@@ -826,21 +840,21 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			/* The rebuilt program is in memory before the kick. */
 			wmb();
 			if (v == SWEEP_TIMER_START) {
-				host = EVENT_TIMER_ENABLE | hc[HOSTCTL_UK_TIMER_CLOCK];
-				sgx_wr(sdev, SGX_CR_EVENT_TIMER, host);
+				sgx_wr(sdev, SGX_CR_EVENT_TIMER,
+				       EVENT_TIMER_ENABLE | hc[HOSTCTL_UK_TIMER_CLOCK]);
 			} else {
 				init_kick(sdev);
 			}
 		}
-		if (timer_moved(sdev, host)) {
-			drm_info(&sdev->base, "sweep: variant %u (%s) starts the event program\n",
+		if (ladder_ran(sdev)) {
+			drm_info(&sdev->base, "sweep: variant %u (%s) runs the diagnostic ladder\n",
 				 v, sweep_name[v]);
 			return 0;
 		}
 		snprintf(when, sizeof(when), "sweep variant %u (%s)", v, sweep_name[v]);
 		bringup_diag(sdev, when);
 	}
-	drm_info(&sdev->base, "sweep: no variant starts the event program\n");
+	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
 	return 0;
 }
 
