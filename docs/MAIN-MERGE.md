@@ -32,6 +32,12 @@ State on 2026-11-09:
 | 13 | American English in docs and kit text. The prose in `docs/` and `docs/log/` is converted (f45d19f and the follow-up). Code spans, identifiers, register names, quoted DDK messages and raw log output keep their original spelling. The kit and the tester guide were already clean. | done |
 | 14 | v3.1 sticks already in testers' hands link `blob/um-re`. Delete `um-re` only after v3.2 (whose links point at `main`) replaces v3.1 in issue #5 (the Cedarview test issue), or the testers' guide link breaks. | open |
 
+## Branches that downstream pins use
+
+`kernel-7.3` (f080457) is the old layout at efda5ef plus `strncpy` → `strscpy` in `kernel/`, for
+Linux 7.3. A downstream submodule pins it, so keep the branch as long as anything pins it, and
+across the merge.
+
 ## Workflows
 
 Latest run of each, 2026-11-09:
@@ -52,7 +58,7 @@ Decide whether `cedarview-kit` (v2) stays now that v3 replaces it.
 
 ## INSTALL.md on hardware
 
-On a CE5300 board (EA1) on 2026-11-09, in the Debian 13 test root, with the packages from
+On a CE5300 board on 2026-11-09, in the Debian 13 test root, with the packages from
 `mesa-debian` run 42557836753 (the ones stick v3.1 carries) and the kernel from
 `powervr-sgx` 535b5dc. The run is `mesa/tests/desktop/install-e2e.sh`.
 

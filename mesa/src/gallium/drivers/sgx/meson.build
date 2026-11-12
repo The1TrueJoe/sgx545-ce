@@ -4,8 +4,6 @@
 files_sgx = files(
   'sgx_context.c',
   'sgx_context.h',
-  'sgx_device.c',
-  'sgx_device.h',
   'sgx_draw.c',
   'sgx_program.c',
   'sgx_program.h',
@@ -25,11 +23,12 @@ libsgx = static_library(
   include_directories : [
     inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
   ],
-  dependencies : [idep_nir, idep_mesautil, idep_sgx_ws, idep_sgx_compiler],
+  dependencies : [idep_nir, idep_mesautil, idep_sgx_ws, idep_sgx_compiler,
+                  idep_sgx_core],
 )
 
 driver_sgx = declare_dependency(
   compile_args : '-DGALLIUM_SGX',
-  link_with : [libsgx, libsgxwinsys, libsgx_compiler],
+  link_with : [libsgx, libsgxwinsys, libsgx_compiler, libsgx_core],
   dependencies : idep_nir,
 )

@@ -28,7 +28,9 @@
 
 /* -u / -a / -s pins: glslcompiler's constant numbers, attribute slots and
  * sampler units (calib.py measures them), handed to the compiler as its
- * layout (struct sgx_layout); names not pinned are the compiler's */
+ * layout (struct sgx_layout); names not pinned are the compiler's, except
+ * samplers: glslcompiler numbers those in order of use (corpus c3
+ * tx_nd_s1: s1 alone is sampler 0; tx_nd_two: s, s1 = 0, 1) */
 #define MAX_NAMED 256
 
 struct named {
@@ -39,6 +41,8 @@ struct named {
 struct pins {
    unsigned n[3];                       /* by enum sgx_layout_kind */
    struct named t[3][MAX_NAMED];
+   struct named used[16];               /* unpinned samplers, in order of use */
+   unsigned n_used;
 };
 
 static void
@@ -55,16 +59,6 @@ named(struct pins *p, enum sgx_layout_kind k, const char *arg)
    e->value = atoi(eq + 1);
 }
 
-static int
-pins_place(void *data, enum sgx_layout_kind k, const char *name)
-{
-   const struct pins *p = (const struct pins *)data;
-   for (unsigned i = 0; i < p->n[k]; i++)
-      if (!strcmp(p->t[k][i].name, name))
-         return p->t[k][i].value;
-   return -1;
-}
-
 /* past every pin: a uniform pin takes a vec4 (rows and elements are pinned one by one) */
 static unsigned
 pins_first_free(void *data, enum sgx_layout_kind k)
@@ -74,6 +68,26 @@ pins_first_free(void *data, enum sgx_layout_kind k)
    for (unsigned i = 0; i < p->n[k]; i++)
       next = MAX2(next, (unsigned)p->t[k][i].value + (k == SGX_LAYOUT_UNIFORM ? 4 : 1));
    return next;
+}
+
+static int
+pins_place(void *data, enum sgx_layout_kind k, const char *name)
+{
+   struct pins *p = (struct pins *)data;
+   for (unsigned i = 0; i < p->n[k]; i++)
+      if (!strcmp(p->t[k][i].name, name))
+         return p->t[k][i].value;
+   if (k != SGX_LAYOUT_SAMPLER)
+      return -1;
+   for (unsigned i = 0; i < p->n_used; i++)
+      if (!strcmp(p->used[i].name, name))
+         return p->used[i].value;
+   if (p->n_used == 16 || strlen(name) >= sizeof(p->used[0].name))
+      return -1;
+   struct named *e = &p->used[p->n_used];
+   strcpy(e->name, name);
+   e->value = pins_first_free(p, k) + p->n_used++;
+   return e->value;
 }
 
 static void
@@ -87,6 +101,70 @@ write_file(const char *prefix, const char *suffix, const void *d, size_t n)
       exit(1);
    }
    fclose(f);
+}
+
+/* the gallium driver's (sgx_program.c remap_legacy_varyings): desktop GL's
+ * built-in varyings move from the legacy slots to VAR slots the program's own
+ * leave free, named "sgx_legacy<n>" */
+static void
+remap_legacy_varyings(nir_shader *nir)
+{
+   static const gl_varying_slot map[] = {
+      VARYING_SLOT_COL0, VARYING_SLOT_COL1, VARYING_SLOT_BFC0, VARYING_SLOT_BFC1, VARYING_SLOT_FOGC,
+      VARYING_SLOT_TEX0, VARYING_SLOT_TEX1, VARYING_SLOT_TEX2, VARYING_SLOT_TEX3, VARYING_SLOT_TEX4,
+      VARYING_SLOT_TEX5, VARYING_SLOT_TEX6, VARYING_SLOT_TEX7,
+   };
+   nir_variable_mode mode = nir->info.stage == MESA_SHADER_VERTEX ? nir_var_shader_out : nir_var_shader_in;
+   int slot[ARRAY_SIZE(map)];
+   uint32_t used = 0;
+   nir_foreach_variable_with_modes(var, nir, mode) {
+      if (var->data.location >= VARYING_SLOT_VAR0 && var->data.location < VARYING_SLOT_VAR0 + 32)
+         for (unsigned r = 0; r < glsl_count_vec4_slots(var->type, false, false); r++)
+            used |= 1u << ((var->data.location - VARYING_SLOT_VAR0 + r) & 31);
+   }
+   for (unsigned i = 0, s = 0; i < ARRAY_SIZE(map); i++) {
+      while (s < 32 && (used & (1u << s)))
+         s++;
+      slot[i] = s < 32 ? (int)s++ : -1;
+   }
+   nir_foreach_variable_with_modes(var, nir, mode) {
+      for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
+         if (var->data.location != (int)map[i] || slot[i] < 0)
+            continue;
+         char name[32];
+         var->data.location = VARYING_SLOT_VAR0 + slot[i];
+         snprintf(name, sizeof(name), "sgx_legacy%u", i);
+         var->name = ralloc_strdup(nir, name);
+         /* gl_TexCoord[] before the linker sizes it: the elements used */
+         if (glsl_type_is_unsized_array(var->type))
+            var->type = glsl_array_type(glsl_without_array(var->type), var->data.max_array_access + 1, 0);
+         break;
+      }
+   }
+   /* and the I/O intrinsics of a shader whose I/O is lowered */
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(b, impl) {
+         nir_foreach_instr(instr, b) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            if (!nir_intrinsic_has_io_semantics(in))
+               continue;
+            bool out = in->intrinsic == nir_intrinsic_store_output;
+            if (out != (nir->info.stage == MESA_SHADER_VERTEX))
+               continue;
+            nir_io_semantics sem = nir_intrinsic_io_semantics(in);
+            for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
+               if (sem.location == (unsigned)map[i] && slot[i] >= 0) {
+                  sem.location = VARYING_SLOT_VAR0 + slot[i];
+                  nir_intrinsic_set_io_semantics(in, sem);
+                  break;
+               }
+            }
+         }
+      }
+   }
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 }
 
 static unsigned
@@ -126,12 +204,16 @@ main(int argc, char **argv)
    memset(&opts, 0, sizeof(opts));
    bool lowp16 = false, driver_uniforms = false;
    unsigned glsl_version = 100;
-   while ((c = getopt(argc, argv, "vpFLDMG:u:a:s:o:V:")) != -1) {
+   while ((c = getopt(argc, argv, "vpFLDMHPJG:B:u:a:s:o:V:")) != -1) {
       switch (c) {
       case 'F': opts.front_sa = 5; break;   /* gl_FrontFacing as the gallium driver reads it */
       case 'L': driver_uniforms = true; break;
-      case 'D': opts.driver_consts = true; break;   /* constant formats only our driver loads */
+      case 'D': opts.driver_consts = opts.pds_samples_alone = true; break; /* our driver: its constant formats, PDS samples without the plain iteration */
       case 'M': opts.fs_mediump = true; break;      /* fragment floats mediump (st's fixed function) */
+      case 'B': opts.tex_bgra = strtoul(optarg, NULL, 0); break; /* units whose texels arrive BGRA-ordered */
+      case 'H': opts.f16_samples = true; break;  /* mediump texels returned as F16 */
+      case 'P': opts.split_phases = true; break; /* discard test and colour in two phases */
+      case 'J': opts.dep_f16_samples = true; break; /* dependent mediump texels returned F16 too */
       case 'G': glsl_version = atoi(optarg); break; /* GLSL version: 100 ES (default), 110-130 desktop compat */
       case 'V': {                                   /* -V slot=fmt: attribute slot's raw format (sgx_vtx_fmt) */
          unsigned slot, fmt;
@@ -146,7 +228,7 @@ main(int argc, char **argv)
       case 's': named(&pins, SGX_LAYOUT_SAMPLER, optarg); break;
       case 'o': prefix = optarg; break;
       default:
-         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
+         fprintf(stderr, "usage: sgxc [-v] [-p] [-L] [-D] [-M] [-G version] [-B unitmask] [-H] [-P] [-V slot=fmt] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag\n");
          return 2;
       }
    }
@@ -172,8 +254,17 @@ main(int argc, char **argv)
    memset(vary, 0, sizeof(vary));
    for (unsigned i = 0; i < prog->NumShaders; i++) {
       struct gl_shader *sh = prog->Shaders[i];
-      if (sh->nir && (sh->Stage == MESA_SHADER_VERTEX || sh->Stage == MESA_SHADER_FRAGMENT))
-         sgx_assign_varyings(sh->nir, sh->Stage == MESA_SHADER_VERTEX, &vary[sh->Stage]);
+      if (sh->nir && (sh->Stage == MESA_SHADER_VERTEX || sh->Stage == MESA_SHADER_FRAGMENT)) {
+         nir_shader *n = sh->nir;
+         if (glsl_version >= 110) {
+            /* (on a copy: the linker still reads the built-ins) */
+            n = nir_shader_clone(NULL, sh->nir);
+            remap_legacy_varyings(n);
+         }
+         sgx_assign_varyings(n, sh->Stage == MESA_SHADER_VERTEX, &vary[sh->Stage]);
+         if (n != sh->nir)
+            ralloc_free(n);
+      }
    for (unsigned st = MESA_SHADER_VERTEX; st <= MESA_SHADER_FRAGMENT && opts.verbose; st++)
       for (unsigned i = 0; i < vary[st].n; i++)
          fprintf(stderr, "%s varying %s: set %u, %u x %u\n", st == MESA_SHADER_FRAGMENT ? "frag" : "vert", vary[st].v[i].name,
@@ -210,6 +301,10 @@ main(int argc, char **argv)
          continue;
       }
       nir_shader *nir = sep->_LinkedShaders[st]->Program->nir;
+      /* the standalone frontend builds NIR with its own options */
+      nir->options = sgx_nir_options();
+      if (glsl_version >= 110)
+         remap_legacy_varyings(nir);
       const char *sname = st == MESA_SHADER_VERTEX ? "vert" : "frag";
       /* this stage's pins: unprefixed ones, and "vert:" / "frag:" ones */
       struct sgx_compile_options so2 = opts;
@@ -286,6 +381,17 @@ main(int argc, char **argv)
       snprintf(suffix, sizeof suffix, "%s.code", sname);
       write_file(prefix, suffix, hex, k);
       free(hex);
+      if (out.n_code1) {
+         /* -P: phase 1 of a split program */
+         hex = (char *)malloc(out.n_code1 * 20 + 1);
+         k = 0;
+         for (unsigned i = 0; i < out.n_code1; i++)
+            k += snprintf(hex + k, 20, "%08x %08x\n", (unsigned)(out.code1[i] >> 32), (unsigned)out.code1[i]);
+         snprintf(suffix, sizeof suffix, "%s.code1", sname);
+         write_file(prefix, suffix, hex, k);
+         free(hex);
+         printf("%s phase 1: %u instructions\n", sname, out.n_code1);
+      }
       printf("%s: %u instructions (%u alu, %u tex, %u flow), %u temps, %u pa\n", sname,
              out.n_code, out.n_alu, out.n_tex, out.n_flow, out.n_temps, out.n_pa);
       sgx_shader_free(&out);

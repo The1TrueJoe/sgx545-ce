@@ -5,7 +5,7 @@
 
 /*
  * The compiler's instruction forms as struct sgx_isa_instr: opcode, fixed
- * fields and operand slots, from docs/ISA.md's class sections.
+ * fields and operand slots, by instruction class.
  */
 #include "sgx_forms.h"
 
@@ -13,7 +13,7 @@
 
 #define F(x) SGX_FILE_BIT(SGX_ISA_FILE_##x)
 
-/* the generic destination and source slots (ISA.md "Operand slots") */
+/* the generic destination and source slots */
 #define DST_FILES (F(R) | F(O) | F(PA) | F(IX) | F(SA) | F(G) | F(IDX) | F(I))
 #define SRC_FILES                                                              \
    (F(R) | F(O) | F(PA) | F(SA) | F(IX) | F(C) | F(G) | F(IMM) | F(I))
@@ -44,13 +44,13 @@
 #define PD  {SGX_ROLE_PDST, SGX_FILE_BIT(SGX_FILE_PRED)}
 /* ima16's src2 negate */
 #define S2N {SGX_ROLE_SRC2, SRC_FILES, true}
-/* efo (ISA.md "efo"): no extension bit on dst and src1; i<n> in dst, src0 and
+/* efo: no extension bit on dst and src1; i<n> in dst, src0 and
  * src1 is r(124 + n); negates on all three sources, no format select */
 #define EFO_D  {SGX_ROLE_DST, F(R) | F(O) | F(PA) | F(IX) | F(I)}
 #define EFO_S0 {SGX_ROLE_SRC0, SRC0X_FILES | F(I), true}
 #define EFO_S1 {SGX_ROLE_SRC1, F(R) | F(O) | F(PA) | F(SA) | F(I), true}
 #define EFO_S2 {SGX_ROLE_SRC2, SRC_FILES, true}
-/* fdual (ISA.md "Dual issue"): dst without extension bit, the float classes'
+/* fdual (dual issue): dst without extension bit, the float classes'
  * src0, src1/src2 negates; format select as in the float classes */
 #define FD_S0 {SGX_ROLE_SRC0, SRC0_FILES | F(I), false, false, true}
 #define FD_S1 {SGX_ROLE_SRC1, SRC_FILES, true, false, true}
@@ -79,6 +79,7 @@ static const struct sgx_form_info {
    FLOAT3(FMINMAX),
    FLOAT2(FSUBFLR),
    FLOAT2(FDP),
+   FLOAT2(FDPC),
    FLOAT2(FDSX),
    FLOAT2(FDSY),
    SCALAR(FRCP),
@@ -100,6 +101,7 @@ static const struct sgx_form_info {
    PCK(F32, U8),
    PCK(U8, F32),
    PCK(U8, F16),
+   PCK(U8, U8),
    PCK(S16, F32),
    PCK(C10, F32),
    PCK(C10, C10),
@@ -107,6 +109,7 @@ static const struct sgx_form_info {
    [SGX_OP_TEST] = {"TEST", SGX_ISA_OPC_TEST, 3, {PD, S1T, S2T}},
    [SGX_OP_TESTMASK] = {"TESTMASK", SGX_ISA_OPC_TESTMASK, 3, {D, S1T, S2T}},
    [SGX_OP_AND] = {"AND", SGX_ISA_OPC_AND, 3, {D, S1, S2}},
+   [SGX_OP_OR] = {"OR", SGX_ISA_OPC_OR, 3, {D, S1, S2}},
    [SGX_OP_XOR] = {"XOR", SGX_ISA_OPC_XOR, 3, {D, S1, S2}},
    [SGX_OP_SOPWM] = {"SOPWM", SGX_ISA_OPC_SOPWM, 3, {D, S1, S2}},
    [SGX_OP_SOP3] = {"SOP3", SGX_ISA_OPC_SOP3, 4, {D, S0, S1, S2}},
@@ -271,6 +274,9 @@ sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id, int32_t v)
    case SGX_FLD_A2:
       instr->a2 = v & 1;
       instr->a2c = v >> 1;
+      break;
+   case SGX_FLD_CP:
+      instr->cp[0] = v;
       break;
    case SGX_FLD_DIM:
       instr->dim = v;

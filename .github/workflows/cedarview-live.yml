@@ -77,11 +77,12 @@ jobs:
             echo "variant B: $(python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel-xferbank.bin | head -1)";
           } | tee out/BUILD-INFO.txt
 
-      - name: Boot it in QEMU, BIOS and UEFI (results with screenshots; the other disk untouched)
+      - name: Boot it in QEMU, BIOS and UEFI, and once with a hung X (results with screenshots; the other disk untouched)
         run: |
           set -eux
           sudo chmod 666 /dev/kvm 2>/dev/null || true
           for fw in bios uefi; do sh kit/cedarview-live/qemu-test.sh out/*.img.gz $fw; done
+          sh kit/cedarview-live/qemu-test.sh out/*.img.gz bios xhang
 
       - name: The artifact's name follows the kit's series
         run: echo "KIT_SERIES=$(cat kit/cedarview-live/SERIES)" >> "$GITHUB_ENV"

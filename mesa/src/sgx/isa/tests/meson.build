@@ -14,3 +14,12 @@ test(
   args : files('gles2.txt', 'int.txt', 'coissue.txt'),
   suite : ['sgx'],
 )
+
+# sgx-asm and sgx-disasm over the same lists, in batch, hex and binary.
+test(
+  'sgx_isa_tools',
+  prog_python,
+  args : [files('tools_test.py'), sgx_asm, sgx_disasm,
+          files('gles2.txt', 'int.txt', 'coissue.txt')],
+  suite : ['sgx'],
+)

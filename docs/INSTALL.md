@@ -23,8 +23,8 @@ There are three pieces, and each one is easy to remove again:
    in `/opt/sgx`. Debian's own Mesa stays installed; ours is used first.
 
 You need Debian 13 already installed, an internet connection, and a user that can run
-`sudo`. Download everything from the CI run linked in the announcement. You need to be
-signed in to GitHub to download. Each download is a `.zip`; unzip it first.
+`sudo`. The packages come from our apt repository, or as `.deb` files from a release on the
+project's [Releases page](https://github.com/The1TrueJoe/powervr_sgx/releases).
 
 ## 1. Check what you have
 
@@ -38,9 +38,61 @@ lspci -nn | grep -i -E 'vga|display'
   Cedarview steps below.
 - `[8086:089b]`: a **CE5300** GPU. Follow the CE5300 steps below.
 
+## The apt repository
+
+On Cedarview you can install all three pieces from our apt repository, and `apt upgrade`
+then keeps them up to date. Add the repository's signing key (if `curl` is missing, install
+it first with `sudo apt install curl`):
+
+```bash
+sudo curl -fsSLo /usr/share/keyrings/powervr-sgx.gpg https://telaak.dev/powervr_sgx/powervr-sgx.gpg
+```
+
+Check the key before you trust it:
+
+```bash
+gpg --show-keys /usr/share/keyrings/powervr-sgx.gpg
+```
+
+The long line under `pub` must read `5C26DC64CAEC63910424E220E0DD2B7AD794C167`. If it doesn't,
+delete the file and stop. Then add the repository's entry:
+
+```bash
+printf 'Types: deb\nURIs: https://telaak.dev/powervr_sgx\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/powervr-sgx.gpg\n' | sudo tee /etc/apt/sources.list.d/powervr-sgx.sources
+```
+
+Then install the three packages:
+
+```bash
+sudo apt update
+```
+
+```bash
+sudo apt install linux-image-7.3.3-sgx sgx545-firmware mesa-sgx
+```
+
+Restart, and go on with the checks in "3. The firmware" and "4. Mesa" below. To remove
+the repository again, delete `/etc/apt/sources.list.d/powervr-sgx.sources` and
+`/usr/share/keyrings/powervr-sgx.gpg`.
+
+On a CE5300 board, add the repository the same way but install only
+`sudo apt install sgx545-firmware mesa-sgx`, and build the kernel driver as in "2. The
+kernel" below.
+
+If you'd rather install the files by hand, download them from the newest release on the
+[Releases page](https://github.com/The1TrueJoe/powervr_sgx/releases): the four `.deb` files
+and `SHA256SUMS`. Put them in one folder and check them there:
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+Every line must end in `OK`. Sections 2 to 4 then install them one by one.
+
 ## 2. The kernel
 
-The driver needs Linux 7.1 or newer. Debian 13 ships 6.12, so install our kernel package.
+The driver needs Linux 7.1 or newer. Debian 13 ships 6.12, so install our kernel package
+(Linux 7.3.3).
 
 ### Cedarview
 
@@ -48,11 +100,12 @@ On Cedarview, the GPU shares its PCI device with the display driver (`gma500`). 
 has a small change to `gma500` that hands the GPU to `powervr_sgx`. It is Debian's own
 kernel configuration with that change added.
 
-1. From the CI download, take `linux-image-7.1.8-sgx_7.1.8-sgx1_amd64.deb`.
+1. From the release, take `linux-image-7.3.3-sgx_7.3.3-sgx….deb` (the headers package
+   next to it is only needed to build other kernel modules).
 2. Install it:
 
    ```bash
-   sudo apt install ./linux-image-7.1.8-sgx_*.deb
+   sudo apt install ./linux-image-7.3.3-sgx_*.deb
    ```
 
 3. Restart. The new kernel is the default in the boot menu. Debian's kernel stays under
@@ -84,7 +137,7 @@ echo 'blacklist pvrsrvkm' | sudo tee /etc/modprobe.d/sgx-no-pvrsrvkm.conf
 
 ## 3. The firmware
 
-From the CI download, take `sgx545-firmware_….deb` and install it:
+From the release, take `sgx545-firmware_….deb` and install it:
 
 ```bash
 sudo apt install ./sgx545-firmware_*.deb
@@ -119,10 +172,10 @@ If it says `no microkernel`, the firmware file isn't in the right place. If it s
 
 ## 4. Mesa
 
-From the CI download, take `mesa-sgx_….deb` and install it:
+From the release, take `mesa-sgx_…_amd64.deb` and install it:
 
 ```bash
-sudo apt install ./mesa-sgx_*.deb
+sudo apt install ./mesa-sgx_*_amd64.deb
 ```
 
 It installs into `/opt/sgx`, with two small settings files that tell programs to use it
@@ -138,14 +191,50 @@ glxinfo -B | grep -E 'renderer|version'
 The renderer line should name the **SGX545**. If it says `llvmpipe`, Debian's software
 Mesa is still in use: check that steps 2 to 4 worked.
 
+### 32-bit games
+
+32-bit programs, such as older Steam games, load a 32-bit Mesa. Without one they fall back
+to Debian's software renderer (`llvmpipe`). Install the 32-bit `mesa-sgx` beside the
+64-bit one. First let the system install 32-bit packages:
+
+```bash
+sudo dpkg --add-architecture i386
+```
+
+```bash
+sudo apt update
+```
+
+Then, from the apt repository:
+
+```bash
+sudo apt install mesa-sgx:i386
+```
+
+Or from the release, take `mesa-sgx_…_i386.deb` and install it the same way:
+
+```bash
+sudo apt install ./mesa-sgx_*_i386.deb
+```
+
+It goes into `/opt/sgx/lib/i386-linux-gnu`, beside the 64-bit files, and both stay
+installed together. A 32-bit game's renderer (in its log or console) should then name the
+**SGX545**. Steam's runtime picks up the system's Mesa. This hasn't been tested with every
+runtime yet, so if a game still reports `llvmpipe`, please report it.
+
+If the desktop reacts slowly while a game runs, let programs keep fewer frames in flight:
+add the line `SGX_SLOTS=3` to `/etc/environment` and log in again. Games then run a little
+slower. Delete the line to go back to the default of 4.
+
 ## Removing it again
 
 You can undo each piece on its own.
 
-- **Mesa:** `sudo apt remove mesa-sgx`. Programs use Debian's Mesa again.
+- **Mesa:** `sudo apt remove mesa-sgx`. Programs use Debian's Mesa again. The 32-bit one is
+  `sudo apt remove mesa-sgx:i386`.
 - **The firmware:** `sudo apt remove sgx545-firmware`. On its own, it does nothing anyway.
 - **The kernel (Cedarview):** pick Debian's kernel under "Advanced options" in the boot menu.
-  To uninstall ours, run `sudo apt remove linux-image-7.1.8-sgx`.
+  To uninstall ours, run `sudo apt remove linux-image-7.3.3-sgx`.
 - **DKMS (CE5300):** run `sudo dkms remove powervr_sgx/0.1 --all`. If you blocked
   `pvrsrvkm` and want it back, delete `/etc/modprobe.d/sgx-no-pvrsrvkm.conf`.
 

@@ -1,0 +1,21 @@
+# One X attempt per line, in order: VARIANT|gma500 parameters|environment|smoke test (full|short).
+# Before these, two steps without X (kit-live-run): kmsflip (modetest page flips with vsync on the
+# display: gma500's flips and vblank) and kmsgpu (glmark2-es2-drm: SGX + kmsro + gbm + PRIME import
+# of the display's dumb buffer + flips). The parameters are written to
+# /sys/module/gma500_gfx/parameters/ and applied with a blank/unblank (kernel defaults: cdv_sr=0,
+# cdv_dsparb=0 = 0x3f3e); a variant whose parameters can't be set is skipped. The environment
+# reaches Xorg and the clients. KIT_XORG_ACCEL=none: modesetting without glamor (no DRI3 then).
+# KIT_GL=software: the smoke test expects llvmpipe, not the SGX. SGX_DEBUG is a comma list
+# (kit-xorg adds "frame" for Xorg).
+# A: the GPU desktop (glamor + DRI3 on the SGX); C: X without glamor, clients on llvmpipe (the panel,
+# gma500's modeset and X alone); D: zero-copy off (the default since mesa-gallium 637a8a3; with
+# an older Mesa, make D SGX_DEBUG=frame,zerocopy instead); E: the other scanout path (E also lets Present flip
+# client buffers, which are gma500 dumb buffers there); F: pipe B gets almost the whole FIFO;
+# G: no page flips (gma500 can lose a flip event; if A or E stall at the first swap and G runs,
+# that's it).
+A|cdv_sr=0 cdv_dsparb=0||full
+C|cdv_sr=0 cdv_dsparb=0|KIT_XORG_ACCEL=none LIBGL_ALWAYS_SOFTWARE=1 KIT_GL=software|short
+D|cdv_sr=0 cdv_dsparb=0|SGX_DEBUG=frame,nozerocopy|short
+E|cdv_sr=0 cdv_dsparb=0|SGX_DEBUG=frame,nolazyscanout|short
+F|cdv_sr=0 cdv_dsparb=0x3f01||short
+G|cdv_sr=0 cdv_dsparb=0|KIT_XORG_PAGEFLIP=off|short

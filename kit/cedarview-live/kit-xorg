@@ -1,0 +1,23 @@
+#!/bin/sh
+# Xorg with EGL and DRI-loader debug output and the driver's per-frame log, so a GL
+# setup failure or a hang explains itself in xinit.txt. A wrapper because xinit puts
+# the display right after the server program. A variant's SGX_DEBUG flags are kept;
+# KIT_XORG_ACCEL=none runs modesetting without glamor, KIT_XORG_PAGEFLIP=off without
+# page flips.
+export EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose SGX_DEBUG="${SGX_DEBUG:+$SGX_DEBUG,}frame"
+if [ -n "${KIT_XORG_ACCEL:-}${KIT_XORG_PAGEFLIP:-}" ]; then
+	{
+		printf 'Section "Device"\n\tIdentifier "kit"\n\tDriver "modesetting"\n'
+		# the card with the connected output: with a render-only GPU card beside it, a Device
+		# section without one makes Xorg refuse ("specify busIDs for all framebuffer devices")
+		for c in /sys/class/drm/card[0-9]*-*; do
+			[ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
+			c=${c##*/}; printf '\tOption "kmsdev" "/dev/dri/%s"\n' "${c%%-*}"; break
+		done
+		[ "${KIT_XORG_ACCEL:-}" = none ] && printf '\tOption "AccelMethod" "none"\n'
+		[ "${KIT_XORG_PAGEFLIP:-}" = off ] && printf '\tOption "PageFlip" "off"\n'
+		printf 'EndSection\n'
+	} > /tmp/kit-xorg.conf
+	exec /usr/lib/xorg/Xorg "$@" -config /tmp/kit-xorg.conf
+fi
+exec /usr/lib/xorg/Xorg "$@"

@@ -1,0 +1,117 @@
+#!/bin/bash
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# kit-xvariant VARIANT "PARAMS" "ENV" full|short NAME: one desktop attempt.
+# gma500's display parameters (PARAMS, e.g. "cdv_sr=0 cdv_dsparb=0x3f01") are
+# written and applied with a blank/unblank; X starts with ENV (e.g.
+# "SGX_DEBUG=zerocopy") and runs the smoke test (kit-session, kit-smoke) under a
+# watchdog. Everything goes to /tmp/results/desk-VARIANT/, its result lines to
+# the summary; the results file NAME is saved every 15 s.
+# Exit: 0 the smoke test ran, 1 it failed or the watchdog stopped it, 2 skipped,
+# 3 X could not be stopped (the runner skips the remaining desktop variants).
+VN=$1 PARAMS=$2 ENVS=$3 SMOKE=$4 NAME=$5
+R=/tmp/results V=/tmp/results/desk-$1
+B=/usr/local/bin
+mkdir -p "$V/screenshots"
+# "desk" (the smoke test) writes here, through /tmp/results
+chmod 1777 "$R" "$V" "$V/screenshots"
+res() { printf '    %-5s %s\n' "$1" "[$VN] $2" >> "$R/summary.txt"; }
+beat() { touch /tmp/kit-heartbeat; }
+CMD=${KIT_CMDLINE:-$(cat /proc/cmdline)}
+
+# 1. gma500's display parameters (runtime-writable on the kit's kernel)
+P=/sys/module/gma500_gfx/parameters
+{
+	for kv in $PARAMS; do
+		k=${kv%%=*} v=${kv#*=}
+		if [ ! -e "$P/$k" ]; then echo "$k: no gma500_gfx here"; continue; fi
+		b=$(cat "$P/$k")
+		if echo "$v" > "$P/$k" 2>/dev/null; then echo "$k: $b -> $(cat "$P/$k")"
+		else echo "$k: NOT SET (read-only parameter), stays $b"; echo "$k" >> "$V/params-failed"; fi
+	done
+} > "$V/params.txt" 2>&1
+if [ -s "$V/params-failed" ] && [ "$VN" != A ]; then
+	res SKIP "display parameters $PARAMS can't be set on this kernel"
+	exit 2
+fi
+if [ -d "$P" ] && [ -e /sys/class/graphics/fb0/blank ]; then
+	echo 1 > /sys/class/graphics/fb0/blank; sleep 1; echo 0 > /sys/class/graphics/fb0/blank
+	# did it take: FW_BLC_SELF bit 15 (self-refresh) and DSPARB, after the unblank
+	sleep 1; KIT_OUT=$V $B/kit-display params regs
+fi
+
+# 2. before X: sysrq on; how long a cold read of the GL libraries takes
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+G=$(ls /opt/sgx/lib/libgallium-*.so /opt/sgx/lib/*/libgallium-*.so 2>/dev/null | head -1)
+if [ -n "$G" ]; then
+	{ echo "$G and its libraries:"; time cat "$G" $(ldd "$G" | awk '/=>/ {print $3}') > /dev/null; } > "$V/preread.txt" 2>&1
+fi
+rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+KIT_OUT=$V $B/kit-display timeline &
+
+# 3. X with the session (kit-session runs the smoke test into $V)
+t0=$(date +%s)
+# shellcheck disable=SC2086 # ENV is a list of VAR=value words
+env $ENVS KIT_V="$V" KIT_SMOKE="$SMOKE" xinit $B/kit-session -- $B/kit-xorg :0 vt7 -nolisten tcp \
+	-logfile "$V/Xorg.0.log" > "$V/xinit.txt" 2>&1 &
+XI=$!
+verdict= xup= last=-1 same=0 cap1= cap2= stopped=
+while :; do
+	sleep 1
+	beat
+	now=$(date +%s) el=$(( $(date +%s) - t0 ))
+	[ -e "$V/smoke.done" ] && { verdict=done; break; }
+	[ -z "$xup" ] && [ -S /tmp/.X11-unix/X0 ] && xup=$el
+	# the watchdog self-test: X stops dead once it is up (kit.test=xhang, first variant)
+	if [ -n "$xup" ] && [ -z "$stopped" ] && [ "$VN" = A ] && [[ " $CMD " == *" kit.test=xhang "* ]]; then
+		kill -STOP $(pidof Xorg) 2>/dev/null; stopped=1; echo "kit.test=xhang: Xorg stopped at ${el}s" >> "$V/watchdog.txt"
+	fi
+	kill -0 $XI 2>/dev/null || { verdict="X exited before the smoke test finished"; break; }
+	# nothing kills X before 45 s: glamor's EGL init alone can take ~10 s on a cold stick
+	[ -z "$xup" ] && [ $el -ge 45 ] && { verdict="X did not start within 45 s"; break; }
+	# which Mesa X loaded (ours or Debian's, libLLVM or not), once its session is up
+	[ -e "$V/session.started" ] && [ ! -e "$V/xorg-maps.txt" ] && pidof Xorg > /dev/null &&
+		grep -o '/[^ ]*\.so[^ ]*' /proc/$(pidof Xorg | cut -d' ' -f1)/maps 2>/dev/null | sort -u > "$V/xorg-maps.txt"
+	if [ ! -e "$V/session.started" ]; then
+		# X's log standing still before the session starts: X stuck in its own startup
+		s=$(stat -c %s "$V/Xorg.0.log" 2>/dev/null || echo 0)
+		if [ "$s" = "$last" ]; then same=$((same + 1)); else same=0 last=$s; fi
+		if [ -z "$cap1" ] && [ $same -ge 5 ]; then
+			$B/kit-hangcap "$V/hang.txt" "Xorg.0.log unchanged for 5 s, no session yet (${el}s)"; cap1=$el
+		elif [ -n "$cap1" ] && [ -z "$cap2" ] && [ $el -ge $((cap1 + 30)) ]; then
+			$B/kit-hangcap "$V/hang.txt" "30 s after that (${el}s)"; cap2=1
+		fi
+	fi
+	[ ! -e "$V/screenshots/01-desktop.png" ] && [ $el -ge 90 ] && { verdict="no desktop within 90 s"; break; }
+	[ $el -ge 240 ] && { verdict="the smoke test did not finish within 240 s"; break; }
+	if [ $((el % 15)) = 0 ]; then
+		KIT_OUT=$V $B/kit-display latest regs
+		$B/kit-save "$NAME" quick
+	fi > /dev/null 2>&1
+done
+echo "verdict: $verdict after $(( $(date +%s) - t0 ))s (X socket at ${xup:-never}s)" >> "$V/watchdog.txt"
+[ "$verdict" = done ] || $B/kit-hangcap "$V/hang.txt" "watchdog: $verdict"
+
+# 4. stop the session and X, whatever state they are in
+for n in kit-smoke kit-session glmark2 es2gears_x11 glxinfo firefox-esr xfce4-terminal xfce4-session \
+	xfwm4 xfdesktop xfce4-panel Thunar xfconfd dbus-launch; do
+	pkill -x "$n" 2>/dev/null
+done
+pkill -CONT -x Xorg 2>/dev/null
+kill $XI 2>/dev/null
+pkill -TERM -x Xorg 2>/dev/null
+for i in $(seq 1 10); do pidof Xorg > /dev/null || break; sleep 1; done
+pkill -KILL -x Xorg 2>/dev/null; pkill -KILL -x xinit 2>/dev/null
+for i in $(seq 1 10); do pidof Xorg > /dev/null || break; sleep 1; done
+wait $XI 2>/dev/null
+KIT_OUT=$V $B/kit-display after
+[ -f "$V/smoke.txt" ] && sed "s/^    \(.....\) /    \1 [$VN] /" "$V/smoke.txt" >> "$R/summary.txt"
+if pidof Xorg > /dev/null; then
+	res FAIL "X could not be stopped (state $(awk '/^State:/ {print $2}' /proc/$(pidof Xorg | cut -d' ' -f1)/status)); later desktop variants are skipped"
+	$B/kit-hangcap "$V/hang.txt" "X would not die"
+	exit 3
+fi
+if [ "$verdict" = done ]; then res PASS "desktop variant ${PARAMS:+($PARAMS) }${ENVS:+($ENVS) }ran"; exit 0; fi
+res FAIL "desktop variant ${PARAMS:+($PARAMS) }${ENVS:+($ENVS) }: $verdict (stacks in desk-$VN/hang.txt)"
+exit 1

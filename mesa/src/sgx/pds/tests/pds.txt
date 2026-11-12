@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: MIT
 #
 # PDS instructions in the disassembler's notation, `<text> [; <word>]`.
-# The words are the ones docs/PDS.md quotes (including its "Text notation"
-# examples); the rest only round-trip.
+# A line with a word must encode to it; the rest only round-trip.
 
-# tst, bra, halt (PDS.md "TST", "BRA", "HALT", the dis.py example)
+# tst, bra, halt
 tst ds0[0] ; 87000000
 tst ds0[2] ; 87040000
 tst ds1[0x30] ; 8700c100

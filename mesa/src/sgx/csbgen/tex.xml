@@ -4,9 +4,9 @@
 Copyright © 2026 Joseph Telaak
 SPDX-License-Identifier: MIT
 
-Texture state: the four words a DOUTT sends per sample (docs/STATE.md
-section 5), for Mesa's csbgen. A field named unknown_<bits> holds bits
-STATE.md gives a value but no meaning; its default is that value.
+Texture state: the four words a DOUTT sends per sample, for Mesa's
+csbgen. A field named unknown_<bits> holds bits whose meaning is unknown,
+defaulting to the value they always have.
 -->
 
 <csbgen name="SGX" prefix="TEXSTATE">
@@ -26,6 +26,7 @@ STATE.md gives a value but no meaning; its default is that value.
     <value name="A8"       value="0x19"/>
     <value name="L8"       value="0x1a"/>
     <value name="LA88"     value="0x1b"/>
+    <value name="F32"      value="0x12"/>  <!-- a depth, sampled into the first channel; not filtered -->
   </enum>
 
   <enum name="LAYOUT">

@@ -4,16 +4,16 @@
 Copyright © 2026 Joseph Telaak
 SPDX-License-Identifier: MIT
 
-The VDM control stream (docs/STATE.md section 2), for Mesa's csbgen
+The VDM control stream, for Mesa's csbgen
 (src/imagination/csbgen/gen_pack_header.py). A field named unknown_<bits>
-holds bits STATE.md gives a value but no meaning; its default is that value.
-Widths STATE.md doesn't give are taken up to the next known field.
+holds bits whose meaning is unknown, defaulting to the value they always
+have. A field of unknown width runs up to the next known field.
 -->
 
 <csbgen name="SGX" prefix="VDMCTRL">
 
-  <!-- b29-31 of a block's first word: STATE.md writes the words as a top
-       nibble (4, 6, 8, c), but a draw's b28 is the fan bit, so the type is
+  <!-- b29-31 of a block's first word: the words read as a top nibble
+       (4, 6, 8, c), but a draw's b28 is the fan bit, so the type is
        the top three bits -->
   <enum name="BLOCK_TYPE">
     <value name="PDS_STATE"           value="2"/>

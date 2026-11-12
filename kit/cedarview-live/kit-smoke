@@ -2,11 +2,11 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# kit-smoke RESULTS, as "desk" inside the Xfce session: the desktop, a terminal
-# with glxinfo, gears, glmark2, a browser on a local page and a dragged window,
-# a screenshot of each (screenshots/NN-name.png, half size) checked for a blank
-# screen. PASS/FAIL lines go to smoke.txt.
-R=$1
+# kit-smoke DIR full|short, as "desk" inside the Xfce session: the desktop, a
+# terminal with glxinfo, gears, glmark2, and (full) a browser on a local page and
+# a dragged window, a screenshot of each (screenshots/NN-name.png, half size)
+# checked for a blank screen. PASS/FAIL lines go to DIR/smoke.txt.
+R=$1 MODE=${2:-full}
 O=$R/screenshots
 res() { printf '    %-5s %s\n' "$1" "$2" >> "$R/smoke.txt"; }
 IM=$(command -v magick || command -v convert)
@@ -32,16 +32,23 @@ shot() {   # NN-name WHAT: a screenshot, and whether it shows something
 		res FAIL "screenshot $1: $2 (blank or one color: sd $sd, $colors colors)"
 	fi
 }
-gpu() {   # whether GL renders on the SGX
-	grep -q 'SGX545' "$R/glxinfo.txt" && echo yes
+gpu() {   # whether GL renders where this variant means it to (KIT_GL=software: llvmpipe)
+	if [ "${KIT_GL:-}" = software ]; then grep -q 'llvmpipe' "$R/glxinfo.txt" && echo yes
+	else grep -q 'SGX545' "$R/glxinfo.txt" && echo yes; fi
 }
+WHERE="the SGX545"; [ "${KIT_GL:-}" = software ] && WHERE="llvmpipe (this variant's software path)"
 
-sleep 20   # Xfce settles
+if [ "$MODE" = full ]; then sleep 20; else sleep 12; fi   # Xfce settles
 shot 01-desktop "the Xfce desktop"
 
 glxinfo -B > "$R/glxinfo.txt" 2>&1
-if [ -n "$(gpu)" ]; then res PASS "OpenGL renders on the SGX545 ($(grep -m1 'OpenGL version' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"
-else res FAIL "OpenGL renders on the SGX545 (renderer: $(grep -m1 'renderer string' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"; fi
+if [ -n "$(gpu)" ]; then res PASS "OpenGL renders on $WHERE ($(grep -m1 'OpenGL version' "$R/glxinfo.txt" | cut -d: -f2 | xargs))"
+else
+	# the EGL and loader errors behind it, from glxinfo and from the X server
+	why=$(grep -hiE 'MESA-LOADER|libEGL|EGL|DRI3|dri2|drisw|glamor|glx' "$R/glxinfo.txt" "$R/xinit.txt" 2>/dev/null |
+		grep -iE 'fail|error|warn|unable|could not|not supported' | sort -u | head -3 | tr '\n' ';' | cut -c1-400)
+	res FAIL "OpenGL renders on $WHERE (renderer: $(grep -m1 'renderer string' "$R/glxinfo.txt" | cut -d: -f2 | xargs))${why:+; $why}"
+fi
 xfce4-terminal --geometry=90x24+40+40 --title=kit-glxinfo -x sh -c 'glxinfo -B; sleep 600' &
 sleep 8
 shot 02-glxinfo "a terminal with glxinfo"
@@ -55,13 +62,18 @@ wait
 grep -q -iE 'frames in|fps' "$R/gears.txt" && res PASS "$(basename "$G") ($(grep -m1 -iE 'frames in|fps' "$R/gears.txt" | xargs))" ||
 	res FAIL "$(basename "$G") (no frame count; see gears.txt)"
 
-timeout 120 glmark2 -s 640x400 -b build:use-vbo=true:duration=5 -b texture:duration=5 \
-	-b shading:shading=phong:duration=5 > "$R/glmark2.txt" 2>&1 &
+if [ "$MODE" = full ]; then
+	timeout 120 glmark2 -s 640x400 -b build:use-vbo=true:duration=5 -b texture:duration=5 \
+		-b shading:shading=phong:duration=5 > "$R/glmark2.txt" 2>&1 &
+else
+	timeout 60 glmark2 -s 640x400 -b build:use-vbo=true:duration=4 -b texture:duration=4 > "$R/glmark2.txt" 2>&1 &
+fi
 sleep 10
 shot 04-glmark2 "a glmark2 scene"
 wait
 sc=$(grep -o 'glmark2 Score: [0-9]*' "$R/glmark2.txt" | awk '{print $3}')
 [ -n "$sc" ] && res PASS "glmark2 (score $sc)" || res FAIL "glmark2 (no score; see glmark2.txt)"
+if [ "$MODE" != full ]; then res PASS "the smoke test finished (short)"; exit 0; fi
 
 B=$(command -v firefox-esr || command -v epiphany-browser)
 mkdir -p /tmp/kit-ff

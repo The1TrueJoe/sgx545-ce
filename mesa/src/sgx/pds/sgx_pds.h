@@ -4,7 +4,7 @@
  */
 
 /*
- * SGX545 PDS programs (docs/PDS.md): the encoder and disassembler generated
+ * SGX545 PDS programs: the encoder and disassembler generated
  * from sgx_pds.xml, the DOUT data-word encoders, and the program layout
  * (data segment, then code).
  */
@@ -89,7 +89,7 @@ void sgx_pds_disasm(const uint32_t *code, unsigned n, FILE *out);
  * code): the data words by store, then the code to the last HALT.
  */
 void sgx_pds_disasm_program(const uint32_t *words, unsigned rows,
-                               unsigned n_code, FILE *out);
+                            unsigned n_code, FILE *out);
 
 /* Text (the disassembler's notation) to an instruction; NULL or an error. */
 const char *sgx_pds_asm(const char *text, struct sgx_pds_instr *instr);

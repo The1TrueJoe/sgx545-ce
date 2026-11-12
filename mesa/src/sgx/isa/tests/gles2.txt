@@ -1,12 +1,11 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# GLES2-relevant USSE forms in docs/ISA.md's text notation, for the
-# clean-room isaspec encoder (mesa/src/sgx/isa). A line may end with
-# "; <lo> <hi>": words docs/ISA.md quotes for it. The rest are checked
-# black-box against the oracle.
+# GLES2-relevant USSE forms in the USSE text notation (README.md). A line
+# may end with "; <lo> <hi>": the words it must encode to; the others must
+# round-trip through the text.
 
-# --- words quoted in ISA.md -------------------------------------------------
+# --- forms with known words ------------------------------------------------
 phas.i #0, #0 [wait=7] ; 00000000 fa440700
 phas.i #0, #0 [end wait=7] ; 00000000 fa4c0700
 nop [end] ; 00000000 f8040140
@@ -207,9 +206,30 @@ idf [drc=1]
 limm r0, #4096
 limm r0, #305419896
 limm r0, #3735928559 [skipinv]
+limm r0, #4294967295
 (p0) limm sa3, #7
+
+# --- forms whose only operand is a count: it must print as the number ------
+op0xd6 #0
+op0xd6 #5 [f3_6]
+op0xd7 #3
+lock #3
+release #1
+op0xfd r0, #3
+op0xff r1, r2, #2
 
 # --- phases and visibility --------------------------------------------------
 phas.i #128, #4
 phas.i #0, #0 [end wait=7]
 (p1) depthf pa2, sa3, sa4 [end]
+
+# --- flags a form has no field for are errors, not dropped ------------------
+# (ld has no nosched)
+reject ld.a.d r3, r1, #0 [skipinv nosched]
+reject ld.a.d r3, r1, #0 [skipinv end]
+reject fmad r0, r1, r2, r3 [partial]
+reject mov r0, r1 [link]
+# numbers wider than 32 bits are errors, on every host
+reject limm r0, #4294967296
+reject limm r0, #-2147483649
+ld.a.d r3, r1, #0 [skipinv]

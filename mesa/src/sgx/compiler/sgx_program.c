@@ -24,7 +24,7 @@ phys(struct sgx_ctx *c, const struct sgx_ref *r)
 }
 
 /* A dependent sample's smp: destination r0 and texture state #0, which the
- * driver replaces (docs/ISA.md "The texture-sample sequence"). */
+ * driver replaces. */
 static int
 smp_template(struct sgx_ctx *c, const struct sgx_sample *s, uint64_t *w)
 {
@@ -148,6 +148,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          o->dependent = s->dependent;
          o->proj = s->proj;
          o->coord_pa = s->coord_pa;
+         o->f16 = s->f16_return;
          o->reg = s->dependent ? phys(c, &s->ins->op[0]) : s->pa;
          if (s->dependent && smp_template(c, s, &o->smp))
             goto fail;
@@ -173,22 +174,16 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       fw[fix[k].at] = sgx_isa_encode(&m, NULL);
    }
 
-   /* PA registers: the iterations, the colour, and the DDK driver's
-    * placeholder colour iteration when nothing else is iterated
-    * (gl_PointCoord alone counts as nothing) */
+   /* PA registers: the iterations and the colour */
    unsigned n_pa = 0;
    if (frag) {
-      bool real = false;
       for (unsigned i = 0; i < c->n_iters; i++) {
          struct sgx_iter *it = &c->iters[i];
-         unsigned regs = it->sample ? 1
+         unsigned regs = it->sample ? (it->f16 ? 2 : 1)
                          : it->f16  ? (it->comps + 1) / 2
                                     : it->comps;
          n_pa = MAX2(n_pa, it->pa + regs);
-         real |= !it->pointcoord;
       }
-      if (!real)
-         n_pa++;
       n_pa = MAX2(n_pa, c->colour_pa + 1);
       if (c->has_depth)
          n_pa = MAX2(n_pa, c->depth_pa + 1);
@@ -244,13 +239,14 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
    }
    for (unsigned i = 0; i < c->n_lits; i++) {
       struct sgx_const_map *m = &out->consts[out->n_consts++];
-      m->k = 0xffff;
+      bool packed = c->lit_packed_k[i] >= 0;
+      m->k = packed ? c->lit_packed_k[i] : 0xffff;
       m->slot = c->slot_sa[c->lit_slot[i]] < 0 ? SGX_SLOT_NONE
                                                : c->slot_sa[c->lit_slot[i]];
       m->mem = c->mem_dwords ? c->lit_slot[i] + 1 : 0;
       m->shift = 0;
-      m->fmt = 0x11;
-      m->value = c->lit_bits[i];
+      m->fmt = packed ? 0x12 : 0x11;
+      m->value = packed ? 0 : c->lit_bits[i];
    }
    out->n_iters = frag ? MIN2(c->n_iters, ARRAY_SIZE(out->iters)) : 0;
    for (unsigned i = 0; i < out->n_iters; i++) {
@@ -259,12 +255,16 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       o->set = it->set;
       o->comps = it->comps;
       o->pa = it->pa;
-      o->regs = it->sample ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps;
+      o->regs = it->sample   ? (it->f16 ? 2 : 1)
+                : it->colour ? 1
+                : it->f16    ? (it->comps + 1) / 2
+                             : it->comps;
       o->f16 = it->f16;
       o->sample = it->sample;
       o->proj = it->proj;
       o->sampler = it->sampler;
       o->pointcoord = it->pointcoord;
+      o->flat = it->flat;
    }
    out->colour_pa = c->colour_pa;
    out->discards = c->discards;
@@ -275,10 +275,12 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
       out->set_comps[i] = frag ? 0 : c->vary->set_comps[i];
    out->point_size = !frag && c->vary->point_size;
    out->n_out_regs = frag ? 0 : c->n_out_regs;
+   out->n_clip = frag ? 0 : c->n_clip;
+   out->clip_o = frag ? 0 : c->clip_o;
    out->n_code = util_dynarray_num_elements(&flat, uint64_t);
    out->code = malloc(MAX2(flat.size, 8));
    memcpy(out->code, flat.data, flat.size);
-   /* the words as sgxc's .code (high, low), for tools/isa/dis.py */
+   /* the words (high, low) */
    if (c->opts->verbose) {
       for (unsigned i = 0; i < out->n_code; i++)
          fprintf(stderr, "%08x %08x\n", (unsigned)(out->code[i] >> 32),

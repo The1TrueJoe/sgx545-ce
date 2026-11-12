@@ -1,36 +1,46 @@
-isaspec: params on derived bitset fields; a field an override defines wins
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Wed, 11 Nov 2026 04:13:40 -0500
+Subject: [PATCH 1/3] isaspec: allow <param>s on derived fields of bitset type
 
-Two changes the SGX545 ISA description (src/sgx/isa/sgx.xml) needs:
+A <derived> field may have a bitset type, so that a sub-encoding whose
+bits are scattered across the instruction can be put together by an
+expression and decoded by one bitset hierarchy. Such a field needs
+<param>s like a plain bitset field: parse them, and add their names to
+the encoder's bitset_params struct.
 
-- A <derived> field may have a bitset type, so an operand whose number,
-  bank and extension bits are scattered across the instruction can be
-  rebuilt by an expression and decoded by one operand hierarchy. Such a
-  field needs <param>s like a plain bitset field: parse them, and give the
-  encoder's bitset_params struct their names.
+The SGX545 instruction set description (src/sgx/isa) is the first user.
+isaspec has no tests of its own, so this was checked by generating the
+ir3, etnaviv and qrisc decoders and encoders before and after the change,
+with PYTHONHASHSEED fixed (the encoder's output order otherwise varies
+from run to run): they are identical.
+---
+ docs/isaspec.rst               |  5 ++++-
+ src/compiler/isaspec/encode.py | 13 +++++++++++++
+ src/compiler/isaspec/isa.py    |  8 ++++++++
+ 3 files changed, 25 insertions(+), 1 deletion(-)
 
-- When two or more <override>s of a bitset define the same field, the
-  encoder emitted, inside an override's branch, the other overrides'
-  definitions as an if/else ladder whose last "else" (the default case,
-  already seen) was dropped, so the dangling "else" captured the next
-  field's encoding. The definition in the case being encoded wins: stop
-  looking once it is found.
-
+diff --git a/docs/isaspec.rst b/docs/isaspec.rst
+index 3f3e498..34877b8 100644
+--- a/docs/isaspec.rst
++++ b/docs/isaspec.rst
+@@ -155,7 +155,10 @@ which have bitset types, parameters can be "passed" in via ``<param>``
+ elements, which can be referred to by the display template string, and/or
+ expressions.  For example, this helps to deal with cases where other fields
+ outside of that bitset control the encoding/decoding, such as in the
+-``#multisrc`` example:
++``#multisrc`` example.  A ``<derived>`` field may have a bitset type too,
++for a sub-encoding whose bits are scattered across the instruction: its
++expression puts the bits together, and it takes ``<param>`` elements the
++same way:
+ 
+ .. code-block:: xml
+ 
 diff --git a/src/compiler/isaspec/encode.py b/src/compiler/isaspec/encode.py
-index da94d59..8d382c9 100755
+index da94d59..24690f7 100755
 --- a/src/compiler/isaspec/encode.py
 +++ b/src/compiler/isaspec/encode.py
-@@ -122,6 +122,10 @@ class DisplayField(object):
-                 # the named field, we are done
-                 if case.expr is None:
-                     return
-+                # the case being encoded defines the field itself: that
-+                # definition wins over later overrides and the default
-+                if case is self.case.case:
-+                    return
-         if bitset.extends is not None:
-             yield from self.fields(bitset.isa.bitsets[bitset.extends])
- 
-@@ -212,6 +216,19 @@ class State(object):
+@@ -212,6 +212,19 @@ class State(object):
                                      if target_name not in unique_names:
                                          yield target_name
                                          unique_names.append(target_name)
@@ -69,3 +79,132 @@ index e5ba462..6d898c2 100644
  
  class BitSetCase(object):
      """Class that encapsulates a single bitset case
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Wed, 11 Nov 2026 04:13:40 -0500
+Subject: [PATCH 2/3] isaspec: encode: stop at the override that defines the
+ field
+
+Inside the branch for an <override> that defines a field, the encoder
+also emitted that field's definitions from the overrides after it, as an
+if/else ladder. The ladder has no final else of its own, so the code for
+the next field became its else: when the expression of one of the later
+overrides holds too, the next field isn't encoded, and a later override's
+definition is OR'ed into the word.
+
+The decoder uses the first override whose expression holds, so make the
+encoder stop at the case being encoded, too.
+
+Checked as for the previous commit, by comparing the generated code with
+PYTHONHASHSEED fixed. etnaviv's and qrisc's is identical. ir3's encoder
+only loses unreachable code (120 lines of the generated encode.h): its
+overrides of a field test exclusive conditions (cat1's immediate tests
+distinct SRC_TYPE values). The SGX545 instruction set description has
+overlapping overrides: without this, its sgx_isa test fails on the two
+indexed F16 operands it checks, which lose their F16 flag.
+---
+ docs/isaspec.rst               | 4 +++-
+ src/compiler/isaspec/encode.py | 4 ++++
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/docs/isaspec.rst b/docs/isaspec.rst
+index 34877b8..b857549 100644
+--- a/docs/isaspec.rst
++++ b/docs/isaspec.rst
+@@ -229,7 +229,9 @@ An ``<override>`` in a bitset allows to redefine the display string, and/or
+ field definitions from the default case.  If the override's expr(ession)
+ evaluates to non-zero, ``<display>``, ``<field>``, and ``<derived>``
+ elements take precedence over what is defined in the top-level of the
+-bitset (i.e. the default case).
++bitset (i.e. the default case).  When more than one override defines a
++field, the first one whose expression holds wins, when encoding as when
++decoding.
+ 
+ Expressions
+ -----------
+diff --git a/src/compiler/isaspec/encode.py b/src/compiler/isaspec/encode.py
+index 24690f7..8d382c9 100755
+--- a/src/compiler/isaspec/encode.py
++++ b/src/compiler/isaspec/encode.py
+@@ -122,6 +122,10 @@ class DisplayField(object):
+                 # the named field, we are done
+                 if case.expr is None:
+                     return
++                # the case being encoded defines the field itself: that
++                # definition wins over later overrides and the default
++                if case is self.case.case:
++                    return
+         if bitset.extends is not None:
+             yield from self.fields(bitset.isa.bitsets[bitset.extends])
+ 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joseph Telaak <joseph@telaak.dev>
+Date: Wed, 11 Nov 2026 05:55:43 -0500
+Subject: [PATCH 3/3] isaspec: decode: leave out roots nothing decodes from
+
+The decoder emitted tables for every root bitset and the bitsets under
+it, but decoding only starts from #instruction and from the roots that
+are the type of a field. A root only an encoder uses, such as a data
+word that sits outside the instruction stream, gave the decoder tables
+nothing referenced, and -Wunused-variable / -Wunused-const-variable
+warned. decode.py now drops those roots and their bitsets
+(ISA.drop_undecoded_roots()) before generating; encode.py still sees
+them.
+
+The generated decoders of ir3, etnaviv and qrisc are identical before
+and after (PYTHONHASHSEED fixed). The SGX545 PDS description has six
+encode-only roots, which go away from its decoder.
+---
+ src/compiler/isaspec/decode.py |  1 +
+ src/compiler/isaspec/isa.py    | 26 ++++++++++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/src/compiler/isaspec/decode.py b/src/compiler/isaspec/decode.py
+index 106cc88..589f11a 100644
+--- a/src/compiler/isaspec/decode.py
++++ b/src/compiler/isaspec/decode.py
+@@ -431,6 +431,7 @@ def main():
+     args = parser.parse_args()
+ 
+     isa = ISA(args.xml)
++    isa.drop_undecoded_roots()
+     s = State(isa)
+ 
+     try:
+diff --git a/src/compiler/isaspec/isa.py b/src/compiler/isaspec/isa.py
+index 08bb000..dbf3dfb 100644
+--- a/src/compiler/isaspec/isa.py
++++ b/src/compiler/isaspec/isa.py
+@@ -661,6 +661,32 @@ class ISA(object):
+ 
+         return parts
+ 
++    # Drops the roots decoding never starts from, with their bitsets.
++    # Decoding starts from #instruction and from the roots that are the type
++    # of a field; a root only an encoder uses (such as a data word outside
++    # the instruction stream) would otherwise give the decoder tables nothing
++    # references.
++    def drop_undecoded_roots(self):
++        decoded = {'#instruction'}
++        for _, bitset in self.all_bitsets():
++            for case in bitset.cases:
++                for field in case.fields.values():
++                    if field.type in self.roots:
++                        decoded.add(field.type)
++        drop = {n for n in self.roots if n not in decoded}
++        if not drop:
++            return
++        root_of = {id(b): b.get_root().name for _, b in self.all_bitsets()}
++        self.bitsets = {n: b for n, b in self.bitsets.items()
++                        if root_of[id(b)] not in drop}
++        for name in list(self.leafs):
++            leafs = [b for b in self.leafs[name] if root_of[id(b)] not in drop]
++            if leafs:
++                self.leafs[name] = leafs
++            else:
++                del self.leafs[name]
++        self.roots = {n: r for n, r in self.roots.items() if n not in drop}
++
+     # Returns all bitsets in the ISA, including all per-gen variants, in
+     # (name, bitset) pairs.
+     def all_bitsets(self):

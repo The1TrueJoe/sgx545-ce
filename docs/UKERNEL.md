@@ -25,6 +25,29 @@ the microkernel is entered through), `docs/ISA.md` (the USSE instruction
 set), `docs/STATE.md` (the TA/3D render state the microkernel loads into the
 cores) and `docs/TEX.md` (transfers).
 
+## How each fact was established
+
+Every behavior here is tagged by what it rests on today:
+
+- **oracle**: seen when the reference firmware runs **black box** in the offline
+  emulator. `run.py FIRMWARE TRACE` (§8) runs a captured or generated frame through
+  the firmware against a device-memory and register model, printing every register
+  access, every memory store and every task; a behavior that run exhibits is a fact.
+  The open microkernel's version is a fact when `run_ours` takes the same path and
+  its registers, memory and sync writes match the reference run, phase by phase. No
+  vendor source is read and no vendor address appears here.
+- **hardware**: the open microkernel in `ukernel/` does it and renders on a real
+  core — the frames and milestones in the build log (`docs/log/`), the device-core
+  dumps, the frame counts with 0 recoveries.
+- **capture**: seen in a pvrtrace capture — a reference-driver frame or a `tools/gen`
+  `frame-fake` run, parsed by `tools/ukernel/fromtrace.py`.
+- **unconfirmed**: stated but not yet seen in a black-box run, on hardware, or a
+  capture. Each is listed under "Gaps" at the end with the test that would confirm
+  it. Shipping code must not rely on an unconfirmed fact.
+
+In the terms of `docs/CLEANROOM.md`, **oracle** and **capture** are `oracle`/`capture`
+(the firmware run or observed as a black box) and **hardware** is `hardware`.
+
 ## 1. What runs the microkernel: PDS, events and tasks
 
 The USSE does not fetch and run a program on its own. A **PDS program** (a
@@ -239,7 +262,7 @@ On a host-kick event the microkernel:
    offset; if equal, there is nothing to do;
 2. reads the command at the read offset;
 3. **honors `ui32CacheControl`** (command word 1). This runs here, for every
-   command, before the dispatch (pc 0x0098-0x00c2):
+   command, before the dispatch:
    - INVAL_BIF_PD (0x2): pulse `BIF_CTRL` = old | 8 (INVALDC), then the old
      value;
    - else INVAL_BIF_PT (0x1): pulse `BIF_CTRL` = old | 4 (FLUSH), then the old
@@ -335,10 +358,10 @@ The transfer also updates two sync-heap objects named by the kick's
 sync-handle list (not the shared command); reproducing those is the remaining
 increment.
 
-**The rest of the DDK's transfer start** (pc 0x1363-0x1424):
-- **The BIF switch.** pc 0x17ec loads the transfer context's PD into its
+**The rest of the DDK's transfer start**:
+- **The BIF switch.** The transfer start loads the transfer context's PD into its
   directory list. When that PD differs from the one loaded, it pulses
-  `BIF_CTRL` INVALDC (pc 0x181e/0x181f). Without the pulse, the BIF's cached
+  `BIF_CTRL` INVALDC. Without the pulse, the BIF's cached
   directory entries still belong to the previous client, and a transfer
   reads that client's memory through the same device addresses.
 - **Three optional register groups.** Each is gated on a command word being
@@ -353,11 +376,11 @@ increment.
 
 **When the DDK starts a transfer.**
 - A host kick only queues it.
-- The 3D scheduler (pc 0x1035-0x1047) starts one only while the 3D is free,
+- The 3D scheduler starts one only while the 3D is free,
   testing the sa9 3D-busy bits.
-- It then walks the transfer queue (pc 0x12dc-0x1351) and skips a transfer
+- It then walks the transfer queue and skips a transfer
   whose sync objects still have ops pending.
-- The only DPM register a transfer writes is 0x63c = 0 (pc 0x13c4): no DPM
+- The only DPM register a transfer writes is 0x63c = 0: no DPM
   clear, store or load, and no free-list load.
 - A transfer started under a running render's 3D would therefore disarm that
   render's page release, and its pages would never return to the free list.
@@ -410,7 +433,7 @@ SW_EVENT, fences signaled), on the DDK microkernel
 After ten frames the PB descriptor reads 0x14 = 0x19, 0x18 = `04210019`, 0x20 =
 0x19, 0x24 = 1 at 720x480, and a DDK frame leaves exactly the same words
 (`docs/log/data/2026-11-03-0320-ddk-after-render.txt`). That accounting is
-normal and does not explain the timeouts [G]. (The second-context hang it was
+normal and does not explain the timeouts (unconfirmed). (The second-context hang it was
 first blamed for was the PB's address: log `2026-11-03-0340-drm-per-vm-pb`.)
 
 What the open microkernel must do (the list for `ukernel/`):
@@ -658,11 +681,11 @@ into the sync-object updates the host and the next client wait on.
   (0x63c = 3, section 6), and 0x724 counts down while the 3D runs. The DDK's
   handler writes **no DPM register and no PB-descriptor word**. In every
   trace its only register write is the ack (`EVENT_HOST_CLEAR` = 0x1, pc
-  0x0e1e), then the rendezvous (pc 0x0eb4), then the completion below and
+  0x0e1e), then the rendezvous, then the completion below and
   SW_EVENT. It waits on nothing. The only PB-descriptor words the DDK writes
   during a frame:
   - +0x14 = the high half of 0x724 (the TA's allocated pages) at every TA
-    finish (pc 0x0656-0x065c), a snapshot, not a running count;
+    finish, a snapshot, not a running count;
   - +0x18..+0x24 = the live counters, by `save_ta_state` before each 3D
     start.
 
@@ -715,7 +738,7 @@ and ACTIVE_POWER use the flags.
 | 0x0397, 0x04d4 | cleanup completion | the cleanup command, or its retry |
 
 **No completion waits for the timer.** The only wait inside a completion
-handler is the ISP clock poll in the 3D-end handler (pc 0x0ec3-0x0ec6):
+handler is the ISP clock poll in the 3D-end handler:
 - it runs when `CLKGATECTL & 3 == 2` (the ISP clock on demand);
 - it spins on `CLKGATESTATUS` (0x008) b0 until it reads 0.
 
@@ -759,7 +782,7 @@ microkernel.
 DPM_OUT_OF_MEMORY_* fires at a threshold, while 0x22 pages are still free.
 
 **The handler.** The event word bits 0x100000 and 0x200000 (the pds3 word
-for MT and GBL) reach pc 0x0ad1. It acks `EVENT_HOST_CLEAR` = 0x6 (MT and
+for MT and GBL) reach the OOM handler. It acks `EVENT_HOST_CLEAR` = 0x6 (MT and
 GBL together) and records which one fired in a sa8 flag. It then runs 0x0b50
 (the same entry from pds4 at 0x0af0). Run in the emulator with an injected
 event (`tools/ukernel/run.py`'s `Runner.event`), it does this:
@@ -767,28 +790,28 @@ event (`tools/ukernel/run.py`'s `Runner.event`), it does this:
 1. `rtdata` +0xc += 1 (an out-of-memory count), the RT data entry's state
    word (+0x34) |= 0x80, TA3D +0xdc = 0;
 2. saves 0x628 in TA3D +0x84;
-3. pauses the TA: `0xa74` |= 1 (pc 0x1765);
+3. pauses the TA: `0xa74` |= 1;
 4. 0x628 = `(0x72c >> 16) | 0x10000`: the global threshold becomes the pages
    in use now;
-5. reloads the TA free-list state from the live counters (pc 0x1676):
+5. reloads the TA free-list state from the live counters:
    0x61c = 0x700, 0x648 = 0x710 << 16, 0x638 from 0x724/0x72c,
    0x684 = 1, then waits for `EVENT_STATUS2` b0 and acks it;
-6. resumes: `0xa74` &= ~1 (pc 0x1773), then 0x69c = 1.
+6. resumes: `0xa74` &= ~1, then 0x69c = 1.
 
-Other branches depend on registers the emulator can't model (0x734 & 3 at
-pc 0x0b90, and a sa8 flag from an earlier pass). They:
-- raise 0x624 by 32 and 0x628 by 16 (pc 0x0bd6-0x0be9);
+Other branches depend on registers the emulator can't model (0x734 & 3, and a sa8 flag from an earlier pass). They:
+- raise 0x624 by 32 and 0x628 by 16;
 - run an OTPM clear (0x24c = 1, then wait for and ack 0x100000);
-- write 0x69c = 4 and set `0xa74` b0 (pc 0x0bf6-0x0c22);
+- write 0x69c = 4 and set `0xa74` b0;
 - schedule a 3D: `sa9` |= 0x40 | 0x4000, the "out-of-memory render" flags
-  that the render completion clears at pc 0x157f, where it also writes
+  that the render completion clears, where it also writes
   0x69c = 1.
 
 So the DDK renders the partly binned scene to free pages, then resumes the
-TA. What 0x69c's values 1 and 4 command is G.
+TA. What 0x69c's values 1 and 4 command is unconfirmed (Gaps).
 
-**The partial render** [D, code; not run on hardware]. The handler first
-tests the TA's render context +0x28 (pc 0x0b46). The 3D start writes that
+**The partial render** (hardware: the open microkernel's OOM handler runs this path
+and is confirmed on a real core). The handler first
+tests the TA's render context +0x28. The 3D start writes that
 word and the DPM free clears it, so it is nonzero only while that context
 has a render on the 3D:
 - nonzero: the handler sets sa9 0x40 | 0x4000 and waits for that render's
@@ -799,9 +822,9 @@ has a render on the 3D:
    Save 0x720 (its bits 5-13 are the TA's layer) and the counters in TA3D
    words 35-40. Then write 0x69c = 4 and pause the TA (0xa74 |= 1).
 2. **TA_TERMINATE.** The hardware raises `EVENT_STATUS` b12. The dispatcher
-   acks 0x1000 (pc 0x0add) and enters pc 0x0c23, the partial-render 3D start.
+   acks 0x1000 and enters the partial-render 3D start.
    It defers if the 3D is busy.
-3. **The partial-render 3D start** (pc 0x0c30-0x0d75) runs on the open
+3. **The partial-render 3D start** runs on the open
    scene's render details and RT entry, with these differences:
    - the layer index is the TA's layer from step 1, not render details +0x108;
    - region headers (0x408) are offset by layer × RT entry word 11, and the
@@ -809,27 +832,27 @@ has a render on the 3D:
    - ZLS follows the 3D flags: b8 ORs 0x22000 into 0x480, b7 ORs 0x44000 |
      0x80000, and a layer already stored ORs 0x8000. With neither flag,
      0x480 &= 0xfff99ff9.
-   - **The region-header redirect** (pc 0x0d7b-0x0d8d): **0x50c = 0x408**,
+   - **The region-header redirect**: **0x50c = 0x408**,
      so the "next render" region headers are this render's. The 3D resets
      the lists it renders, and the TA resumes into empty ones. Without this,
      the scene's final render walks the same lists again and the DPM frees
      their pages twice: the high half of 0x724 underflows (0xedf9 on a CE5300
      board, 2026-11-08). On the other path 0x408 is first offset by
      (0x720 & 0xf) × 0xc0 × RT entry word 2.
-   - **The continuation's background** (pc 0x0d92-0x0d9b): the RT entry's
+   - **The continuation's background**: the RT entry's
      background block (word 4) gets render details +0x12c and +0x130, then
      `[rd+0x114][layer]`. The final render then reloads the partial render's
      color instead of clearing it.
-   - The DPM state is moved before the register program (pc 0x0c40-0x0c93),
+   - The DPM state is moved before the register program,
      TA slot 0 and 3D slot 1:
      1. 0x630 = 2, 0x62c = RT entry word 5, 0x65c = 1;
      2. 0x694 = 1, wait for 0x10; 0x694 = 2, wait for 0x40;
      3. 0x630 = 3, 0x674 = RT entry word 5, 0x694 = 4, wait for 0x20;
      4. 0x630 = 2, 0x65c = 0.
      The 3D renders the copy in slot 1. An occupied other slot is evicted
-     first with the full store (pc 0x1778). There is no TPC flush, and
+     first with the full store. There is no TPC flush, and
      0x658 = 1.
-4. **At its end** (pc 0x0df7): 0x69c = 1, and the layer word gets b1. The TA
+4. **At its end**: 0x69c = 1, and the layer word gets b1. The TA
    continues, and the scene's last kick renders it normally.
 
 **On hardware** (DDK microkernel, Minecraft, regsample 2026-11-09, with no
@@ -842,23 +865,37 @@ below does not depend on the PB's size:
   global threshold (0x40 there) and resumes at 51-54.
 - The resumed TA allocates up to the threshold again within about 50 µs and
   raises another OOM.
-- After 2-4 partial renders, the next OOM takes the grant path. It pauses
-  the TA for about 33 µs: 0x628 += 16, 0x624 += 32, then the free-list
-  reload from the live counters. There is no render.
-- The scene then finishes, and the TA finish puts 0x628 and 0x624 back.
-- Over the run: 16,211 pauses with a partial render, 9,145 grants.
+- Partial renders alternate with a "stage 1" response
+  that has no render:
+  - pause the TA and let 0x700 settle;
+  - save 0x628, then set **0x628 = (0x72c >> 16) | 0x10000**;
+  - reload the TA free list from the live counters;
+  - unpause, set the stage-1 flag, and write 0x69c = 1.
+- The next OOM with that flag set undoes it: it puts 0x628
+  back and reloads again. Then it picks between a partial render and the
+  rare +16 grant (0x628 += 16, 0x624 += 32, a reload). If
+  0x734 b0 is set, stage 1 is skipped.
+- Over the run's 27,319 pauses:
+  - 16,211 partial renders;
+  - 7,643 stage-1 raises;
+  - 729 +16 grants;
+  - 1,963 pause-only.
+- Partial render → stage 1 happens 7,189 times, stage 1 → partial render
+  6,297.
+- The TA free list is reloaded about once per partial render: 0x61c
+  changes 16,274 times. That reload keeps the free list in step with the
+  DPM after its state has been moved.
 - During the render, 0x50c = 0x408, 0x63c = 3 and 0x630 = 2. 0x630 reads
   back. Other scenes use both slots meanwhile (0x630 = 4, 5, 7).
 
 **Layer words.** RT entry word 12 points at one u32 per layer; RT entry
-word 10 is the count. A scene's first kick clears them (pc 0x087e,
-0x0a80). A render's completion sets b0 (pc 0x0f8f), and a partial render's
-end sets b1 (pc 0x0dff). The normal 3D start adds the ZLS load bits when b1
-is set (pc 0x1269-0x1288). The ZLS words store or load nothing without 3D
+word 10 is the count. A scene's first kick clears them (. A render's completion sets b0, and a partial render's
+end sets b1. The normal 3D start adds the ZLS load bits when b1
+is set. The ZLS words store or load nothing without 3D
 flags b7 | b8.
 
 A parameter-buffer fault at `0x1ffff000` (the 3D-params heap base + page
-0xffff) is the free list's end-of-list sentinel: the TA allocated past the
+is the free list's end-of-list sentinel: the TA allocated past the
 last page because nothing stopped it at the out-of-memory event.
 
 Gaps:
@@ -878,8 +915,8 @@ handler the DPM keeps allocating, and it consumes the end-of-list value
 
 **BIF faults.** The DDK microkernel never reads or writes `BIF_INT_STAT`
 (0xc04) or `BIF_FAULT` (0xc08). It writes `BIF_CTRL` only to pulse an
-invalidate: INVALDC (8) or FLUSH (4), then the old value back, at pc 0x158a
-(for a command's cache control) and pc 0x181a (after loading a directory
+invalidate: INVALDC (8) or FLUSH (4), then the old value back,
+(for a command's cache control) and (after loading a directory
 list at 0xc34 + 4n). Fault recovery is the host's: `sgxreset.c` drains
 faults by mapping each faulting page to a dummy page under a reset PD and
 acking the event status. The PAUSE | CLEAR_FAULT pulse in `SGXReset` is
@@ -925,15 +962,15 @@ Using the separate texture heap on all of them is always safe.
 1. It adds host-control word 16 (`ui32BRN31939Mem`, §1).
 2. The DDK microkernel, which is built with the workaround, sets that word
    to 500 at the kick of a TA whose TA flags have b12 (0x1000) set (pc
-   0x0ac8). It clears it at that TA's finish (pc 0x06b3).
+   0x0ac8). It clears it at that TA's finish.
 3. Every lockup sample (each `ui32HWRecoverySampleRate` ticks) it counts the
-   word down (pc 0x04b0). At 0 it runs the lockup check (pc 0x02d3),
+   word down. At 0 it runs the lockup check,
    about 5 s after the kick.
 4. No client in any capture sets TA flags b12, so the watchdog never runs.
 
 **The microkernel does not branch on the revision.** The DDK microkernel
 reads `CORE_REVISION` and `CORE_ID` only to report them in GETMISCINFO
-(words 1-2, pc 0x0174). It reports its own build constants in words 5-6:
+(words 1-2). It reports its own build constants in words 5-6:
 `ui32CoreIdSW` 545 and `ui32CoreRevSW` 0x1000d. So it is a 1.0.13 build,
 and the DDK kernel accepts it on a 1.0.14 core only through a
 revision-exception pair (`sgxinit.c`, 0x1000e/0x1000d).
@@ -946,7 +983,7 @@ revision-exception pair (`sgxinit.c`, 0x1000e/0x1000d).
   doesn't implement the BRN 31939 watchdog loses nothing while no client
   sets TA flags b12.
 
-[D, from the kernel headers and the DDK microkernel's code.]
+[unconfirmed; from the kernel headers.]
 
 **First run on a Cedarview part (N2600, 1.0.13, host bridge 8086:0bf1 rev 04,
 2026-11-08).**
@@ -954,8 +991,7 @@ revision-exception pair (`sgxinit.c`, 0x1000e/0x1000d).
 - The first transfer job hangs: the 3D was triggered (`EVENT_STATUS2` 0x40)
   but never completed. `BIF_INT_STAT` shows only FLUSH_COMPLETE (b19), so
   the MMU did not fault.
-- The DDK's transfer path (the 3D end with sa9 b2, pc 0x1461, completing at
-  pc 0x14f7) has no revision branch. The only revision-gated microkernel
+- The DDK's transfer path (the 3D end with sa9 b2, completing) has no revision branch. The only revision-gated microkernel
   code is the BRN 31939 TA watchdog. So the microkernel holds no per-revision
   transfer difference.
 - **Lead: `FIX_HW_BRN_SAMPLE_CACHE`.**
@@ -1039,7 +1075,7 @@ reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
 
 **How the DDK reaches client memory from the EDM.** It never uses a second
-bank or a separate data requestor. A subroutine (pc 0x1864) copies the TA's
+bank or a separate data requestor. A subroutine copies the TA's
 nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
 and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
 access to client memory:
@@ -1066,37 +1102,64 @@ Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
 block instead. Everything else the EDM reads or writes is in kernel code,
 kernel data or the sync heap, all mapped in the kernel PD.
 
-The background-block write at 3D start (pc 0x128d-0x1296; `docs/STATE.md`
+The background-block write at 3D start (`docs/STATE.md`
 §6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
 inside it. While a window is open, the EDM fetches its instructions and reads
 kernel data through the client's page directory. The DDK therefore needs the
 kernel code and kernel-data heaps mapped in every client PD; it has no mode
 that works without them.
 
+**The TA and the 3D each get their own directory list.** Every TA
+and 3D kick path calls one routine to point a requestor at a memory context.
+r16 is the context; its word 2 is the page-directory address. `r17 & 3`
+picks the 3D (BANK0 b12-15) or the TA (b4-7).
+- **Pick a list.** It treats lists 0-14 as a cache of page directories. It
+  takes list 0 if that is empty or already holds this directory, otherwise
+  the first of lists 1-14 that is empty or matches.
+- **Evict when all are full.** It advances a round-robin cursor (TA3D word
+  49) mod 15 and skips the list that the *other* requestor is using
+. A TA can therefore load its context's directory while
+  the 3D keeps translating through a different context's directory.
+- **Load the list.**
+  1. `BIF_CTRL` |= 8, then restore it (invalidate).
+  2. For the TA only: 0xad0 = 1, 0xae0 = 1 and 0x804 b15.
+  3. 0xa08 = 1, wait for 0x138 & 0x27, then acknowledge it in 0x140.
+  4. Wait for `EVENT_STATUS` b26.
+  5. Write the list register, only if its value changes.
+  6. Write the requestor's nibble in `BIF_BANK0`.
+- **Shared PB.** The DDK's default PB is one buffer that every context
+  shares, so the two DPM slots hold scenes from any context.
+- **What a microkernel needs.** One that lets two contexts' jobs onto the
+  hardware at once needs the TA and the 3D on different lists, or it must
+  serialize contexts whose directories differ. Reloading a single shared list
+  for the next job swaps the directory under the job still running. The
+  captures are all single-context (`BIF_BANK0` = 0x101f: TA and 3D on list 1),
+  so concurrent use from two contexts has not been seen.
+  (unconfirmed)
+
 `EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
 SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
-BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (pc 0x0c6e,
-0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
-its data accesses in either bank. [D, code and trace]
+BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
+its data accesses in either bank. (oracle)
 
 **Parameter-buffer / DPM setup.** `pb[n]` is word n of the PB descriptor
 (`docs/STATE.md` section 6).
 
-- **The TA free-list load** (pc 0x16a2-0x16d3) runs only when the PB changes.
+- **The TA free-list load** runs only when the PB changes.
   The microkernel remembers the loaded PB in TA3D +0xb8 (TA) and +0xbc (3D),
-  and compares it at the kick (pc 0x091f-0x092e). It writes:
+  and compares it at the kick. It writes:
   - 0x618 = `pb[4] & ~0xf`, 0x61c = `pb[6]`, 0x648 = `pb[7]`;
   - 0x638 = `pb[8] | pb[9] << 16`, 0x620 = `pb[10]`, 0x668 = `pb[13]`;
   - 0x624 = `pb[11]`, 0x628 = `(pb[12] & 0xffff) | 0x10000`;
   - 0x664 = a mask computed from TA3D +0xb4/+0xb8/+0xbc;
   - then 0x684 = 1, and waits for `EVENT_STATUS2` b0.
-- **The 3D free-list load** (pc 0x16e9) runs the same way. It writes:
+- **The 3D free-list load** runs the same way. It writes:
   - 0x600 = `pb[4] & ~0xf`, 0x604 = `pb[6]`, 0x64c = `pb[7]`;
   - 0x660 = `pb[8] | pb[9] << 16`;
   - 0x664 = the mask (5 on a first frame);
   - then 0x680 = 1, and waits for `EVENT_STATUS2` b1.
 - **Saving the TA's counters.** Before a 3D start the microkernel saves the
-  live counters into the descriptor (`save_ta_state`, pc 0x168d-0x16a1):
+  live counters into the descriptor (`save_ta_state`):
   - `pb[6]` = 0x700, `pb[7]` = 0x710 << 16;
   - `pb[8]` = the high half of 0x724, `pb[9]` = the high half of 0x72c.
 - **Switching PBs** (two clients, each with its own PB). The TA and 3D
@@ -1105,18 +1168,18 @@ its data accesses in either bank. [D, code and trace]
   Each side hands over the live counters before it loads, so a descriptor is
   current whenever it is reloaded. Below, P is the PB being loaded, T the TA
   marker and D the 3D marker.
-  - **At a kick on a new PB** (pc 0x091f-0x0949, when T != P):
+  - **At a kick on a new PB** (when T != P):
     1. if T != 0 and T != D, the TA state is saved into T's descriptor
-       (pc 0x168d);
-    2. if P == D, the 3D is paused (pc 0x15bc) and the 3D state is saved into
-       P's descriptor (pc 0x16d4);
-    3. the PB setup (pc 0x170d) and the TA load (pc 0x16a2) follow.
-  - **At a 3D start on a new PB** (pc 0x118d-0x11a7, when D != P):
+;
+    2. if P == D, the 3D is paused and the 3D state is saved into
+       P's descriptor;
+    3. the PB setup and the TA load follow.
+  - **At a 3D start on a new PB** (when D != P):
     1. if D != 0 and D != T, the 3D state is saved into D's descriptor
-       (pc 0x16d4);
-    2. if P == T, the TA is paused (pc 0x15bc) and the TA state is saved into
-       P's descriptor (pc 0x168d);
-    3. the 3D load (pc 0x16e9) follows.
+;
+    2. if P == T, the TA is paused and the TA state is saved into
+       P's descriptor;
+    3. the 3D load follows.
   - **The two saves.** The 3D save writes pb[6] = 0x70c, pb[7] = 0x71c << 16,
     pb[8] = 0x728 & 0xffff and pb[9] = 0x730 & 0xffff: the 3D-side
     counterparts of the TA's 0x700/0x710/0x724/0x72c. The 3D state includes
@@ -1144,9 +1207,8 @@ its data accesses in either bank. [D, code and trace]
 - **DPM state/control (0x694/0x698) take a mode:** 1 store (waits for
   `EVENT_STATUS` 0x90), 2 clear (waits for 0x240), 4 load (waits for 0x20 /
   0x100100).
-  - A fresh scene runs the **clear** (pc 0x0a1d-0x0a4a).
-  - The load (pc 0x17be) only resumes a stored scene (kick pc 0x09f7-0x0a0d;
-    3D start pc 0x1166-0x1181, after the store at 0x1778).
+  - A fresh scene runs the **clear**.
+  - The load only resumes a stored scene (on the kick and the 3D start, after the store at 0x1778).
   - A CE5300 register sample shows 0x694 never at 4 over a run of frames.
 - **The OTPM clear** (0x24c), with its two done bits, follows.
 - **Two scenes on one PB: two DPM context slots.** A client that renders to
@@ -1157,11 +1219,11 @@ its data accesses in either bank. [D, code and trace]
   below. The TA3D control block holds three words: +0x50 is slot 0's RT data
   entry, +0x54 slot 1's, and +0x64 the TA's current entry.
 
-  **At every kick** (pc 0x08f8). If the TA's current entry is set and is not
+  **At every kick**. If the TA's current entry is set and is not
   this kick's, the DDK stores that scene's DPM state first and frees its slot:
   1. The TA's slot is read from `0x630` b2, and that slot's word is cleared.
   2. The BIF is pointed at the scene's context.
-  3. The DPM state is stored (pc 0x1778), into the scene's own RT data entry:
+  3. The DPM state is stored, into the scene's own RT data entry:
      - `0x62c` (slot 0) or `0x674` (slot 1) = entry word 5, `0x694` = 1
        (state store), then wait for `EVENT_STATUS` 0x10 and ack it;
      - `0x634` = entry word 6, `0x698` = 1 (control store);
@@ -1171,7 +1233,7 @@ its data accesses in either bank. [D, code and trace]
 
   So the TA holds one live DPM context at a time.
 
-  **Then the slot pick** (pc 0x09b7). The entry's own slot if it has one,
+  **Then the slot pick**. The entry's own slot if it has one,
   else a free slot (slot 0 first), else the slot the 3D is not using,
   `!(0x630 b1)`. Then `0x630 b2` = the slot, the slot word = the entry, and
   +0x64 = the entry.
@@ -1180,12 +1242,12 @@ its data accesses in either bank. [D, code and trace]
   word 5 goes to `0x62c` (slot 0) or `0x674` (slot 1), and word 6 to `0x634`.
   Then the DPM clear: `0x694` = `0x698` = 2, then wait for and ack 0x240.
 
-  **A later kick whose entry was stored** (pc 0x17be). The same registers
+  **A later kick whose entry was stored**. The same registers
   from the entry's words, then `0x694` = `0x698` = 4 (load), before the TA
   continues.
 
   **3D start.** `0x630 b1` = the scene's slot, and +0x64 is cleared. At the
-  render's end, the slot holding the entry is cleared (pc 0x0fbe-0x0fc5).
+  render's end, the slot holding the entry is cleared.
 
   The two orders, as the DDK ran them (`0x694` mode, then `0x630`):
 
@@ -1207,7 +1269,7 @@ All [D] from the DDK microkernel's code and trace; the release behavior is
 from the hardware register sample.
 
 **TA start.** The first kick of a scene (TA flags b0) pulses `SOFT_RESET`'s
-TA bit (0x80 = 4, then 0; pc 0x091d). The kick's cache bits follow (TA
+TA bit (0x80 = 4, then 0). The kick's cache bits follow (TA
 flags b4-b6, `docs/STATE.md` section 1). After the layout registers
 (0x204-0x218 and 0x238/0x23c, loaded from cmd+0x238..+0x254) and the PDS/USE code
 bases, kick the VDM so it begins fetching the control stream.
@@ -1365,15 +1427,15 @@ memory matching. Only then does it go to the box `srvinit` loads it on
     (0x700) then runs to 0xffff within one scene. In the DDK's 120 s sample,
     0x61c, 0x604, 0x638 and 0x660 never change. The DDK clears the markers in
     three places:
-    - a cleanup whose PB descriptor equals the marker (pc 0x03a5-0x03b2, when
-      cleanup data word 0 b5 is set and data word 6 matches; pc 0x0475-0x047b);
-    - the power-off path (pc 0x04e7-0x051f, r6 b0). It first saves the TA's
-      live counters into the +0xb8 descriptor (pc 0x168d: pb[6] = 0x700,
+    - a cleanup whose PB descriptor equals the marker (when
+      cleanup data word 0 b5 is set and data word 6 matches);
+    - the power-off path (r6 b0). It first saves the TA's
+      live counters into the +0xb8 descriptor (pb[6] = 0x700,
       pb[7] = 0x710 << 16, pb[8] = 0x724 >> 16, pb[9] = 0x72c >> 16). When
       +0xbc is set and differs from +0xb8, it saves the 3D's into the +0xbc
-      descriptor (pc 0x16d4: 0x70c, 0x71c << 16, 0x728 & 0xffff,
+      descriptor (0x70c, 0x71c << 16, 0x728 & 0xffff,
       0x730 & 0xffff). Only then does it clear both markers;
-    - a reset path (pc 0x0292-0x02aa), unconditionally.
+    - a reset path, unconditionally.
   - The open microkernel (39c2de6) no longer clears the markers at a cleanup.
     Init resets them, and the host never reallocates a PB descriptor at the
     same address within a session. A power-off that loses the DPM registers
@@ -1441,3 +1503,113 @@ in `docs/log/entries/2026-11-08-ukernel-bringup-history.md`.
   the open microkernel has to do the same.
 - **Single context only.** The render-in-flight list is one control-block slot
   (+0x50); concurrent contexts are not handled (§9).
+
+## 11. TA/3D overlap (`UK_OVERLAP`) — parked
+
+Set `UK_OVERLAP=1` at build time to emit a microkernel that runs render N+1's
+TA while render N's 3D is still in flight (the DDK's `credit=2`, same-context
+scheduling). It is **off by default**: the shipped serial image is byte-identical
+(14400 B) whether or not the flag existed, and every overlap change is gated
+behind it. This section records why it is parked.
+
+**Why it was pursued, and why the payoff is small here.** The hope (from an
+early frameprof estimate) was ~11→20 fps in Minecraft. Hardware measurement
+showed that ceiling is wrong for this workload. On a CE5300 board at `SGX_SLOTS=4`,
+join+90s steady state:
+
+| µK | fps (stand/walk) | world render | GPU busy | inter-job gap | all-idle |
+|---|---|---|---|---|---|
+| ours, serial (`eb484b2`) | 13.5 / 12.0 | 65.0 ms | 97% | 0.61 ms | 3% |
+| vendor DDK, serial | 13.5 / 10.3 | 65.7 ms | 95% | 0.88 ms | 6.5% |
+| vendor DDK, overlap=1 | 13.7 | 63.3 ms | 97% | 0.48 ms | 3.8% |
+
+Our serial microkernel already equals the vendor's — it idles *less* (0.61 vs
+0.88 ms/job) — so the microkernel is not leaving frame time on the table. The
+frame is GPU-**work** bound: TA ≈ 41 ms + 3D ≈ 28 ms per world frame, the same
+on both microkernels. Overlap on the vendor µK buys ~5% concurrent TA+3D and
+13.5→13.7 fps, because at ~96% GPU-busy there is almost nothing left to overlap.
+Reducing frame time now means reducing the GPU work itself (shader/texture/
+vertex — the Mesa driver and compiler), not microkernel scheduling.
+
+**The queued-3D kick bug (unresolved).** The vendor DDK firmware runs overlap=1
+cleanly on our `powervr_sgx` kernel via the DDK-compat path (`hw job count:2`
+×382, 160/265 kicks issued while the previous job ran, 0 timeouts) — so overlap
+*is* achievable on this hardware+kernel; the defect is in our microkernel. On
+the first overlapped pair our queued 3D's `CR_3D_KICK` (0x428) write never
+latches `TRIG_3D` (EVENT_STATUS2 b6): the 3D never starts, the microkernel idles
+in the event loop, `WAIT_3D`/`WAIT_FREE` armed forever. At the hang the state is
+all valid — DPM slot (0x630=7), free-list selector (0x63c=3), region headers
+populated, pipe idle (CLKGATESTATUS 0x20), BIF_FAULT 0, EVENT_STATUS 0.
+
+Six fixes were made against the DDK's own queued-start sequence (decoded from
+`fw/sgx545-ukernel-1.7.862890.bin` in the offline emulator, `--order overlap2`);
+each is a genuine DDK-faithful correction, and the write sequence + full register
+state at the kick now match the DDK register-for-register, yet the kick is still
+refused on hardware:
+
+1. **`addc0d7`** — the 3D-side cache invalidate uses the DDK order (MADD pulsed
+   and waited *first*, then PDS/USE before the `0x138==0x4b` spin). Fixed an
+   earlier deadlock; the hang moved past the invalidate.
+2. **`cbfe976`** — the TPC flush (`0x224=0x40000000`) moved to the last TA's
+   `ta_finished`, where the tail state is live, instead of the deferred `do_3d`.
+3. **`4eeb281`** — the early BIF MADD + `0xa08` USE request + `BANK0=0x101f`
+   after the slot select, before the 3D register block.
+4. **`f70a2f5`** — request `0xa08` once per EDM run (the late handshake collects
+   its done bits), not twice.
+5. **`251b861`** — `do_ta` skips the `DIR_LIST_BASE1` write **and** the
+   `BIF_CTRL` INVALDC on a PD hit, so B's first TA does not invalidate the
+   directory cache while A's 3D is translating through list 1. (The strongest
+   theory — a directory-cache invalidate under a live 3D — but it did not fix it.)
+6. **`40b45c9`** (reverted in `445674a`) — an ack of `DPM_3D_MEM_FREE`
+   (`0x134=0x1`) before the kick; disproven on hardware (the bit was not pending)
+   and removed.
+
+Ruled out on hardware: a pending DPM-free event; a busy pipe (CLKGATESTATUS
+`0x000ccfa0` is DPM + the shared USSE clock group, on whenever the EDM runs; the
+3D/TA/pixel groups were idle); the TPC flush not landing (region headers are
+populated); the init registers `0x40`/`0xa68`/`0xa6c` (srvinit/debug, not kick
+gates); the kernel re-initializing the dataset's TA buffers (written once at
+`CREATE_RT_DATASET`, never per job).
+
+**The next thing to try, if overlap is reopened:** m2's alternating-lists idea.
+The vendor µK's `BANK0` alternates BIF directory lists 1 and 2; with two live
+contexts (Xorg + the game) that is the per-context PD cache, but it also means a
+render's requestor never shares a directory list with the other unit's in-flight
+render. Have the microkernel write `DIR_LIST_BASE2` (0xc3c) = the context PD
+(like `do_ta` writes 0xc38) and route the queued render's 3D to list 2 by frame
+parity, so B's 3D is on a different directory list from A's. Lists 1..14 are free
+in `powervr_sgx` and read 0 after a reset, so `0xc3c` **must** be written before
+a requestor is routed there (an earlier attempt, `2ea95f3`, routed the 3D to list
+2 without writing `0xc3c` and faulted on PD 0). `m2-drm 10c3edf` adds
+`BIF_DIR_LIST_BASE2` to the hang dump for that work.
+
+## Gaps
+
+Facts stated above that are **unconfirmed** — not yet seen in a black-box run, on
+hardware, or in a capture. Shipping code must not rely on them. Each names the test
+that would confirm it. (§9 carries the longer discussion of some of these.)
+
+- **`op0xff` / `op0x100` effect.** The handlers run these where the microkernel
+  appears to signal the DMA/event hardware; `ISA.md` leaves them undecoded and the
+  emulator logs them as no-ops. *Test:* drop them from the open microkernel and see
+  whether a frame or completion regresses on a real core; if so, probe what each
+  gates.
+- **The `0x138` invalidate-done bit groups (0x27 TA, 0x4b 3D).** The per-unit split
+  is inferred from what the poll loops wait for. *Test:* issue a TA-side and a
+  3D-side invalidate separately on hardware and read `0x138`.
+- **`0x69c`'s values 1 and 4.** The OOM path writes them; what each commands is not
+  known. *Test:* drive `0x69c = 1` and `= 4` on hardware around a DPM store/load and
+  observe the free-list and threshold effect.
+- **The OOM handler's alternate branches** (`0x734 & 3`, the `sa8` pass flag — the
+  +32/+16 grant and the stage-1 undo). The partial-render path itself is confirmed
+  on hardware; these branches are not. *Test:* drive a scene that takes each branch
+  and compare the recovery against the reference run.
+- **Concurrent use of the BIF from two contexts.** Our runs and the captures are
+  single-context (`BIF_BANK0` = 0x101f). *Test:* render two contexts concurrently on
+  hardware, each with a correctly placed PB, and check for faults.
+- **The per-context scratch area (control block 0x18-0x37) across concurrent
+  contexts.** The single-context, single-render path is covered. *Test:* two render
+  contexts, each with its own correctly placed PB, rendering on hardware.
+- **The revision TA-flags detail (b12 / the BRN 31939 watchdog).** From the kernel
+  headers, not exercised black-box or on hardware here. *Test:* run a watchdog-timing
+  scene on a 1.0.13 and a 1.0.14 part and compare.

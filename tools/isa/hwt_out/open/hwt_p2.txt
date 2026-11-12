@@ -1,0 +1,100 @@
+movc_z_f32_00000000      0x11111111   
+movc_z_f32_80000000      0x11111111   
+movc_z_f32_3f800000      0x22222222   
+movc_z_f32_bf800000      0x22222222   
+movc_z_f32_00000001      0x11111111   
+movc_z_f32_7fc00000      0x22222222   
+movc_nz_f32_00000000     0x22222222   
+movc_nz_f32_80000000     0x22222222   
+movc_nz_f32_3f800000     0x11111111   
+movc_nz_f32_bf800000     0x11111111   
+movc_nz_f32_00000001     0x22222222   
+movc_nz_f32_7fc00000     0x11111111   
+movc_ltz_f32_00000000    0x22222222   
+movc_ltz_f32_80000000    0x22222222   
+movc_ltz_f32_3f800000    0x22222222   
+movc_ltz_f32_bf800000    0x11111111   
+movc_ltz_f32_00000001    0x22222222   
+movc_ltz_f32_7fc00000    0x22222222   
+movc_gez_f32_00000000    0x11111111   
+movc_gez_f32_80000000    0x11111111   
+movc_gez_f32_3f800000    0x11111111   
+movc_gez_f32_bf800000    0x22222222   
+movc_gez_f32_00000001    0x11111111   
+movc_gez_f32_7fc00000    0x22222222   
+movc_z_i32_00000000      0x11111111   
+movc_z_i32_80000000      0x22222222   
+movc_z_i32_00000001      0x22222222   
+movc_z_i32_ffffffff      0x22222222   
+movc_nz_i32_00000000     0x22222222   
+movc_nz_i32_80000000     0x11111111   
+movc_nz_i32_00000001     0x11111111   
+movc_nz_i32_ffffffff     0x11111111   
+movc_ltz_i32_00000000    0x22222222   
+movc_ltz_i32_80000000    0x11111111   
+movc_ltz_i32_00000001    0x22222222   
+movc_ltz_i32_ffffffff    0x11111111   
+movc_gez_i32_00000000    0x11111111   
+movc_gez_i32_80000000    0x22222222   
+movc_gez_i32_00000001    0x11111111   
+movc_gez_i32_ffffffff    0x22222222   
+movc_z_u8_00ff8001       0x11222222   
+movc_z_u8_7f000180       0x22112222   
+movc_nz_u8_00ff8001      0x22111111   
+movc_nz_u8_7f000180      0x11221111   
+movc_ltz_u8_00ff8001     0x22111122   
+movc_ltz_u8_7f000180     0x22222211   
+movc_gez_u8_00ff8001     0x11222211   
+movc_gez_u8_7f000180     0x11111122   
+movc_z_i16_80010000      0x22221111   
+movc_z_i16_00007fff      0x11112222   
+movc_nz_i16_80010000     0x11112222   
+movc_nz_i16_00007fff     0x22221111   
+movc_ltz_i16_80010000    0x11112222   
+movc_ltz_i16_00007fff    0x22222222   
+movc_gez_i16_80010000    0x22221111   
+movc_gez_i16_00007fff    0x11111111   
+movc_z_c10_00ff8001      0x22222222   
+movc_z_c10_3ff00200      0x22211222   
+movc_nz_c10_00ff8001     0x11111111   
+movc_nz_c10_3ff00200     0x11122111   
+movc_ltz_c10_00ff8001    0x22211222   
+movc_ltz_c10_3ff00200    0x11122111   
+movc_gez_c10_00ff8001    0x11122111   
+movc_gez_c10_3ff00200    0x22211222   
+test_lt_1_2              0x3f800000  ok 
+test_lt_2_2              0xaaaaaaaa  ok 
+test_lt_2_1              0xaaaaaaaa  ok 
+test_le_1_2              0x3f800000  ok 
+test_le_2_2              0x3f800000  ok 
+test_le_2_1              0xaaaaaaaa  ok 
+test_eq_1_2              0xaaaaaaaa  ok 
+test_eq_2_2              0x3f800000  ok 
+test_eq_2_1              0xaaaaaaaa  ok 
+test_ne_1_2              0x3f800000  ok 
+test_ne_2_2              0xaaaaaaaa  ok 
+test_ne_2_1              0x3f800000  ok 
+test_gt_1_2              0xaaaaaaaa  ok 
+test_gt_2_2              0xaaaaaaaa  ok 
+test_gt_2_1              0x3f800000  ok 
+test_ge_1_2              0xaaaaaaaa  ok 
+test_ge_2_2              0x3f800000  ok 
+test_ge_2_1              0x3f800000  ok 
+test_neg_-1              0x3f800000  ok 
+test_neg_1               0xaaaaaaaa  ok 
+test_pos_1               0x3f800000  ok 
+test_pos_-1              0xaaaaaaaa  ok 
+test_pos_0               0x3f800000  ok 
+pred_p1_p1               0x3f800000  ok 
+pred_p2_p2               0x3f800000  ok 
+pred_p3_p3               0x3f800000  ok 
+pred_p0_np0              0xaaaaaaaa  ok 
+pred_p1_np1              0xaaaaaaaa  ok 
+testmask_lt_1_2          0xffffffff   
+testmask_lt_2_1          0x00000000   
+br_1                     0x00000044  ok 
+br_2                     0x00000055  ok 
+br_3                     0x00000066  ok 
+loop_br                  0x41000000  ok 
+br_pred_lt               0x00000055  ok 
+br_pred_ge               0x00000066  ok 

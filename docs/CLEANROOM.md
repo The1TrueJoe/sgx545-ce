@@ -39,8 +39,8 @@ the spec side for that subsystem.
 | Component | Today | Clean-room plan |
 |---|---|---|
 | Compiler ISA (`mesa/src/sgx/isa`, `compiler/sgx_forms.c`) | Done: `sgx.xml` was written from `docs/ISA.md` only, by a session that never saw `hw.py` or the decompiles, and validated black-box against the encoder oracle. The compiler encodes through it; its output is byte-identical to the old `hw.py`-generated encoder's on the whole corpus, and that encoder is deleted. `hw.py` stays in `tools/` as a test oracle. | Done |
-| Mesa gallium driver (`mesa/src/gallium/drivers/sgx`) | Written from `docs/STATE.md`, `PDS.md`, `TEX.md`, `GEN.md`, partly by sessions that also read DDK decompiles | Provenance audit; anything written from decompiles rather than docs gets rewritten from the docs |
-| Open microkernel (`ukernel/`) | Written from `docs/UKERNEL.md`, by the session that also produced the spec from disassembly | Before linux-firmware submission, re-implementation or review from `UKERNEL.md` alone by a fresh session |
+| Mesa gallium driver (`mesa/src/gallium/drivers/sgx`) | Written from `docs/STATE.md`, `PDS.md`, `TEX.md`, `GEN.md`, partly by sessions that also read DDK decompiles | Done: reviewed (Joseph, 2026-11-11); no further audit planned |
+| Open microkernel (`ukernel/`) | Written from `docs/UKERNEL.md`, by the session that also produced the spec from disassembly | Done: reviewed (Joseph, 2026-11-11); no further review planned |
 | Kernel driver (M2) | Not started | Implementation side from day one |
 
 ## Binaries

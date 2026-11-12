@@ -1,0 +1,36 @@
+#!/bin/bash
+# Copyright © 2026 Joseph Telaak
+# SPDX-License-Identifier: MIT
+#
+# kit-wdt start|stop: the chipset watchdog (iTCO on Cedarview's NM10) around
+# the GPU and desktop steps. While /tmp/kit-heartbeat is younger than 300 s the
+# watchdog is petted every 10 s; if the run stops beating (a machine-wide hang
+# or a stuck runner), it is no longer petted and the hardware resets the
+# computer 120 s later, and the next boot resumes after the step that hung.
+# stop writes the magic close, so the watchdog is off before the power-off.
+case $1 in
+start)
+	modprobe iTCO_wdt heartbeat=120 2>/dev/null
+	[ -c /dev/watchdog ] || { echo "none"; exit 1; }
+	rm -f /tmp/kit-wdt.stop /tmp/kit-wdt.stopped
+	touch /tmp/kit-heartbeat /tmp/kit-wdt.armed
+	(
+		exec 3> /dev/watchdog || exit 1
+		while [ ! -e /tmp/kit-wdt.stop ]; do
+			age=$(( $(date +%s) - $(stat -c %Y /tmp/kit-heartbeat 2>/dev/null || echo 0) ))
+			[ $age -lt 300 ] && printf . >&3
+			sleep 10
+		done
+		printf V >&3   # magic close: disarm
+		exec 3>&-
+		rm -f /tmp/kit-wdt.armed
+		touch /tmp/kit-wdt.stopped
+	) > /dev/null 2>&1 &
+	echo "$(cat /sys/class/watchdog/watchdog0/identity 2>/dev/null || echo watchdog), 120 s"
+	;;
+stop)
+	[ -e /tmp/kit-wdt.armed ] || exit 0
+	touch /tmp/kit-wdt.stop
+	for i in $(seq 1 15); do [ -e /tmp/kit-wdt.stopped ] && break; sleep 1; done
+	;;
+esac

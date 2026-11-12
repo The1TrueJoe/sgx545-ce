@@ -101,7 +101,7 @@ main(int argc, char **argv)
       fprintf(stderr, "no SGX545 kernel driver on %s\n", node);
       return 1;
    }
-   c = sgxws_ctx_create(dev);
+   c = sgxws_ctx_create(dev, 0);
    if (!c)
       return 1;
    rt = sgxws_rt_create(c, w, h);

@@ -13,10 +13,7 @@
 
 #include "util/macros.h"
 
-/*
- * gen is what the XML's expressions read as ISA_GPU_ID(): the format
- * control state, bit 0 = C10 enable, bit 1 = efo F16 enable.
- */
+/* gen is what the XML's expressions read as ISA_GPU_ID() (sgx_isa_gpu_id()). */
 struct encode_state {
    uint32_t gen;
 };
@@ -79,7 +76,7 @@ __src_case(struct encode_state *s, const struct sgx_isa_src *o)
    }
 }
 
-/* src0 slots have no internal bank: i<n> is r(124 + n) (ISA.md "Registers"). */
+/* src0 slots have no internal bank: i<n> is r(124 + n). */
 static inline enum sgx_isa_case_src0
 __src0_case(struct encode_state *s, const struct sgx_isa_src *o)
 {
@@ -115,7 +112,7 @@ __dst1_case(struct encode_state *s, const struct sgx_isa_src *o)
 /*
  * The number field: g<n> is n + 0x40 on the c/g bank, i<n> in an r slot is
  * 124 + n, a negative immediate its 7-bit two's complement (the signed
- * immediates of ima16, imae, ...: ISA.md "imae").
+ * immediates of ima16, imae, ...).
  */
 static inline uint32_t
 sgx_isa_opnd_num(const struct sgx_isa_src *o)
@@ -183,14 +180,27 @@ sgx_isa_rpt(const struct sgx_isa_instr *instr)
 #include "sgx-isa-encode.h"
 
 uint64_t
-sgx_isa_encode(const struct sgx_isa_instr *instr,
-                  const struct sgx_isa_fc *fc)
+sgx_isa_encode(const struct sgx_isa_instr *instr, const struct sgx_isa_fc *fc)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    struct encode_state s = {
-      .gen = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
+      .gen = sgx_isa_gpu_id(&f),
    };
 
    return bitmask_to_uint64_t(
       encode__instruction(&s, NULL, (struct sgx_isa_instr *)instr));
+}
+
+bool
+sgx_isa_core_supported(unsigned core)
+{
+   return core == 0 || core == SGX_ISA_CORE_SGX545;
+}
+
+uint32_t
+sgx_isa_gpu_id(const struct sgx_isa_fc *fc)
+{
+   unsigned core = fc->core ? fc->core : SGX_ISA_CORE_SGX545;
+
+   return core * 100 + (fc->c10 ? 1 : 0) + (fc->f16 ? 2 : 0);
 }

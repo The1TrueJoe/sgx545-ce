@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: MIT
-/* Copyright © 2026 Joseph Telaak */
-
 /*
  * sgxgen: SGX545 frames from code alone. See sgxgen.h and docs/GEN.md.
  *
@@ -87,20 +84,6 @@ static int xioctl(int fd, unsigned long req, void *arg)
 	return r == -1 ? -errno : 0;
 }
 
-/* Map handle's first size bytes at addr in the device's VM. */
-static int vm_map(struct sgx_dev *d, uint32_t handle, uint64_t addr, uint64_t size)
-{
-	struct drm_powervr_sgx_vm_bind_op op = {
-		.op = DRM_POWERVR_SGX_VM_BIND_OP_MAP, .handle = handle, .device_addr = addr, .size = size,
-	};
-	struct drm_powervr_sgx_ioctl_vm_bind_args a = {
-		.vm_context_handle = d->vm, .flags = DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC,
-		.ops = { .stride = sizeof(op), .count = 1, .array = (uintptr_t)&op },
-	};
-
-	return xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_BIND, &a);
-}
-
 /*
  * A shmem object mapped in the VM at the next free address of the heap, and
  * CPU-mapped. In the USSE heaps it is a code object instead: no CPU mapping,
@@ -115,6 +98,7 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 		.flags = code ? DRM_POWERVR_SGX_BO_CODE : DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS,
 	};
 	struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args mo = {};
+	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
 	uint32_t a = align < 0x1000 ? 0x1000 : align, addr;
 	void *p;
 	int e;
@@ -137,8 +121,12 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 		if (p == MAP_FAILED)
 			die("mmap failed: %d", errno);
 	}
-	if ((e = vm_map(d, cb.handle, addr, cb.size)))
-		die("VM_BIND heap %u at %#x +%#llx failed: %d", heap, addr, (unsigned long long)cb.size, e);
+	vm.vm_context_handle = d->vm;
+	vm.device_addr = addr;
+	vm.handle = cb.handle;
+	vm.size = cb.size;
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &vm)))
+		die("VM_MAP heap %u at %#x +%#llx failed: %d", heap, addr, (unsigned long long)cb.size, e);
 	d->heap_next[heap] = addr + cb.size;
 	bo->handle = cb.handle;
 	bo->code = code;
@@ -155,12 +143,17 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 static void bo_map_handle(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32_t handle, uint32_t size,
 			  uint32_t *map)
 {
+	struct drm_powervr_sgx_ioctl_vm_map_args vm = {};
 	uint32_t addr = (d->heap_next[heap] ? d->heap_next[heap] : d->heap_base[heap] + 0x1000);
 	int e;
 
 	size = (size + 0xfff) & ~0xfffu;
-	if ((e = vm_map(d, handle, addr, size)))
-		die("VM_BIND of handle %u at %#x +%#x failed: %d", handle, addr, size, e);
+	vm.vm_context_handle = d->vm;
+	vm.device_addr = addr;
+	vm.handle = handle;
+	vm.size = size;
+	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &vm)))
+		die("VM_MAP of handle %u at %#x +%#x failed: %d", handle, addr, size, e);
 	d->heap_next[heap] = addr + size;
 	memset(bo, 0, sizeof(*bo));
 	bo->handle = handle;
@@ -191,15 +184,7 @@ static void bo_alloc(struct sgx_dev *d, struct sgx_bo *bo, uint32_t heap, uint32
 
 static void ring_init(struct sgx_dev *d, struct sgx_ring *r, uint32_t heap, uint32_t size)
 {
-	uint32_t align = 0x1000;
-
-#ifdef SGXGEN_DRM
-	/* a code ring stays in one code base window, as UPLOAD_CODE wants of an object with
-	 * phas.i targets: aligned to its (power of two) size, as Mesa's code chunks are */
-	if (heap == H_PIXSHADER || heap == H_VTXSHADER)
-		align = size;
-#endif
-	bo_alloc(d, &r->bo, heap, 0x1, size, align);
+	bo_alloc(d, &r->bo, heap, 0x1, size, 0x1000);
 	/* nothing at a heap's first byte: a PDS state word or DOUTU word of 0 would name it */
 	r->used = 0x100;
 }
@@ -227,22 +212,12 @@ void sgx_ctx_mark(struct sgx_ctx *c)
 		rs[i]->mark = rs[i]->used;
 }
 
-/*
- * A code object takes each instruction once while it is mapped (UPLOAD_CODE
- * refuses to rewrite below what it holds), so a code ring keeps what it has
- * uploaded: rewinding into it would leave the GPU running the old programs.
- */
 void sgx_ctx_rewind(struct sgx_ctx *c)
 {
 	struct sgx_ring *rs[] = CTX_RINGS(c);
 
-	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++) {
+	for (unsigned i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
 		rs[i]->used = rs[i]->mark;
-#ifdef SGXGEN_DRM
-		if (rs[i]->bo.code && rs[i]->used < rs[i]->bo.uploaded)
-			rs[i]->used = rs[i]->bo.uploaded;
-#endif
-	}
 }
 
 /* ------------------------------------------------------------------ USSE */
@@ -253,7 +228,7 @@ static uint32_t usse_load(struct sgx_ctx *c, const struct usse_prog *pr, int ver
 {
 	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
 	struct sgx_ptr p = ring_alloc(r, pr->n * 8, USSE_ALIGN);
-	/* phas.i targets count from the task's code base: the 512 KiB window, not the heap */
+	/* from the start of its 512 KiB code base window, not the heap (ISA.md) */
 	uint32_t pc0 = ((p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) & 0x7ffff) / 8;
 
 	memcpy(p.p, pr->w, pr->n * 8);
@@ -267,7 +242,7 @@ uint32_t sgx_usse_load(struct sgx_ctx *c, int vertex, const uint32_t *w, unsigne
 {
 	struct sgx_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
 	struct sgx_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
-	/* phas.i targets count from the task's code base: the 512 KiB window, not the heap */
+	/* from the start of its 512 KiB code base window, not the heap (ISA.md) */
 	uint32_t pc0 = ((p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) & 0x7ffff) / 8;
 
 	memcpy(p.p, w, n * 8);
@@ -1338,32 +1313,36 @@ static void usse_sync(struct sgx_ctx *c)
 void sgx_render_job(struct sgx_ctx *c, struct sgx_job *j)
 {
 	struct sgx_surface *s = c->fb;
-	uint32_t k2;
+	uint32_t *r32 = (uint32_t *)j->render, k2;
 
 	usse_sync(c);
 	memset(j, 0, sizeof *j);
 	vdm_end(c);
-	k2 = vdm_end(c);	/* the second kick's VDM: the terminate words only */
-	/* The render command (uAPI revision 3); no ZLS or 3D flags: no extension. */
-	j->render.head.size = sizeof(j->render);
-	j->render.pixel_event_pds_addr = s->pixev;
-	j->render.bg_pds_secondary_addr = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[0] & 0x3ffffff) << 4);
-	j->render.bg_pds_primary_addr = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[2] & 0x3ffffff) << 4);
-	j->render.pixel_event_pds_rows = s->pixev_rows;
-	j->render.bg_pds_secondary_rows = s->bg_pds[0] >> 26;
-	j->render.bg_pds_primary_rows = s->bg_pds[2] >> 26;
-	j->render.bg_depth_f32 = f32(1.0f);
-	/* The TA kicks: the scene's VDM, then (two kicks) the terminate words */
-	for (int i = 0; i < 2; i++)
-		j->kick[i].head.size = sizeof(j->kick[i]);
-	j->kick[0].vdm_base = c->vdm_start;
-	j->kick[1].vdm_base = k2;
+	k2 = vdm_end(c);	/* the second kick's stream: the terminate words only */
+	/* CMD_RENDER: header, then the fields in order (UAPI.md 3.4) */
+	r32[0] = 80;
+	j->render[3] = s->pixev;			/* pixel_event_pds_addr */
+	j->render[4] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[0] & 0x3ffffff) << 4);	/* bg secondary */
+	j->render[5] = c->dev->heap_base[H_PDSPIXEL] + ((s->bg_pds[2] & 0x3ffffff) << 4);	/* bg primary */
+	r32[0x30 / 4] = s->pixev_rows;
+	r32[0x34 / 4] = s->bg_pds[0] >> 26;
+	r32[0x38 / 4] = s->bg_pds[2] >> 26;
+	r32[0x44 / 4] = f32(1.0f);			/* bg_depth */
+	/* CMD_TA_KICK: the scene's stream, then (two kicks) the terminate words */
+	for (int i = 0; i < 2; i++) {
+		((uint32_t *)j->kick_buf[i])[0] = 20;
+		j->kick[i].cmd_stream = (uintptr_t)j->kick_buf[i];
+		j->kick[i].cmd_stream_len = 20;
+	}
+	j->kick_buf[0][1] = c->vdm_start;
+	j->kick_buf[1][1] = k2;
 	j->op.handle = c->syncobj;
 	j->op.flags = DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL;
 	j->job = (struct drm_powervr_sgx_job){
 		.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER,
 		.context_handle = c->ctx,
-		.cmd = (uintptr_t)&j->render,
+		.cmd_stream = (uintptr_t)j->render,
+		.cmd_stream_len = 80,
 		.sync_ops = { .stride = sizeof(j->op), .count = 1, .array = (uintptr_t)&j->op },
 		.ta_kicks = { .stride = sizeof(j->kick[0]), .count = (uint32_t)c->ta_kicks,
 			      .array = (uintptr_t)j->kick },

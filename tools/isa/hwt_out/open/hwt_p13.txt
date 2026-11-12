@@ -1,0 +1,11 @@
+pck_u8u8_dm3_l21         0x5a5a2233  ok 
+pck_u8u8_dm12_l03        0x44115a5a  ok 
+pck_u8u8_dm6_l30         0x5a11445a  ok 
+pck_u8u8_dm9_l12         0x335a5a22  ok 
+pck_u8u8_rgba_to_bgra    0x44112233  ok 
+mask_or_r0r1             0xffffffff  ok 
+mask_or_r1r1             0x00000000  ok 
+mask_and_r0r2            0xffffffff  ok 
+mask_and_r0r1            0x00000000  ok 
+mask_test_and_eq_r0      0x22222222  ok 
+mask_test_and_eq_r1      0x11111111  ok 

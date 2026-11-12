@@ -1,6 +1,6 @@
-# Agent brief: sgx545-ce → a GPU that works on stock desktop distros
+# Agent brief: powervr_sgx → a GPU that works on stock desktop distros
 
-**Read this first if you are a session working on `The1TrueJoe/sgx545-ce` (branch `dev`; `main` is the stable branch).**
+**Read this first if you are a session working on `The1TrueJoe/powervr_sgx` (branch `dev`; `main` is the stable branch).**
 It explains the end goal, the standards the work has to meet to get there, and the
 work that remains, in order. It does not replace `docs/`. `docs/` says how the
 hardware works; this says what we are building with that knowledge and what rules

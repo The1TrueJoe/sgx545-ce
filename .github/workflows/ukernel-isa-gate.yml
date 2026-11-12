@@ -1,0 +1,59 @@
+# The microkernel's ISA coverage gate (docs/UKERNEL-TOOLING.md §6, step 5): every
+# instruction ukernel/ assembles must be covered by mesa/src/sgx/isa's sgx.xml.
+name: ukernel-isa-gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ukernel/**
+      - tools/isa/**
+      - mesa/src/sgx/isa/**
+      - mesa/tests/isa-standalone/**
+      - mesa/patches/*isaspec*
+      - .github/workflows/ukernel-isa-gate.yml
+  push:
+    branches: [dev, main]
+    paths:
+      - ukernel/**
+      - tools/isa/**
+      - mesa/src/sgx/isa/**
+      - mesa/tests/isa-standalone/**
+      - mesa/patches/*isaspec*
+      - .github/workflows/ukernel-isa-gate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-mako
+      - uses: actions/cache@v4
+        with:
+          path: mesa-src.tar.xz
+          key: mesa-${{ hashFiles('mesa/VERSION') }}
+      - name: Mesa release
+        run: |
+          set -eu
+          . mesa/VERSION
+          [ -f mesa-src.tar.xz ] || curl -sfL -o mesa-src.tar.xz "$MESA_URL"
+          echo "$MESA_SHA256  mesa-src.tar.xz" | sha256sum -c
+          tar xf mesa-src.tar.xz
+          mv "mesa-$MESA_VERSION" mesa-tree
+      - name: sgx_isa_test
+        run: |
+          mesa/tests/isa-standalone/standalone.sh "$PWD/mesa-tree" "$PWD/isa-build"
+          isa-build/sgx_isa_test mesa/src/sgx/isa/tests/*.txt
+      - name: Coverage gate
+        run: python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test -v
+      - name: Coverage gate, every build variant on
+        run: |
+          for v in $(grep -oE 'environ.get\("UK_[A-Z0-9_]+"\) == "1"' ukernel/*.py | grep -oE 'UK_[A-Z0-9_]+' | sort -u); do
+            export "$v=1"
+          done
+          python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test -v

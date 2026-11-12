@@ -6,7 +6,7 @@
 /*
  * The instruction forms the compiler emits, on top of the isaspec encoder
  * (src/sgx/isa). A form is an opcode plus the fields the compiler fixes
- * for it; its operands are the IR's op[] in text order (docs/ISA.md), and
+ * for it; its operands are the IR's op[] in assembly text order, and
  * sgx_form_slot() says which slot each one lands in and what that slot can
  * hold.
  */
@@ -28,6 +28,7 @@ enum sgx_form {
    SGX_OP_FMSA,
    SGX_OP_FSUBFLR,
    SGX_OP_FDP,
+   SGX_OP_FDPC, /* fdp plus a clip-plane result into cp<n> */
    SGX_OP_FMAXMIN,
    SGX_OP_FMINMAX,
    SGX_OP_FDSX,
@@ -55,6 +56,7 @@ enum sgx_form {
    SGX_OP_PCK_F32_U8,
    SGX_OP_PCK_U8_F32,
    SGX_OP_PCK_U8_F16,
+   SGX_OP_PCK_U8_U8,
    SGX_OP_PCK_S16_F32,
    SGX_OP_PCK_C10_F32,
    SGX_OP_PCK_C10_C10,
@@ -63,6 +65,7 @@ enum sgx_form {
    SGX_OP_TEST,
    SGX_OP_TESTMASK,
    SGX_OP_AND,
+   SGX_OP_OR,
    SGX_OP_XOR,
    /* hw 11, 12: colour */
    SGX_OP_SOPWM,
@@ -85,7 +88,7 @@ enum sgx_form {
 };
 
 /*
- * Fields the compiler sets on a form, by name (docs/ISA.md). A select
+ * Fields the compiler sets on a form, by name (sgx.xml). A select
  * (c1, c2, a, a1, a2) is its value with the complement as the next bit up.
  */
 enum sgx_field {
@@ -123,6 +126,7 @@ enum sgx_field {
    SGX_FLD_A,
    SGX_FLD_A1,
    SGX_FLD_A2,
+   SGX_FLD_CP,  /* fdpc clip plane */
    SGX_FLD_DIM, /* smp */
    SGX_FLD_LOD,
    SGX_FLD_CFMT,

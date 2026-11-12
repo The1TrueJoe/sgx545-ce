@@ -5,7 +5,7 @@
 
 /*
  * The state words of vdm.xml, ta.xml, pbe.xml and tex.xml, packed by csbgen's
- * generated helpers (docs/STATE.md sections 2-5).
+ * generated helpers.
  */
 
 #ifndef SGX_CSB_H
@@ -37,10 +37,9 @@ typedef struct {
  *       ispb.line_width = 0x10;
  *    }
  */
-#define sgx_pack(dst, T, name)                                              \
-   for (struct SGX_##T name = {SGX_##T##_header},                        \
-                          *_sgx_loop_##name = &name;                        \
-        _sgx_loop_##name != NULL;                                           \
+#define sgx_pack(dst, T, name)                                                 \
+   for (struct SGX_##T name = {SGX_##T##_header}, *_sgx_loop_##name = &name;   \
+        _sgx_loop_##name != NULL;                                              \
         SGX_##T##_pack((dst), &name), _sgx_loop_##name = NULL)
 
 #endif

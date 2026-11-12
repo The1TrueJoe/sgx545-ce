@@ -5,20 +5,20 @@ SPDX-License-Identifier: MIT
 -->
 
 <!--
-SGX545 USSE instruction set, written from docs/ISA.md.
+SGX545 USSE instruction set.
 
-Bit numbering: bit n < 32 is ISA.md's l<n> (low word), bit 32 + n is h<n>
-(high word). An instruction is stored low word first.
+Bit numbering: bit n < 32 is l<n> (bit n of the low word), bit 32 + n is
+h<n> (bit n of the high word). An instruction is stored low word first.
 
-The display strings follow ISA.md's text notation. Trailing "[...]" items
-are fields whose display starts with a space; sgx_disasm() drops an empty
-"[]" and the space after "[".
+The display strings are the USSE text notation (README.md). Trailing
+"[...]" items are fields whose display starts with a space; sgx_disasm()
+drops an empty "[]" and the space after "[".
 
 Operands: a register operand's number, bank and extension bits are spread
 over the word, so each slot is rebuilt as a derived value
 (number | bank << 7 | extension << 9) and decoded by an operand hierarchy
-whose leaf patterns are ISA.md's bank tables ("Operand slots and bank
-codes"). MODE tells the operand how its number reads:
+whose leaf patterns are the bank codes (#dst, #src, #src0 below). MODE
+tells the operand how its number reads:
 
   0  plain: 7-bit numbers
   1  format select, F16 (float classes h22, test h18 on float ALU ops)
@@ -28,6 +28,14 @@ codes"). MODE tells the operand how its number reads:
 
 Format control is program state, not in the word: the encoder takes it from
 struct encode_state and the disassembler tracks setfc (sgx_disasm.c).
+
+ISA_GPU_ID() (the encoder's s->gen, the decoder's gpu_id) is
+core * 100 + format control: the core's number (545) in the hundreds, the
+format-control bits in the low digits (sgx_isa_gpu_id()). <gen> ranges
+select cores, e.g. min="54500" max="54599" for SGX545; expressions read
+the core as ISA_GPU_ID() / 100 and format control as ISA_GPU_ID() % 100.
+Everything here is SGX545's (the root's <gen>); a field another core
+encodes differently gets a <gen> range or an override on the core.
 
 What isaspec cannot express directly, and how it is handled here:
   - split fields (h6-8 + h24, limm's three-piece immediate, operands):
@@ -144,21 +152,21 @@ What isaspec cannot express directly, and how it is handled here:
 </enum>
 
 <enum name="#swz0">
-	<doc>fmad16 src0 swizzle (ISA.md "Float classes")</doc>
+	<doc>fmad16 src0 swizzle</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" swz0=ll"/>
 	<value val="2" display=" swz0=hh"/>
 	<value val="3" display=" swz0=f32"/>
 </enum>
 <enum name="#swz1">
-	<doc>fmad16 src1 swizzle (ISA.md "Float classes")</doc>
+	<doc>fmad16 src1 swizzle</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" swz1=ll"/>
 	<value val="2" display=" swz1=hh"/>
 	<value val="3" display=" swz1=f32"/>
 </enum>
 <enum name="#swz2">
-	<doc>fmad16 src2 swizzle (ISA.md "Float classes")</doc>
+	<doc>fmad16 src2 swizzle</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" swz2=ll"/>
 	<value val="2" display=" swz2=hh"/>
@@ -201,7 +209,7 @@ What isaspec cannot express directly, and how it is handled here:
 <enum name="#pck-l18">
 	<doc>
 		l18 with bit 1 = "both formats are f16 or f32": it prints rint
-		then, scale otherwise (ISA.md "hw 08").
+		then, scale otherwise.
 	</doc>
 	<value val="0" display=""/>
 	<value val="1" display=" scale"/>
@@ -553,8 +561,8 @@ What isaspec cannot express directly, and how it is handled here:
 <!-- ===================================================================== -->
 
 <!--
-Destination slot (ISA.md "Operand slots and bank codes"): number l21-27,
-bank h0-1, extension h19, rebuilt as NUM | BANK << 7 | EXT << 9.
+Destination slot: number l21-27, bank h0-1, extension h19, rebuilt as
+NUM | BANK << 7 | EXT << 9.
 -->
 <bitset name="#dst" size="10">
 	<encode type="struct sgx_isa_src *" case-prefix="SGX_">
@@ -649,7 +657,7 @@ bank h0-1, extension h19, rebuilt as NUM | BANK << 7 | EXT << 9.
 <bitset name="#dst.idx" extends="#dst">
 	<doc>
 		Not halved under format select: a bare .f16 (or .c10) only sets
-		bit 6 (ISA.md "Format select and format control": idx16.f16).
+		bit 6: idx16.f16 is number 16 with bit 6 set.
 	</doc>
 	<override expr="#m-sel-f16">
 		<display>idx{LNUM}.f16</display>
@@ -867,6 +875,7 @@ NUM | BANK << 7 | EXT << 8.
 		h27-31 (bits 59-63) is the hardware class; each class splits
 		further on its own sub-op bits.
 	</doc>
+	<gen min="54500" max="54599"/>
 	<encode type="struct sgx_isa_instr *" case-prefix="SGX_ISA_OPC_">
 		<map name="PRED">src->pred</map>
 		<map name="SKIPINV">src->skipinv</map>
@@ -992,7 +1001,7 @@ NUM | BANK << 7 | EXT << 8.
 <expr name="#float-smode">{FMT}</expr>
 
 <bitset name="#alu-float" extends="#instruction">
-	<doc>Fields common to hw 0, 2, 3 and 4 (ISA.md "Float classes").</doc>
+	<doc>Fields common to hw 0, 2, 3 and 4 (the float classes).</doc>
 	<field name="S2N" low="0" high="6" type="uint"/>
 	<field name="S1N" low="7" high="13" type="uint"/>
 	<field name="DN" low="21" high="27" type="uint"/>
@@ -1170,7 +1179,7 @@ NUM | BANK << 7 | EXT << 8.
 <bitset name="fddpc" extends="#float-ddp">
 	<doc>
 		Clip planes in h3-5 and h6-8, no source modifiers. h8 is also inc2:
-		the word holds the OR of the two (ISA.md), so inc2 is folded into
+		the word holds the OR of the two, so inc2 is folded into
 		CPB here.
 	</doc>
 	<display>
@@ -2281,7 +2290,7 @@ pa = 1.
 		<map name="LIM2">src->lim[2]</map>
 		<map name="A0">src->a[0]</map>
 		<map name="A1">src->a[1]</map>
-		<map name="N">src->n</map>
+		<map name="NVAL">src->n</map>
 	</encode>
 </bitset>
 
@@ -2439,14 +2448,14 @@ pa = 1.
 <bitset name="op0xfd" extends="#moe">
 	<doc>dst in the destination slot, n h11-14; meaning unknown.</doc>
 	<display>
-		{NAME} {DST}, #{N} [{SKIPINV} {NOSCHED}]
+		{NAME} {DST}, #{NVAL} [{SKIPINV} {NOSCHED}]
 	</display>
 	<pattern low="0" high="20">000000000000000000000</pattern>
 	<field name="DN" low="21" high="27" type="uint"/>
 	<pattern low="28" high="31">0000</pattern>
 	<field name="DB" low="32" high="33" type="uint"/>
 	<pattern low="34" high="42">000000000</pattern>
-	<field name="N" low="43" high="46" type="uint"/>
+	<field name="NVAL" low="43" high="46" type="uint"/>
 	<pattern low="47" high="49">000</pattern>
 	<field name="DE" pos="51" type="uint"/>
 	<field name="SKIPINV" pos="55" type="bool" display=" skipinv"/>
@@ -2465,7 +2474,7 @@ pa = 1.
 	<derived name="MODE0" expr="#zero" type="uint"/>
 	<encode>
 		<map name="PATH">src->path</map>
-		<map name="N">src->n</map>
+		<map name="NVAL">src->n</map>
 		<map name="TGT">src->tgt</map>
 		<map name="F10">src->f10</map>
 		<map name="F12">src->f12</map>
@@ -2509,9 +2518,9 @@ pa = 1.
 
 <bitset name="op0xd7" extends="#other">
 	<display>
-		{NAME} #{N} [{NOSCHED}]
+		{NAME} #{NVAL} [{NOSCHED}]
 	</display>
-	<field name="N" low="0" high="3" type="uint"/>
+	<field name="NVAL" low="0" high="3" type="uint"/>
 	<pattern low="4" high="31">0000000000000000000000000000</pattern>
 	<pattern low="32" high="42">00000000000</pattern>
 	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
@@ -2605,10 +2614,10 @@ pa = 1.
 
 <bitset name="#lock" extends="#other">
 	<display>
-		{NAME} #{N} [{NOSCHED}]
+		{NAME} #{NVAL} [{NOSCHED}]
 	</display>
 	<pattern low="1" high="3">000</pattern>
-	<field name="N" low="4" high="6" type="uint"/>
+	<field name="NVAL" low="4" high="6" type="uint"/>
 	<pattern low="7" high="31">0000000000000000000000000</pattern>
 	<pattern low="32" high="42">00000000000</pattern>
 	<field name="NOSCHED" pos="43" type="bool" display=" nosched"/>
@@ -2710,9 +2719,9 @@ pa = 1.
 
 <bitset name="op0xd6" extends="#other">
 	<display>
-		{NAME} #{N} [{NOSCHED} {F3_6}]
+		{NAME} #{NVAL} [{NOSCHED} {F3_6}]
 	</display>
-	<field name="N" low="0" high="2" type="uint"/>
+	<field name="NVAL" low="0" high="2" type="uint"/>
 	<field name="F3_6" pos="3" type="bool" display=" f3_6"/>
 	<pattern low="4" high="31">0000000000000000000000000000</pattern>
 	<pattern low="32" high="42">00000000000</pattern>
@@ -2854,7 +2863,7 @@ pa = 1.
 		<map name="WAIT">src->wait</map>
 		<map name="RATE">src->rate</map>
 		<map name="SEL43">src->sel43</map>
-		<map name="N">src->n</map>
+		<map name="NVAL">src->n</map>
 		<map name="F3_11">src->f3_11</map>
 		<map name="F3_12">src->f3_12</map>
 	</encode>
@@ -2912,10 +2921,10 @@ pa = 1.
 
 <bitset name="#opff" extends="#phase-src">
 	<display>
-		{NAME} {SRC1}, {SRC2}, #{N} [{NOSCHED} {F3_11} {F3_12}]
+		{NAME} {SRC1}, {SRC2}, #{NVAL} [{NOSCHED} {F3_11} {F3_12}]
 	</display>
 	<pattern low="32" high="39">00000000</pattern>
-	<field name="N" low="40" high="41" type="uint"/>
+	<field name="NVAL" low="40" high="41" type="uint"/>
 	<pattern pos="42">0</pattern>
 	<field name="F3_12" pos="46" type="bool" display=" f3_12"/>
 	<field name="F3_11" pos="47" type="bool" display=" f3_11"/>
@@ -2937,11 +2946,11 @@ pa = 1.
 <!-- ===================================================================== -->
 
 <!--
-Format control: the encoder's s->gen and the decoder's gpu_id carry it
-(bit 0 = setfc a1, the C10 enable; bit 1 = setfc a0, efo's F16 enable).
+Format control: the low digits of ISA_GPU_ID() carry it (bit 0 = setfc a1,
+the C10 enable; bit 1 = setfc a0, efo's F16 enable).
 -->
-<expr name="#fc-c10">(ISA_GPU_ID() &amp; 1) ? 3 : 0</expr>
-<expr name="#fc-f16">(ISA_GPU_ID() &amp; 2) ? 4 : 0</expr>
+<expr name="#fc-c10">(ISA_GPU_ID() % 100 &amp; 1) ? 3 : 0</expr>
+<expr name="#fc-f16">(ISA_GPU_ID() % 100 &amp; 2) ? 4 : 0</expr>
 
 <enum name="#rpt8">
 	<value val="0" display=""/>
@@ -3293,7 +3302,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 </enum>
 
 <enum name="#fmt-u8">
-	<doc>A mnemonic suffix (ISA.md "hw 16 / 17 / 1a": bilin.s8, firh.s8).</doc>
+	<doc>A mnemonic suffix (bilin.s8, firh.s8).</doc>
 	<value val="0" display=""/>
 	<value val="1" display=".s8"/>
 	<value val="2" display=".o8"/>
@@ -3811,7 +3820,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 	</encode>
 </bitset>
 
-<!-- hw 16: adif / adifsum / op16s1 / bilin / ssum16 / ssum16i (no corpus words) -->
+<!-- hw 16: adif / adifsum / op16s1 / bilin / ssum16 / ssum16i -->
 <bitset name="#hw16" extends="#int-plain">
 	<pattern low="59" high="63">10110</pattern>
 </bitset>
@@ -4093,7 +4102,7 @@ Format control: the encoder's s->gen and the decoder's gpu_id carry it
 </bitset>
 
 <!-- hw 07: efo -->
-<expr name="#efo-mode">(ISA_GPU_ID() &amp; 2) ? 4 : 0</expr>
+<expr name="#efo-mode">(ISA_GPU_ID() % 100 &amp; 2) ? 4 : 0</expr>
 
 <bitset name="efo" extends="#instruction">
 	<doc>

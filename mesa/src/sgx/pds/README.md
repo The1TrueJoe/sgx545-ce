@@ -3,9 +3,7 @@
 `sgx_pds.xml` describes the PDS (programmable data sequencer) programs of
 the PowerVR SGX545 in Mesa's isaspec format. isaspec generates the encoder
 and the disassembler from it; the C files here are the glue and a small text
-assembler. The instruction set and its text notation are documented in
-`docs/PDS.md` of the sgx545-ce repository; the comments cite its sections by
-name.
+assembler for the notation the disassembler prints.
 
 | file | what |
 |---|---|
@@ -14,7 +12,7 @@ name.
 | `sgx_pds_encode.c` | leaf selection for the generated encoder; the data-word encoders |
 | `sgx_pds_disasm.c` | the generated decoder, number printing, whole-program dumps |
 | `sgx_pds_asm.c` | the disassembler's text back into `struct sgx_pds_instr` |
-| `tests/sgx_pds_test.c`, `tests/pds.txt` | text -> struct -> word -> text, PDS.md's words, the DOUT words PDS.md quotes, a random-word fuzz (`-f N`); `-d` disassembles words from stdin |
+| `tests/sgx_pds_test.c`, `tests/pds.txt` | text -> struct -> word -> text, known words, known DOUT data words, a random-word fuzz (`-f N`); `-d` disassembles words from stdin |
 
 The generated files are `sgxpds-isa.*`: isaspec names its functions after
 the part of the output file's name before the first `-`, so `sgx-pds`
@@ -23,7 +21,9 @@ from `../isa/sgx_isa_enums.py` (`--prefix sgx_pds`).
 
 ## The instructions
 
-The text is PDS.md's "Text notation".
+The text notation is what `sgx_pds_disasm.c` prints and `sgx_pds_asm.c`
+reads, one instruction per line: `[(p0) ]mnemonic[.suffix...] operands
+[item=n ...]`.
 
 | op | s | form | text |
 |---|---|---|---|
@@ -45,8 +45,7 @@ The text is PDS.md's "Text notation".
 - Operands: U (`ds0[n]`, `ds1[n]`, `in<n>`) for the ALU destination and the
   shifts; S1 (`ds0[n]`, `in<n>`) and S2 (`ds1[n]`), with `.hi` for the high
   half. Numbers below 10 print in decimal, the rest in hex.
-- A bit no PDS.md field names is 0 (PDS.md "Bits no field names"); a word
-  that sets one does not decode.
+- A bit no field names is 0; a word that sets one does not decode.
 
 ## The data words
 
@@ -71,7 +70,7 @@ struct (`struct sgx_pds_doutu`, ...) and an encoder
 
 `meson test --suite sgx` runs `sgx_pds` (with `-Dbuild-tests=true`):
 each line of `tests/pds.txt` goes text -> instruction -> word -> text, a
-line that gives a word must encode to it, and the DOUT data words PDS.md
-quotes are checked field by field. `sgx_pds_test -f N` fuzzes N random
+line that gives a word must encode to it, and a set of known DOUT data words
+is checked field by field. `sgx_pds_test -f N` fuzzes N random
 words through decode and re-assembly; `-d` disassembles words read from
 stdin.
