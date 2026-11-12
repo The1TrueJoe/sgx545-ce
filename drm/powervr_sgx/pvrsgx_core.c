@@ -109,7 +109,7 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.bif_int_stat_fault_type = BIT(14),	/* read or write */
 	.bif_fault_addr = GENMASK(27, 12),
 	.use_code_base_dm_shift = 24,
-	/* 256-byte units: the EDM fetches at field << 8 (stage 1, log 2026-11-12-0300). */
+	/* 256-byte units: the EDM fetches at field << 8. */
 	.use_code_base_addr_shift = 8,
 	.event_pds_enable = SGX545_CR_EVENT_PDS_ENABLE,
 	.event_pds_enable_all = SGX545_CR_EVENT_PDS_ENABLE_ALL,
@@ -122,7 +122,7 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 static const struct pvrsgx_core_init_reg sgx530_init_regs[] = {
 	{ SGX_CR_EVENT_HOST_ENABLE, SGX_CR_EVENT_STATUS_SW_EVENT },
 	{ SGX_CR_EVENT_HOST_ENABLE2, 0 },
-	/* Unnamed; without it the PDS fetches nothing (stage 1, log 2026-11-12-0151). */
+	/* Unnamed; without it the PDS fetches nothing. */
 	{ 0xa74, 0x208200 },
 };
 
@@ -178,7 +178,7 @@ static const struct pvrsgx_core_family families[] = {
 		.heaps = &sgx530_heaps,
 		.quirks = PVRSGX_QUIRK_BRN_28889,
 		.event_pds_guessed = true,
-		/* Its task's stores to EDMPROTECT pages fault (stage 1, log 2026-11-12-0630). */
+		/* Its task's stores to EDMPROTECT pages fault. */
 		.data_no_edmprotect = true,
 		.cmds = &pvrsgx_cmd_core_sgx530,
 		.init_regs = sgx530_init_regs,

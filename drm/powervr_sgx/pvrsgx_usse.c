@@ -6,8 +6,7 @@
  * word must be exactly one form of the table generated from the isaspec
  * description, with every operand in a register file and number the form
  * allows, and branch and phase targets inside the object. Nothing here
- * depends on the device, so the same code also builds for a host fuzzer
- * (drm/tests/usse_fuzz).
+ * depends on the device, so the same code also builds for a host fuzzer.
  */
 
 #include <linux/array_size.h>

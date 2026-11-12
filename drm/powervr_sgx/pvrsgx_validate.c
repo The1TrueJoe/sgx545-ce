@@ -3,7 +3,7 @@
 
 /*
  * Shader validation: what a client's USSE code may contain. The threat model
- * is in Documentation/gpu/powervr_sgx.rst, "Shader validation".
+ * is in Documentation/gpu/powervr_sgx/index.rst, "Shader validation".
  *
  * Client USSE code runs only from the two USSE heaps of its own VM (the code
  * base registers cover exactly those), the USSE heaps take only code objects,

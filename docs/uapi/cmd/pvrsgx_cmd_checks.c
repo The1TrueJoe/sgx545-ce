@@ -15,7 +15,7 @@
 #define ZLS_STENCIL_BITS 0x3U
 /* SGX545 3D flags bit that uses the stencil address. */
 #define FLAGS_3D_STENCIL BIT(8)
-/* ZLS addresses are offsets from a 1 MiB-aligned base; the limit is a guess (G13). */
+/* ZLS addresses are offsets from a 1 MiB-aligned base; the 1 GiB limit is assumed. */
 #define ZLS_BASE_MASK 0xfff00000U
 #define ZLS_OFFSET_LIMIT_LOG2 30
 

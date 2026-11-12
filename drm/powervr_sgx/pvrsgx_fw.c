@@ -494,8 +494,9 @@ static u32 use_code_base_val(struct pvrsgx_device *sdev, u64 addr, u32 dm)
 
 /*
  * The event program's address as the event PDS base register takes it. A core
- * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there, the 64 MiB the
- * GPL DDK lets PDS code lie above PDS_EXEC_BASE: an offset from it (G).
+ * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there, the 64 MiB above
+ * PDS_EXEC_BASE that PDS code may lie in: taken as an offset from that base,
+ * which is an assumption.
  */
 static u32 event_pds_addr(struct pvrsgx_device *sdev)
 {
