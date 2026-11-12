@@ -1115,6 +1115,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
 
       if (pack_int_outputs(nir, kind))
          opts.rt_packed = 1;
+      if (sgx_drv_debug & SGX_DEBUG_NIR) {
+         fprintf(stderr, "sgx: after pack_int_outputs (kind %u):\n", kind);
+         nir_print_shader(nir, stderr);
+      }
    }
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",

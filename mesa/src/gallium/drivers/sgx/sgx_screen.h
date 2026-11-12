@@ -34,6 +34,7 @@
 #define SGX_DEBUG_NO_DEP_F16_SAMPLES (1 << 18)
 #define SGX_DEBUG_ZLS_DUMP           (1 << 19)
 #define SGX_DEBUG_GLSL130            (1 << 20)
+#define SGX_DEBUG_RB_SLEEP           (1 << 21)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */
