@@ -2981,6 +2981,14 @@ front_face(struct sgx_ctx *c, struct sgx_val *v, nir_def *def)
    v->comp = 0;
 }
 
+/* a unit whose texel is one raw 32-bit word in the first register */
+static bool
+raw_unit(const struct sgx_ctx *c, unsigned unit)
+{
+   return unit < 32 && ((c->opts->tex_f32 | c->opts->tex_r32x4 |
+                         c->opts->tex_r32x2) >> unit & 1);
+}
+
 /* A vertex attribute in a raw format (opts.vtx_fmt): the components the
  * shader reads, unpacked from PA[4i] into f32; those the format lacks are
  * 0, 0, 1 (an integer 1 for an integer attribute) */
@@ -4353,7 +4361,7 @@ emit_texel(struct sgx_ctx *c, nir_tex_instr *tex, struct sgx_sample *s,
       }
       return;
    }
-   if (c->opts->tex_f32 >> s->sampler & 1) {
+   if (raw_unit(c, s->sampler)) {
       /* one F32 value in the register, read as the first channel alone
        * (lower_f32_texel) */
       struct sgx_ref r[4];
@@ -4581,7 +4589,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       /* a texel read at mediump returns F16 (f16_samples); one that is the
        * colour as it is keeps RGBA8 for the byte path */
       s->f16_return = c->opts->f16_samples && tex->def.bit_size == 16 &&
-                      !(c->opts->tex_f32 >> tex->texture_index & 1) &&
+                      !raw_unit(c, tex->texture_index) &&
                       tex != c->colour_tex &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
       struct sgx_iter *it = &c->iters[c->n_iters++];
@@ -4679,7 +4687,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
       unsigned rd = nir_def_components_read(&tex->def);
       s->f16_return = c->opts->f16_samples && c->opts->dep_f16_samples &&
                       tex->def.bit_size == 16 &&
-                      !(c->opts->tex_f32 >> tex->texture_index & 1) &&
+                      !raw_unit(c, tex->texture_index) &&
                       tex != c->colour_tex && (rd & 3) && (rd & 12) &&
                       !sgx_debug(c, SGX_DBG_NO_DEP_F16) &&
                       !sgx_debug(c, SGX_DBG_NO_F16_SAMPLES);
@@ -4884,7 +4892,7 @@ find_colour_source(struct sgx_ctx *c, nir_function_impl *impl)
       if (p->type == nir_instr_type_tex) {
          nir_tex_instr *tex = nir_instr_as_tex(p);
          if (tex->op == nir_texop_tex && tex->def.num_components == 4 &&
-             !(c->opts->tex_f32 >> tex->texture_index & 1) &&
+             !raw_unit(c, tex->texture_index) &&
              !sgx_debug(c, SGX_DBG_NO_TEX_COLOR)) {
             c->colour_end = end;
             c->colour_tex = tex;

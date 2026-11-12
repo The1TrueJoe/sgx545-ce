@@ -87,6 +87,14 @@ struct sgx_compile_options {
     * register (a depth texture, R32F, R32UI, R32I), read as (d, 0, 0, 1),
     * an integer 1 for an integer sampler */
    uint32_t tex_f32;
+   /* bit n set, texture unit n is a 4 (RGBA32) or 2 (RG32) channel 32-bit
+    * texture stored as an R32 texture N times as wide, texel (x, y) channel
+    * c at (N * x + c, y) in every level; NEAREST, s wrap REPEAT, T1 0x12
+    * (sgx_lower_tex: one dependent read per channel, at a level it picks) */
+   uint32_t tex_r32x4, tex_r32x2;
+   /* bit n set, unit n's GL s wrap clamps (CLAMP_TO_EDGE; border as edge);
+    * clear, it repeats. tex_r32x4 / tex_r32x2 units only */
+   uint32_t tex_r32_clamp;
    /* fragment shader: the driver's PDS samples a non-dependent texture from
     * the coordinate set itself, so a varying only such samples read needs no
     * plain iteration of its own (one PDS sample, no iteration).
@@ -151,6 +159,13 @@ struct sgx_varying {
     * both) */
    bool split;
 };
+
+/* noperspective: the vertex shader writes v * w (gl_Position.w) and w
+ * itself, a float varying of this name, and the fragment shader divides by
+ * w: the iteration is perspective-correct, the quotient is linear. The
+ * layout needs this varying (high precision, one component) whenever a
+ * varying is noperspective */
+#define SGX_NOPERSPECTIVE_W "sgx_w"
 
 struct sgx_varyings {
    unsigned n;
@@ -327,10 +342,14 @@ bool sgx_lower_clip_fs(struct nir_shader *fs, unsigned ucp_enables);
 /* GLSL 1.30's texture functions on what smp has: textureGrad as an
  * explicit LOD, the Offset variants and rectangle textures through the
  * texture's size, 1D as 2D, texelFetch as an explicit-LOD read at the
- * texel's center (marked sgx_sample_info.fetch). The txs instructions it
+ * texel's center (marked sgx_sample_info.fetch), and the reads of
+ * opts->tex_r32x4 / tex_r32x2 units. The txs and query_levels instructions it
  * adds (and the program's own textureSize) are the driver's to lower before
- * sgx_compile. Call after the texture and sampler indices are final */
-bool sgx_lower_tex(struct nir_shader *s);
+ * sgx_compile; for an r32 unit, query_levels is the number of levels its
+ * sampler can select (1 without mipmapping). Call after the texture and
+ * sampler indices are final */
+bool sgx_lower_tex(struct nir_shader *s,
+                   const struct sgx_compile_options *opts);
 
 /* lower and compile; 0 on success */
 int sgx_compile(struct nir_shader *nir, const struct sgx_compile_options *opts,

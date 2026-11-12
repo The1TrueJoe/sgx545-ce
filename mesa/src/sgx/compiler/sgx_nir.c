@@ -163,6 +163,19 @@ sgx_lower_clip_fs(nir_shader *fs, unsigned ucp_enables)
    return nir_progress(true, impl, nir_metadata_none);
 }
 
+static bool
+has_noperspective(nir_shader *nir, bool vertex)
+{
+   nir_foreach_variable_with_modes (
+      var, nir, vertex ? nir_var_shader_out : nir_var_shader_in)
+      /* (before linking, user varyings have no location yet) */
+      if (var->data.interpolation == INTERP_MODE_NOPERSPECTIVE &&
+          (var->data.location < 0 || var->data.location >= VARYING_SLOT_VAR0) &&
+          var_used(nir, var, vertex))
+         return true;
+   return false;
+}
+
 void
 sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
 {
@@ -236,6 +249,15 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
       for (unsigned r = 0; r < v->rows; r++, set++)
          if (set < SGX_MAX_SETS)
             out->set_comps[set] = v->comps;
+   }
+   if (has_noperspective(nir, vertex) && out->n < ARRAY_SIZE(out->v)) {
+      struct sgx_varying *v = &out->v[out->n++];
+      snprintf(v->name, sizeof v->name, "%s", SGX_NOPERSPECTIVE_W);
+      v->rows = v->comps = 1;
+      v->precision = GLSL_PRECISION_HIGH;
+      v->set = set;
+      if (set < SGX_MAX_SETS)
+         out->set_comps[set] = 1;
    }
    sgx_pack_varyings(out);
 }
@@ -1836,10 +1858,12 @@ assign_io(struct sgx_ctx *c)
                      nir_src_as_deref(nir_instr_as_intrinsic(instr)->src[0]);
                   nir_variable *v = nir_deref_instr_get_variable(d);
 
+                  /* (noperspective: v * w, iterated in F32) */
                   if (v && v->data.mode == nir_var_shader_in &&
                       v->data.location >= 0 && v->data.location < 128)
                      ((v->data.precision == GLSL_PRECISION_MEDIUM ||
-                       v->data.precision == GLSL_PRECISION_LOW)
+                       v->data.precision == GLSL_PRECISION_LOW) &&
+                            v->data.interpolation != INTERP_MODE_NOPERSPECTIVE
                          ? mp
                          : hp)[v->data.location] = true;
                   continue;
@@ -1850,10 +1874,17 @@ assign_io(struct sgx_ctx *c)
                     nir_instr_as_intrinsic(instr)->intrinsic !=
                        nir_intrinsic_load_input))
                   continue;
-               nir_io_semantics sem =
-                  nir_intrinsic_io_semantics(nir_instr_as_intrinsic(instr));
+               nir_intrinsic_instr *li = nir_instr_as_intrinsic(instr);
+               nir_io_semantics sem = nir_intrinsic_io_semantics(li);
+               nir_intrinsic_instr *bary =
+                  li->intrinsic == nir_intrinsic_load_interpolated_input
+                     ? nir_src_as_intrinsic(li->src[0])
+                     : NULL;
+               bool np = bary && nir_intrinsic_has_interp_mode(bary) &&
+                         nir_intrinsic_interp_mode(bary) ==
+                            INTERP_MODE_NOPERSPECTIVE;
                if (sem.location < 128)
-                  (sem.medium_precision ? mp : hp)[sem.location] = true;
+                  (sem.medium_precision && !np ? mp : hp)[sem.location] = true;
             }
          }
       }
@@ -2078,8 +2109,133 @@ txf_to_txl_instr(nir_builder *b, nir_tex_instr *tex, void *data)
    return true;
 }
 
+/* a txl of channel tex's unit at coordinate coord and level lod, its first
+ * component */
+static nir_def *
+r32_read(nir_builder *b, nir_tex_instr *tex, nir_def *coord, nir_def *lod)
+{
+   int ti = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+   int si = nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
+   nir_tex_instr *t = nir_tex_instr_create(b->shader, ti >= 0 ? 4 : 2);
+   t->op = nir_texop_txl;
+   t->sampler_dim = tex->sampler_dim;
+   t->is_array = tex->is_array;
+   t->coord_components = tex->coord_components;
+   t->dest_type = tex->dest_type;
+   t->texture_index = t->sampler_index = tex->texture_index;
+   t->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
+   t->src[1] = nir_tex_src_for_ssa(nir_tex_src_lod, lod);
+   if (ti >= 0) {
+      t->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
+                                      tex->src[ti].src.ssa);
+      t->src[3] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
+                                      tex->src[si >= 0 ? si : ti].src.ssa);
+   }
+   if (tex->op == nir_texop_txf)
+      t->backend_flags |= SGX_TEX_FETCH;
+   nir_def_init(&t->instr, &t->def, 4, tex->def.bit_size);
+   nir_builder_instr_insert(b, &t->instr);
+   return nir_channel(b, &t->def, 0);
+}
+
+/* a texel of a tex_r32x4 / tex_r32x2 unit: channel c of texel x is R32
+ * texel N * x + c. The level is picked here (NEAREST_MIPMAP_NEAREST's
+ * rule), since the wide view's footprint would pick another, and each
+ * channel is read at its subtexel's center at that level */
+static bool
+r32_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   const struct sgx_compile_options *o = data;
+   unsigned u = tex->texture_index;
+   if (!o || u >= 32 || nir_tex_instr_is_query(tex) ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_BUF ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_MS ||
+       (tex->op != nir_texop_tex && tex->op != nir_texop_txb &&
+        tex->op != nir_texop_txl && tex->op != nir_texop_txf))
+      return false;
+   unsigned n = o->tex_r32x4 >> u & 1 ? 4 : o->tex_r32x2 >> u & 1 ? 2 : 0;
+   if (!n)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   bool fetch = tex->op == nir_texop_txf;
+   nir_def *coord = tex->src[nir_tex_instr_src_index(tex, nir_tex_src_coord)].src.ssa;
+   unsigned dims = tex->coord_components - tex->is_array;
+   nir_def *size = nir_channels(b, nir_get_texture_size(b, tex),
+                                nir_component_mask(dims));
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+   nir_def *lod;
+   if (fetch) {
+      lod = li >= 0 ? nir_i2f32(b, tex->src[li].src.ssa) : nir_imm_float(b, 0);
+   } else {
+      nir_def *lambda;
+      if (tex->op == nir_texop_txl) {
+         lambda = tex->src[li].src.ssa;
+      } else if (b->shader->info.stage == MESA_SHADER_FRAGMENT) {
+         nir_def *p = nir_fmul(b, nir_channels(b, coord, nir_component_mask(dims)),
+                               nir_i2f32(b, size));
+         lambda = nir_flog2(b, nir_fmax(b, nir_fast_length(b, nir_ddx(b, p)),
+                                        nir_fast_length(b, nir_ddy(b, p))));
+         int bi = nir_tex_instr_src_index(tex, nir_tex_src_bias);
+         if (bi >= 0)
+            lambda = nir_fadd(b, lambda, tex->src[bi].src.ssa);
+      } else {
+         lambda = nir_imm_float(b, 0);
+      }
+      /* ceil(lambda + 1/2) - 1 above 1/2, else the base level */
+      nir_def *levels = nir_build_texture_query(
+         b, tex, nir_texop_query_levels, 1, nir_type_int32, false, false);
+      lod = nir_fmax(b, nir_fadd_imm(b, nir_fceil(b, nir_fadd_imm(b, lambda, 0.5)), -1.0),
+                     nir_imm_float(b, 0.0));
+      lod = nir_fmin(b, lod, nir_fadd_imm(b, nir_i2f32(b, levels), -1.0));
+   }
+   /* the level's size and texel center (i + 0.5) / size_l, s apart */
+   nir_def *sz = nir_u2f32(b, nir_umax(b, nir_ushr(b, size, nir_f2u32(b, lod)),
+                                       nir_imm_int(b, 1)));
+   nir_def *x;
+   nir_def *c[4];
+   for (unsigned d = 0; d < tex->coord_components; d++) {
+      nir_def *v = nir_channel(b, coord, d);
+      if (d >= dims)
+         c[d] = fetch ? nir_i2f32(b, v) : v;
+      else if (fetch)
+         c[d] = nir_fmul(b, nir_fadd_imm(b, nir_i2f32(b, v), 0.5),
+                         nir_frcp(b, nir_channel(b, sz, d)));
+      else
+         c[d] = v;
+   }
+   nir_def *w = nir_channel(b, sz, 0);
+   if (fetch) {
+      x = nir_i2f32(b, nir_channel(b, coord, 0));
+   } else {
+      x = nir_ffloor(b, nir_fmul(b, nir_channel(b, coord, 0), w));
+      if (o->tex_r32_clamp >> u & 1)
+         x = nir_fmin(b, nir_fmax(b, x, nir_imm_float(b, 0.0)),
+                      nir_fadd_imm(b, w, -1.0));
+   }
+   /* (a repeat's x outside [0, W) is the hardware's s wrap at N * W) */
+   nir_def *rw = nir_frcp(b, nir_fmul_imm(b, w, n));
+   nir_def *x4 = nir_fmul_imm(b, x, n);
+   unsigned bits = tex->def.bit_size;
+   nir_def *res[4];
+   for (unsigned k = 0; k < 4; k++) {
+      if (k < n) {
+         c[0] = nir_fmul(b, nir_fadd_imm(b, x4, k + 0.5), rw);
+         res[k] = r32_read(b, tex, nir_vec(b, c, tex->coord_components), lod);
+      } else if (k < 3) {
+         res[k] = nir_imm_intN_t(b, 0, bits);
+      } else {
+         res[k] = nir_alu_type_get_base_type(tex->dest_type) == nir_type_float
+                     ? nir_imm_floatN_t(b, 1, bits)
+                     : nir_imm_intN_t(b, 1, bits);
+      }
+   }
+   nir_def_replace(&tex->def, nir_vec(b, res, tex->def.num_components));
+   return true;
+}
+
 bool
-sgx_lower_tex(nir_shader *s)
+sgx_lower_tex(nir_shader *s, const struct sgx_compile_options *opts)
 {
    nir_lower_tex_options to = {
       .lower_txd = true,
@@ -2091,9 +2247,174 @@ sgx_lower_tex(nir_shader *s)
    };
    bool progress = false;
    NIR_PASS(progress, s, nir_lower_tex, &to);
+   NIR_PASS(progress, s, nir_shader_tex_pass, r32_instr,
+            nir_metadata_control_flow, (void *)opts);
    NIR_PASS(progress, s, nir_shader_tex_pass, txf_to_txl_instr,
             nir_metadata_control_flow, NULL);
    return progress;
+}
+
+/* the w varying of SGX_NOPERSPECTIVE_W at a free slot, when the stage has a
+ * noperspective varying */
+static nir_variable *
+add_noperspective_w(nir_shader *s)
+{
+   bool vs = s->info.stage == MESA_SHADER_VERTEX;
+   if (s->info.stage != MESA_SHADER_FRAGMENT && !vs)
+      return NULL;
+   nir_variable_mode mode = vs ? nir_var_shader_out : nir_var_shader_in;
+   bool any = false;
+   uint64_t used = 0;
+   nir_foreach_variable_with_modes (var, s, mode) {
+      if (var->data.location < VARYING_SLOT_VAR0)
+         continue;
+      any |= var->data.interpolation == INTERP_MODE_NOPERSPECTIVE;
+      unsigned n = glsl_count_vec4_slots(var->type, false, false);
+      for (unsigned r = 0; r < n; r++)
+         used |= BITFIELD64_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 63);
+   }
+   if (!any || used == ~0ull)
+      return NULL;
+   nir_variable *w =
+      nir_variable_create(s, mode, glsl_float_type(), SGX_NOPERSPECTIVE_W);
+   w->data.location = VARYING_SLOT_VAR0 + ffsll(~used) - 1;
+   w->data.interpolation = INTERP_MODE_SMOOTH;
+   w->data.precision = GLSL_PRECISION_HIGH;
+   return w;
+}
+
+static bool
+noperspective_slot(nir_shader *s, nir_variable_mode mode, unsigned loc)
+{
+   nir_foreach_variable_with_modes (var, s, mode) {
+      unsigned n = glsl_count_vec4_slots(var->type, false, false);
+      if (var->data.interpolation == INTERP_MODE_NOPERSPECTIVE &&
+          var->data.location >= VARYING_SLOT_VAR0 &&
+          loc >= (unsigned)var->data.location && loc < var->data.location + n)
+         return true;
+   }
+   return false;
+}
+
+/* noperspective (SGX_NOPERSPECTIVE_W) on lowered I/O. The vertex shader's
+ * noperspective outputs and gl_Position.w go through temporaries, stored
+ * at the end of the program; the fragment shader's loads are divided by w */
+static bool
+lower_noperspective(nir_shader *s, nir_variable *wv)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(s);
+   nir_builder b = nir_builder_at(nir_before_impl(impl));
+   bool progress = false;
+   if (s->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_foreach_block (blk, impl) {
+         nir_foreach_instr_safe (instr, blk) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            bool interp = in->intrinsic == nir_intrinsic_load_interpolated_input;
+            if ((!interp && in->intrinsic != nir_intrinsic_load_input) ||
+                !nir_src_is_const(in->src[interp]))
+               continue;
+            unsigned loc = nir_intrinsic_io_semantics(in).location +
+                           nir_src_as_uint(in->src[interp]);
+            nir_intrinsic_instr *bary =
+               interp ? nir_src_as_intrinsic(in->src[0]) : NULL;
+            if (!noperspective_slot(s, nir_var_shader_in, loc) &&
+                !(bary && nir_intrinsic_has_interp_mode(bary) &&
+                  nir_intrinsic_interp_mode(bary) == INTERP_MODE_NOPERSPECTIVE))
+               continue;
+            b.cursor = nir_before_instr(instr);
+            nir_def *w =
+               interp ? nir_load_interpolated_input(
+                           &b, 1, 32, in->src[0].ssa, nir_imm_int(&b, 0),
+                           .base = wv->data.driver_location, .component = 0,
+                           .dest_type = nir_type_float32,
+                           .io_semantics.location = wv->data.location,
+                           .io_semantics.num_slots = 1)
+                      : nir_load_input(
+                           &b, 1, 32, nir_imm_int(&b, 0),
+                           .base = wv->data.driver_location, .component = 0,
+                           .dest_type = nir_type_float32,
+                           .io_semantics.location = wv->data.location,
+                           .io_semantics.num_slots = 1);
+            b.cursor = nir_after_instr(instr);
+            nir_def *r = nir_frcp(&b, w);
+            if (in->def.bit_size == 16)
+               r = nir_f2f16(&b, r);
+            nir_def *q = nir_fmul(&b, &in->def, r);
+            nir_def_rewrite_uses_after(&in->def, q);
+            progress = true;
+         }
+      }
+      return progress;
+   }
+
+   nir_variable *wt = nir_local_variable_create(impl, glsl_float_type(), "w");
+   nir_variable *tv[32] = {0};
+   nir_intrinsic_instr *tmpl[32] = {0};
+   unsigned mask[32] = {0};
+   nir_store_var(&b, wt, nir_imm_float(&b, 1.0), 1);
+   nir_foreach_block (blk, impl) {
+      nir_foreach_instr_safe (instr, blk) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+         if (in->intrinsic != nir_intrinsic_store_output ||
+             !nir_src_is_const(in->src[1]))
+            continue;
+         unsigned loc = nir_intrinsic_io_semantics(in).location +
+                        nir_src_as_uint(in->src[1]);
+         unsigned comp = nir_intrinsic_component(in);
+         unsigned wm = nir_intrinsic_write_mask(in) << comp;
+         nir_def *v = in->src[0].ssa;
+         b.cursor = nir_before_instr(instr);
+         if (loc == VARYING_SLOT_POS) {
+            if (wm & 8)
+               nir_store_var(&b, wt, nir_channel(&b, v, 3 - comp), 1);
+            continue;
+         }
+         if (loc < VARYING_SLOT_VAR0 || loc >= VARYING_SLOT_VAR0 + 32 ||
+             !noperspective_slot(s, nir_var_shader_out, loc) || v->bit_size != 32)
+            continue;
+         unsigned i = loc - VARYING_SLOT_VAR0;
+         if (!tv[i]) {
+            tv[i] = nir_local_variable_create(impl, glsl_vec4_type(), "np");
+            tmpl[i] = in;
+         }
+         nir_def *ch[4];
+         for (unsigned k = 0; k < 4; k++)
+            ch[k] = k >= comp && k - comp < v->num_components
+                       ? nir_channel(&b, v, k - comp)
+                       : nir_undef(&b, 1, 32);
+         nir_store_var(&b, tv[i], nir_vec(&b, ch, 4), wm);
+         mask[i] |= wm;
+         if (tmpl[i] != in)
+            nir_instr_remove(instr);
+         progress = true;
+      }
+   }
+   if (!progress)
+      return false;
+   b.cursor = nir_after_impl(impl);
+   nir_def *w = nir_load_var(&b, wt);
+   for (unsigned i = 0; i < 32; i++) {
+      if (!tv[i])
+         continue;
+      nir_io_semantics sem = nir_intrinsic_io_semantics(tmpl[i]);
+      sem.location = VARYING_SLOT_VAR0 + i;
+      sem.num_slots = 1;
+      nir_store_output(&b, nir_fmul(&b, nir_load_var(&b, tv[i]), w),
+                       nir_imm_int(&b, 0), .base = nir_intrinsic_base(tmpl[i]),
+                       .component = 0, .write_mask = mask[i],
+                       .src_type = nir_type_float32, .io_semantics = sem);
+      nir_instr_remove(&tmpl[i]->instr);
+   }
+   nir_store_output(&b, w, nir_imm_int(&b, 0), .base = wv->data.driver_location,
+                    .component = 0, .write_mask = 1,
+                    .src_type = nir_type_float32,
+                    .io_semantics.location = wv->data.location,
+                    .io_semantics.num_slots = 1);
+   return true;
 }
 
 void
@@ -2108,6 +2429,7 @@ sgx_lower(struct sgx_ctx *c)
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT &&
        (c->opts->fs_mediump || !sgx_debug(c, SGX_DBG_NO_MEDIUMP)))
       NIR_PASS(_, s, lower_mediump, c->opts->fs_mediump);
+   nir_variable *w = add_noperspective_w(s);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries,
             nir_shader_get_entrypoint(s), nir_var_shader_out);
@@ -2153,6 +2475,8 @@ sgx_lower(struct sgx_ctx *c)
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
             type_size_vec4, 0);
+   if (w && lower_noperspective(s, w))
+      NIR_PASS(_, s, nir_lower_vars_to_ssa);
    NIR_PASS(_, s, lower_uniforms, c);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT) {
       /* a mediump read of a texel: the texture's result in F16 (the

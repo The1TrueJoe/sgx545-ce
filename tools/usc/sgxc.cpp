@@ -289,7 +289,7 @@ main(int argc, char **argv)
       /* (a textureSize, its own or one this adds, is the driver's to lower:
        * sgxc refuses it) */
       if (so2.native_integers)
-         sgx_lower_tex(nir);
+         sgx_lower_tex(nir, &so2);
       struct sgx_shader out;
       memset(&out, 0, sizeof(out));
       int r = sgx_compile(nir, &so2, &vary[st], &out);
