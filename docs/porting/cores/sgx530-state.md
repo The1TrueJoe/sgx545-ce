@@ -88,6 +88,17 @@ this layer.
 
 ## Open questions
 
-- No AM335x board; the vendor capture runs on the OMAP3630 board (a separate analysis-side session,
-  which also handles the closed rev-125 user-space run).
-- Isolation before client work is a separate hard gate (fact-sheet **gap 19**), independent of this.
+- **The three task-context questions now have candidate answers from the vendor stack**
+  ([sgx530-vendor-setup.md](sgx530-vendor-setup.md), all U): the vendor's launch (DOUTU) differs
+  from ours in all three words (word 1 = 0x04000000, word 2 = 1, word 0 bit 21), its PDS
+  programs use an 8-word data interleave (which alone explains gate 2), it maps every control
+  structure with `EDM_PROTECT`, and the host side sets up no register file at all. The one-change
+  board test is in that page's §9: the 8-word layout plus the vendor launch words, read out with
+  the `aluwr` (temporary retire) and `stout` (store commit under `EDM_PROTECT`) probes. That test
+  should settle whether writes retire and stores commit without a full vendor capture.
+- A vendor-stack capture (a 5.4/6.0-class kernel with the vendor user space, RAM-booted on the
+  OMAP3630 board) is now a fallback, needed only if the board test leaves the write-retire or
+  store question open — not the critical path it was.
+- Isolation before client work is a separate hard gate (fact-sheet **gap 19**), independent of
+  this. If the vendor launch words make stores commit with `EDM_PROTECT` on, the gap-19 stopgap
+  (mapping the arena without the flag) can be dropped.
