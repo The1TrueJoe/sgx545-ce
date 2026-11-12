@@ -1587,6 +1587,34 @@ unchanged; only the driver's `pds0` data length changes. A fault at 0x0e850000 w
 the real "attributes are visible" result; another code-base-0 fault would mean the DOUTU is
 still malformed.
 
+## After the fortieth attempt (rerun): PDS-written attributes work (C)
+
+Attempt 40 rerun (log 84a3c5a0) gave a real PA0 result:
+- A DOUTA variant at 10:17 ran its DOUTA (value 0x0e850000, ctrl 0 → PA0) before its broken
+  DOUTU. ~9 minutes and several resets/unload/suspend/reload later, variant 0 (normal `pds0`,
+  **no** DOUTA) read `ld.a.d r3, pa0, #0` = **0x0e850000** — the value the earlier DOUTA
+  wrote. (Variant 0 had earlier read PA0's leftover 0x0f2d9000, before any DOUTA.)
+- The two-row DOUTA program with 0xa70 = 6 and 8 both still faulted at code base 0: **0xa70
+  is not the data length** (that guess is unsupported); the two-row program's DOUTU word
+  still comes out 0.
+
+**Confirmed (C):** the PDS's DOUTA writes PA0; the task's load through PA0 reads what the PDS
+wrote; PA0 persisted across the recovery resets, the module unload, runtime suspend and the
+reload. So **PDS-written primary attributes are visible to the task, where task-written
+temporaries are not** — the first register file that works, and the first supporting fact for
+the pointers-in-attributes direction. (It also fits the "stable leftovers": the register-file
+contents persist across our resets and power-gating.)
+
+**Open:** why the two-row DOUTA program's DOUTU word comes out 0 — likely the second data
+row's layout under the SGX530's PDS interleave. A one-row variant (DOUTA from D0(0)/D0(1),
+the DOUTU word in D1(0)/D1(1), no second row) would give a clean same-run confirmation.
+
+**The design question (for the proposal):** the attribute result is encouraging, but the
+microkernel needs **task-writable scratch** for its logic (the heartbeat `imae r3, r3, #1`,
+dispatch, address arithmetic), not just readable pointers. Attributes are PDS-written.
+Whether the microkernel can run without a task-writable register file, or whether another
+file (outputs `o`) is task-writable, is the next question — see the restructure proposal.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
