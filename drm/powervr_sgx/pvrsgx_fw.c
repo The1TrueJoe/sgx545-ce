@@ -884,19 +884,20 @@ struct sweep_variant {
 };
 
 /*
- * Part 2 now writes code base 15 in the SGX530's 256-byte units (stage 1, log
- * 2026-11-12-0300), so the baseline should start the microkernel and end the
- * sweep. If it doesn't: the field at 0x1b0000 (fetch 0x0b000000) to pin the
- * shift, and at kernel code >> 8 + 1, one unit in.
+ * No register write reaches the register a load then reads (stage 1, logs
+ * 2026-11-12-0353 to -0357): does the task get no temporaries because the
+ * SGX530 reads their count elsewhere in DOUTU word 0? The normal word, then
+ * the bits that don't move the code fetch (log 2026-11-12-0226) set in
+ * groups on top of it: b8-15, b19-23, b28-31.
  */
-#define CB15(v)	{ .flags = PVRSGX_SWEEP_CB15, .cb15 = (v) }
+#define DOUTU_OR(v)	{ .flags = PVRSGX_SWEEP_DOUTU_OR, .doutu0 = (v) }
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	CB15(0x1b0000), CB15((0x0ec00000 >> 8) + 1),
+	DOUTU_OR(0x0000ff00), DOUTU_OR(0x00f80000), DOUTU_OR(0xf0000000),
 };
 
-#undef CB15
+#undef DOUTU_OR
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
 static int alias_map(struct pvrsgx_device *sdev)
@@ -942,7 +943,8 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 
 #define EXEC0_FLAGS	(PVRSGX_SWEEP_EXEC0_ENTRY | PVRSGX_SWEEP_EXEC0_HALT | \
 			 PVRSGX_SWEEP_EXEC0_BRA)
-#define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15)
+#define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15 | \
+				 PVRSGX_SWEEP_DOUTU_OR)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1030,6 +1032,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " exec base: code page 0");
 	if (sv->flags & PVRSGX_SWEEP_CB15)
 		n += scnprintf(buf + n, len - n, " code base 15 0x%x", sv->cb15);
+	if (sv->flags & PVRSGX_SWEEP_DOUTU_OR)
+		n += scnprintf(buf + n, len - n, " DOUTU w0 |= 0x%x", sv->doutu0);
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)

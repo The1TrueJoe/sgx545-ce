@@ -160,6 +160,9 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		doutu = (doutu & PDS_DOUTU_TEMPS) | BIT(sdev->sweep_doutu_bit - 1);
 	if (b == PVRSGX_FW_PDS0 && sdev->sweep_doutu_set)
 		doutu = (doutu & PDS_DOUTU_TEMPS) | sdev->sweep_doutu0;
+	/* The sweep's extra bits on the normal word, e.g. a temporaries field. */
+	if (sw & PVRSGX_SWEEP_DOUTU_OR)
+		doutu |= sdev->sweep_doutu0;
 
 	if (sw & PVRSGX_SWEEP_ALL_SLOTS) {
 		/* The DOUTU gets (doutu, doutu, doutu) under any data layout. */
