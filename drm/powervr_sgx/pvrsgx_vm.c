@@ -478,7 +478,6 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 }
 
 #define PVRSGX_MAX_BIND_OPS	256
-#define PVRSGX_MAX_BIND_SYNCS	64
 
 /* One op of a VM_BIND and what it needs, all gathered before anything changes. */
 struct bind_op {
@@ -676,95 +675,19 @@ static void bind_apply(struct pvrsgx_vm *vm, struct bind_op *ops, u32 n, struct 
 }
 
 /* Wait, interruptibly, for every wait op; find every signal op's syncobj. */
-static int bind_syncs(struct drm_file *file, const struct drm_powervr_sgx_obj_array *arr,
-		      struct pvrsgx_signal **signals, u32 *nsignals)
-{
-	struct drm_powervr_sgx_sync_op *ops;
-	int err = 0;
-
-	ops = pvrsgx_obj_array_get(arr, sizeof(*ops), PVRSGX_MAX_BIND_SYNCS);
-	if (IS_ERR_OR_NULL(ops))
-		return PTR_ERR_OR_ZERO(ops);
-	*signals = kvcalloc(arr->count, sizeof(**signals), GFP_KERNEL);
-	if (!*signals) {
-		err = -ENOMEM;
-		goto out;
-	}
-	for (u32 i = 0; i < arr->count && !err; i++) {
-		u32 type = ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_MASK;
-		bool timeline = type == DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ;
-		struct pvrsgx_signal *sig = &(*signals)[*nsignals];
-		struct dma_fence *fence;
-
-		if ((ops[i].flags & ~PVRSGX_SYNC_OP_FLAGS_MASK) ||
-		    (type != DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ && !timeline) ||
-		    (!timeline && ops[i].value)) {
-			err = -EINVAL;
-			break;
-		}
-		if (!(ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL)) {
-			err = drm_syncobj_find_fence(file, ops[i].handle, ops[i].value, 0, &fence);
-			if (!err) {
-				long ret = dma_fence_wait(fence, true);
-
-				err = ret < 0 ? ret : 0;
-				dma_fence_put(fence);
-			}
-			continue;
-		}
-		sig->syncobj = drm_syncobj_find(file, ops[i].handle);
-		if (!sig->syncobj) {
-			err = -ENOENT;
-			break;
-		}
-		sig->point = ops[i].value;
-		if (timeline) {
-			sig->chain = dma_fence_chain_alloc();
-			if (!sig->chain)
-				err = -ENOMEM;
-		}
-		(*nsignals)++;
-	}
-out:
-	kvfree(ops);
-	return err;
-}
-
-static void bind_signals_fini(struct pvrsgx_signal *signals, u32 n, bool fire)
-{
-	for (u32 i = 0; i < n; i++) {
-		struct pvrsgx_signal *sig = &signals[i];
-
-		if (fire) {
-			struct dma_fence *stub = dma_fence_get_stub();
-
-			if (sig->chain) {
-				drm_syncobj_add_point(sig->syncobj, sig->chain, stub, sig->point);
-				sig->chain = NULL;
-			} else {
-				drm_syncobj_replace_fence(sig->syncobj, stub);
-			}
-			dma_fence_put(stub);
-		}
-		dma_fence_chain_free(sig->chain);
-		drm_syncobj_put(sig->syncobj);
-	}
-	kvfree(signals);
-}
-
 int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_bind_args *args = data;
-	struct pvrsgx_signal *signals = NULL;
 	struct pvrsgx_vm_free *f = NULL;
 	struct bind_op *ops = NULL;
 	struct drm_powervr_sgx_vm_bind_op *in;
 	struct pvrsgx_vm *vm;
 	struct drm_exec exec;
-	u32 n = args->ops.count, nsignals = 0;
+	u32 n = args->ops.count;
 	int err;
 
-	if (args->flags != DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC || !n)
+	/* A synchronous bind takes no fences (drm-vm-bind-async.rst). */
+	if (args->flags != DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC || !n || args->sync_ops.count)
 		return -EINVAL;
 
 	vm = pvrsgx_vm_lookup(to_pvrsgx_file(file), args->vm_context_handle);
@@ -794,9 +717,6 @@ int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *fi
 			}
 		}
 	}
-	err = bind_syncs(file, &args->sync_ops, &signals, &nsignals);
-	if (err)
-		goto out;
 
 	mutex_lock(&vm->lock);
 	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES, 0);
@@ -835,7 +755,6 @@ int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *fi
 	}
 
 out:
-	bind_signals_fini(signals, nsignals, !err);
 	if (ops) {
 		for (u32 i = 0; i < n; i++) {
 			kfree(ops[i].va[0]);

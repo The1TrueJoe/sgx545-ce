@@ -8,9 +8,8 @@
 
 #define PVRSGX_DRIVER_NAME	"powervr_sgx"
 #define PVRSGX_DRIVER_DESC	"PowerVR SGX5xx"
-#define PVRSGX_DRIVER_MAJOR	0
-/* The uAPI revision: 3, per-command structs (docs/uapi/rev3-commands.md). */
-#define PVRSGX_DRIVER_MINOR	3
+#define PVRSGX_DRIVER_MAJOR	1
+#define PVRSGX_DRIVER_MINOR	0
 
 #define PVRSGX_BO_FLAGS_MASK		(DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS | \
 					 DRM_POWERVR_SGX_BO_CODE)

@@ -37,10 +37,8 @@ extern "C" {
  *    and carry core-specific fields in extensions: see "PowerVR SGX client
  *    commands" below.
  *
- * The DRM driver's minor version is the uAPI revision: 3. Revisions 1 and 2
- * passed command streams to SUBMIT_JOBS at 0x0c and 0x0b; revision 3's is 0x0e,
- * a number neither used, so an older binary's first submit fails with -EINVAL.
- * (Downstream only: the upstream series starts at 1.0 with dense ioctl numbers.)
+ * The DRM driver's version is 1.0. Additions to the interface raise the minor
+ * version; nothing is removed or renumbered.
  */
 
 /**
@@ -97,10 +95,8 @@ struct drm_powervr_sgx_obj_array {
 #define DRM_IOCTL_POWERVR_SGX_GET_CONTEXT_STATE PVR_SGX_IOCTL(0x08, DRM_IOWR, get_context_state)
 #define DRM_IOCTL_POWERVR_SGX_CREATE_RT_DATASET PVR_SGX_IOCTL(0x09, DRM_IOWR, create_rt_dataset)
 #define DRM_IOCTL_POWERVR_SGX_DESTROY_RT_DATASET PVR_SGX_IOCTL(0x0a, DRM_IOW, destroy_rt_dataset)
-/* 0x0b was SUBMIT_JOBS with command streams (uAPI revision 2): retired, never reused. */
-#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE PVR_SGX_IOCTL(0x0c, DRM_IOWR, upload_code)
-/* 0x0d was UPLOAD_CODE in uAPI revision 1: never reused. */
-#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0e, DRM_IOWR, submit_jobs)
+#define DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE PVR_SGX_IOCTL(0x0b, DRM_IOWR, upload_code)
+#define DRM_IOCTL_POWERVR_SGX_SUBMIT_JOBS PVR_SGX_IOCTL(0x0c, DRM_IOWR, submit_jobs)
 
 /**
  * DOC: PowerVR SGX IOCTL DEV_QUERY interface
@@ -195,7 +191,8 @@ struct drm_powervr_sgx_dev_query_limits {
 /**
  * struct drm_powervr_sgx_dev_query_quirks - Hardware fixes userspace has to know
  *
- * Fetched with %DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET.
+ * Fetched with %DRM_POWERVR_SGX_DEV_QUERY_QUIRKS_GET. A quirk, once reported
+ * for a GPU, is never removed for it.
  */
 struct drm_powervr_sgx_dev_query_quirks {
 	/**
@@ -554,9 +551,9 @@ struct drm_powervr_sgx_vm_bind_op {
  *
  * .. c:macro:: DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC
  *
- *    The ioctl waits for @sync_ops' waits, then binds, and returns when the
- *    binds are done; @sync_ops' signals get an already signalled fence.
- *    Required: a bind without it fails with -EINVAL.
+ *    The ioctl binds and returns when the binds are done. A synchronous bind
+ *    takes no fences: @sync_ops must be empty. Required: a bind without it
+ *    fails with -EINVAL.
  */
 #define DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC _BITUL(0)
 
@@ -578,7 +575,11 @@ struct drm_powervr_sgx_ioctl_vm_bind_args {
 	/** @ops: [IN] Array of &struct drm_powervr_sgx_vm_bind_op, at least one. */
 	struct drm_powervr_sgx_obj_array ops;
 
-	/** @sync_ops: [IN] Array of &struct drm_powervr_sgx_sync_op. May be empty. */
+	/**
+	 * @sync_ops: [IN] Must be empty (count 0) with
+	 * %DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC, the only mode. Reserved for an
+	 * asynchronous mode's &struct drm_powervr_sgx_sync_op array.
+	 */
 	struct drm_powervr_sgx_obj_array sync_ops;
 };
 
