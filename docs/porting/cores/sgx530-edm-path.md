@@ -215,3 +215,31 @@ because the microkernel cannot write it:
 - [sgx530-gap13-registers.md](sgx530-gap13-registers.md) — the register-offset
   confirmation order.
 - `docs/UKERNEL.md` §3/§5/§6 — the handlers and register sequences the EDM task runs.
+
+## 6a. Which handlers actually need reduction (from reading the code)
+
+Not all handlers need the stateless reduction — most of the kick path is
+command-driven and survives the marker drops. The reduction target is the
+completion rendezvous.
+
+- **`do_ta` / `ta_finished` / `do_3d` — work AS-IS for the kicks (U; confirm on the
+  board).** `ta_finished` starts the 3D on the TA command's `bLastInScene` flag
+  (cmd+0x04 bit 1), not a microkernel marker — `test.and.ne p0, r2, #2; (p0) ba
+  do_3d`. `do_ta`/`do_3d` program the hardware with `str` (C). Their marker *writes*
+  (TA-in-flight, DPM slot, TD_ENTRY) drop, but for one job at a time that is the
+  correct "always fresh" state, so the dropped markers do not change the kick. So the
+  existing image should kick TA+3D on the 530 with no USSE change; the board confirms.
+- **The completion rendezvous DOUBLE-COMPLETES on the 530 (C from the code).** `do_3d`
+  arms `WAIT_3D = WAIT_FREE = 1` with `st.a.d` (drops), so both stay 0. `pixel_done`
+  clears `WAIT_3D` and reads `WAIT_FREE` (0 → "free already done" → complete);
+  `free_done` clears `WAIT_FREE` and reads `WAIT_3D` (0 → "writeout done" → complete).
+  Both halves complete → double `dma_fence` signal + double teardown. **This is the
+  handler to reduce.**
+
+**The completion reduction (replaces the "reduce do_ta" plan):** take completion on
+the host. The reduced `pixel_done` (PIXELBE_END_RENDER = render done) acks its event
+and raises SW_EVENT (`str` EUR_CR_EVENT_STATUS = 0x4000, commits); `free_done`
+(DPM_3D_MEM_FREE = pages freed) just acks. Neither runs the rendezvous or
+`render_complete`. The host's SW_EVENT IRQ signals the oldest job's `dma_fence` and
+advances the CCB read offset — exactly once per render. This is completion-coupling
+option (a), sized to one SW_EVENT per render so there is no double-complete.
