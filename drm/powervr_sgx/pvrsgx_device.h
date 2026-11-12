@@ -241,6 +241,8 @@ struct pvrsgx_device {
 	u32 sweep_cb15;
 	/** @sweep_regset: The sweep's SGX545 part-2 writes (pvrsgx_fw.c), a bit each. */
 	u16 sweep_regset;
+	/** @sweep_cb15_dm: The sweep's code base 15 data master, + 1; 0 none. */
+	u8 sweep_cb15_dm;
 	/** @sweep_saved: Registers the sweep wrote, with their values before. */
 	struct pvrsgx_core_init_reg sweep_saved[16];
 	/** @sweep_nsaved: Entries in @sweep_saved. */
