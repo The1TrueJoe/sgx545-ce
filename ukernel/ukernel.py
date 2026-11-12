@@ -452,6 +452,27 @@ def build(a):
     # handler is reached from here by a branch (one task), so only this entry
     # has the phase/end wrapper.
     a.label("event")
+    if USSE_PROBE:
+        # bring-up only (cores/sgx530_usse.py): the smallest event task that runs
+        # one of each early instruction and self-loops, to find which first derails
+        # on real hardware. No phas.i (V0 showed limm runs without it). Read back:
+        # ctlblk 0x28 = A -> st.a.d runs; EVENT_TIMER = 0xa5a -> str runs; ctlblk
+        # 0x18 = B -> ran past str; a self-loop with no fault -> the USSE executes
+        a.patch(17, "ctlblk")
+        a.i(f"limm r0, #{USSE_MARK_A}")
+        a.i(f"st.a.d r17, #{WAIT_TIMEOUT_ID}, r0 [moe]")   # 0x28, before str
+        a.i("idf")
+        a.i("wdf")
+        a.i(f"limm r0, #{DIAG_TIMER}")
+        a.i(f"str #{CR_EVENT_TIMER // 4}, r0")             # EVENT_TIMER via str
+        a.i(f"limm r0, #{USSE_MARK_B}")
+        a.i(f"st.a.d r17, #{SC_VERSION}, r0 [moe]")        # 0x18, after str
+        a.i("idf")
+        a.i("wdf")
+        a.label("usse_loop")
+        a.i("ba usse_loop")
+        a.end()
+        return a
     if DIAG_ENTRY is not None:
         # bring-up only (cores/sgx530_diag.py): markers before phas.i. A register
         # store, then memory: two stores, a ld/add/st, then the normal entry (+1 again)

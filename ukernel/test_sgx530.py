@@ -47,7 +47,8 @@ def load(core="sgx530"):
     man = json.load(open(manp))
     code = bytearray(open(binp, "rb").read())
     patch_limm(code, man["patches"]["ctlblk"], CTLBLK)
-    patch_limm(code, man["patches"]["pdtable"], PDTABLE)
+    if "pdtable" in man["patches"]:                   # absent in the minimal USSE probe
+        patch_limm(code, man["patches"]["pdtable"], PDTABLE)
     return bytes(code), man
 
 
@@ -198,6 +199,31 @@ def test_probes():
     assert len(set(seen)) == len(P.PROBES) and 7 not in P.PROBES
     print(f"  probes: {len(P.PROBES)} pages from {min(seen):#x}, EVENT_TIMER "
           f"{P.PROBE_TIMER:#x}+k each, image {man['bytes']} B  OK")
+
+
+def test_usse_probe():
+    """stage 1's USSE probe (cores/sgx530_usse.py): the event task is st.a.d A,
+    str EVENT_TIMER, st.a.d B, then a self-loop, so a hardware read-back names
+    the first instruction class that derails"""
+    from cores import sgx530_usse as U
+    code, man = load("sgx530_usse")
+    assert man["entries"]["event"] == 0 and "usse_loop" in man["entries"]
+    u, mem, regs = machine(code, initialised=False)
+    u.trace = []
+    # the self-loop runs forever offline; the emulator raises when it never ends
+    try:
+        u.task(0, max_steps=200)
+    except Exception:
+        pass
+    aw = CTLBLK + 4 * C.WAIT_TIMEOUT_ID
+    bw = CTLBLK + 4 * C.SC_VERSION
+    assert mem.rd(aw) == U.USSE_MARK_A, "st.a.d A must write ctlblk 0x28"
+    assert regs.v[C.CR_EVENT_TIMER] == U.DIAG_TIMER, "str must write EVENT_TIMER"
+    assert mem.rd(bw) == U.USSE_MARK_B, "st.a.d B must write ctlblk 0x18"
+    loop = man["entries"]["usse_loop"] // 8
+    assert any(pc == loop for pc, t in u.trace), "execution must reach the self-loop"
+    print(f"  USSE probe: st.a.d A {U.USSE_MARK_A:#x}, str EVENT_TIMER {U.DIAG_TIMER:#x}, "
+          f"st.a.d B {U.USSE_MARK_B:#x}, self-loop at {man['entries']['usse_loop']:#x}  OK")
 
 
 def test_bases():
@@ -393,6 +419,7 @@ def main():
     test_diag_entry("sgx530_diag_nophas")
     test_probes()
     test_bases()
+    test_usse_probe()
     test_getmiscinfo(code, man)
     test_restore_pd(code, man)
     test_bounded_wait(code, man)
