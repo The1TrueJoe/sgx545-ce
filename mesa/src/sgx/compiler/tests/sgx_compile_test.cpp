@@ -68,6 +68,7 @@ class sgx_compile_test : public ::testing::Test {
       opts.driver_consts = true;
       opts.native_integers = native;
       opts.ubo_base_k = ubo_base_k;
+      opts.rt_packed = rt_packed;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
       compiled = true;
@@ -111,6 +112,7 @@ class sgx_compile_test : public ::testing::Test {
    uint32_t tex_f32 = 0;
    bool native = false;
    unsigned ubo_base_k = 0;
+   uint8_t rt_packed = 0;
 
    /* a vertex shader with ivec4 attributes a, b (pa0-3, pa4-7) storing
     * fn(a, b) to a flat ivec4 varying */
@@ -1945,6 +1947,61 @@ TEST_F(sgx_compile_test, vertex_texture_fetch)
    sgx_disasm_one(out.samples[0].smp, NULL, text, sizeof(text));
    EXPECT_NE(std::string(text).find(".lod"), std::string::npos) << text;
    EXPECT_NE(std::string(text).find("c48"), std::string::npos) << text;
+}
+
+/* a render target word the driver packs (rt_packed): moved to the colour
+ * register as it is, and the tile's word read from o0 */
+TEST_F(sgx_compile_test, fragment_packed_render_target)
+{
+   native = true;
+   rt_packed = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u = var(nir_var_uniform, glsl_uint_type(), "u_v", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_uint_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_def *tile = nir_load_output(&b, 1, 32, nir_imm_int(&b, 0),
+                                   .io_semantics.location = FRAG_RESULT_DATA0);
+   nir_store_var(&b, col,
+                 nir_ior(&b, nir_iand_imm(&b, tile, 0xff000000),
+                         nir_load_var(&b, u)),
+                 0x1);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.colour_pa, 0u);
+   EXPECT_FALSE(has("pck.u8")) << disasm();
+   EXPECT_TRUE(has(", o0, ")) << disasm();
+}
+
+/* tex_f32 on an integer sampler (R32UI): the missing w is an integer 1 */
+TEST_F(sgx_compile_test, fragment_r32ui_texel_integer_one)
+{
+   native = true;
+   rt_packed = 1;
+   tex_f32 = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_uint_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_uint32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_ixor(&b, nir_channel(&b, t, 0), nir_channel(&b, t, 3)),
+                 0x1);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("3f80")) << disasm();
+   EXPECT_FALSE(has(".u8")) << disasm();
+   EXPECT_TRUE(has(", #1 ")) << disasm();
 }
 
 } /* namespace */
