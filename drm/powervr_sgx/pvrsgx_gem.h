@@ -6,6 +6,7 @@
 
 #include <drm/drm_gem_shmem_helper.h>
 
+#include <linux/atomic.h>
 #include <linux/iosys-map.h>
 #include <linux/types.h>
 
@@ -23,6 +24,12 @@ struct pvrsgx_bo {
 	 */
 	bool code_abs;
 	s64 code_place;
+	/**
+	 * @code_unmapping: A code object's mappings that are unmapped but that the
+	 * GPU may still fetch from: the jobs before the unmap or the BIF invalidate
+	 * after it are not done. UPLOAD_CODE treats them as live mappings.
+	 */
+	atomic_t code_unmapping;
 	/** @import_map: An import's CPU mapping, from its exporter, for the cache flushes. */
 	struct iosys_map import_map;
 };

@@ -151,7 +151,9 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 	err = dma_resv_lock_interruptible(obj->resv, NULL);
 	if (err)
 		goto out_buf;
-	if (!list_empty(&obj->gpuva.list) && args->offset < bo->code_end) {
+	/* An unmapped mapping counts until its jobs and the BIF invalidate are done. */
+	if ((!list_empty(&obj->gpuva.list) || atomic_read(&bo->code_unmapping)) &&
+	    args->offset < bo->code_end) {
 		err = -EBUSY;
 		goto out_unlock;
 	}
