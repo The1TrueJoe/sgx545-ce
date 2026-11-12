@@ -564,7 +564,13 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
-	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
+	/*
+	 * Event data 0 is where the event program's code starts. The SGX530 counts
+	 * dwords (stage 1, log 2026-11-12-0002: the PDS starts at program + 0x0a6c),
+	 * so it is the 4-dword data segment; the SGX545's 1 is that in 16-byte rows (G).
+	 */
+	u32 data0 = fam->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS ? 1 : 4;
+	u32 data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
 
 	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
@@ -792,30 +798,39 @@ struct sweep_variant {
 	u8 dest, cc, data0, data1;
 };
 
-#define DATA(a, b)	{ .data0 = (a) + 1, .data1 = (b) + 1 }
+#define D1(b)		{ .data1 = (b) + 1 }
+#define F(f)		{ .flags = (f) }
 
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	DATA(0, 0), DATA(0, 1), DATA(0, 2), DATA(0, 4), DATA(0, 6), DATA(0, 8),
-	DATA(1, 0), DATA(1, 1), DATA(1, 2), DATA(1, 4), DATA(1, 8),
-	DATA(2, 0), DATA(2, 1), DATA(2, 2), DATA(2, 4), DATA(2, 6), DATA(2, 8),
-	DATA(4, 0), DATA(4, 1), DATA(4, 2), DATA(4, 4), DATA(4, 6), DATA(4, 8),
-	{ .flags = PVRSGX_SWEEP_ENABLE, .enable = 0x7fffffff },
-	{ .flags = PVRSGX_SWEEP_ENABLE, .enable = 0 },
+	D1(0), D1(1), D1(2), D1(3), D1(4), D1(8), D1(16),
+	{ .dest = 4 + 1 }, { .dest = 6 + 1 }, { .dest = 7 + 1 }, { .dest = 1 + 1 },
+	{ .dest = 0 + 1 }, { .dest = 2 + 1 }, { .cc = 3 + 1 }, { .cc = 0 + 1 },
+	F(PVRSGX_SWEEP_DOUTU_W1_0), F(PVRSGX_SWEEP_INTERLEAVE), F(PVRSGX_SWEEP_ALL_SLOTS),
+	F(PVRSGX_SWEEP_TEMPS4), F(PVRSGX_SWEEP_TEMPS0), F(PVRSGX_SWEEP_DM2),
+	F(PVRSGX_SWEEP_DOUTU_W1_0 | PVRSGX_SWEEP_DM2),
+	F(PVRSGX_SWEEP_ALL_SLOTS | PVRSGX_SWEEP_TEMPS4),
 };
+
+#undef D1
+#undef F
 
 #undef DATA
 
 static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
-	if (sv->data0 || sv->data1)
+	if (sv->data0)
 		snprintf(buf, len, "event data %d, %d", sv->data0 - 1, sv->data1 - 1);
+	else if (sv->data1)
+		snprintf(buf, len, "event data 1 = %d", sv->data1 - 1);
 	else if (sv->flags & PVRSGX_SWEEP_ENABLE)
 		snprintf(buf, len, "event PDS enable 0x%08x", sv->enable);
 	else if (sv->dest || sv->cc)
 		snprintf(buf, len, "MOVS dest %d cc %d", sv->dest - 1, sv->cc - 1);
+	else if (sv->flags)
+		snprintf(buf, len, "flags 0x%x", sv->flags);
 	else
-		snprintf(buf, len, "baseline (data 1, 6)");
+		snprintf(buf, len, "baseline");
 }
 
 /*
