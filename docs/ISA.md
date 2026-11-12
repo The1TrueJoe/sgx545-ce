@@ -2521,23 +2521,26 @@ The image uses no float, F16, C10, `efo`, `fdual`, `smp`, `pck`, `setfc` or MOE 
 form. Those are compiler questions for the SGX530 ("What needs the ISA first" in
 porting/cores/sgx530.md).
 
-### limm: the value field differs (C, hardware)
+### ld.a.d reads its source operand differently (C, hardware)
 
-On hardware (stage-1 attempts 29-30, docs/porting/cores/sgx530-stage1.md), the SGX530
-decodes `limm`'s immediate differently from the SGX545. The SGX545 packs the value as
-`l0-20` (bits 0-20), `h4-8` (bits 21-25), `h12-17` (bits 26-31) ("limm", the class table
-above). On the SGX530:
-- bits 0-20 and bits 26-31 load correctly (**C**: `limm r5, #0x0f004000` loaded as
-  `0x0c004000` — bits 0-20 = 0x4000 and bits 26-31 = 0x3 both present);
-- **bits 21-25 are read from a different place** than `h4-8`, which the SGX530 reads as 0
-  (the 0x18 in that field of 0x0f004000 was dropped, a 0x03000000 difference).
+**RETRACTED: the earlier `limm` claim here was wrong.** Attempt 29 read a `limm` value
+difference, but attempt 30 (docs/porting/cores/sgx530-stage1.md) overturned it: the seven
+`sgx530_limm_b21..b27` probes, each `limm`ing a *different* single bit into r5 and then
+`ld.a.d r3, r5, #0`, **all faulted at the same 0x0c004000** — independent of the `limm`
+value. So `limm` is not the problem; the fault address does not depend on the loaded value
+at all.
 
-This breaks every `limm` with a value above 2 MiB, so it breaks the microkernel's
-address loads (the patched control-block pointer among them) as soon as the USSE runs.
-The `sgx530_limm_b21..b27` probes sweep bits 21-27 one at a time to find the SGX530's
-position for each; attempt 30 fills in the exact `h`-bit layout. Until then the position of
-bits 21-25 is **U**. Once known, `sgx.xml` gets an SGX530 `limm` form with the moved field,
-and the driver's `fw_limm` (which patches limm sites) matches it.
+What it depends on (C, hardware) is **which register `ld.a.d` names**:
+- `ld.a.d r3, r17, #0` → 0x0fd79000 (attempts 27-29, stable);
+- `ld.a.d r3, r5, #0` → 0x0c004000 (attempts 29-30), whatever value is in r5.
+
+So the SGX530 does not dereference the register's contents for `ld.a.d`'s base — it derives
+the address from the source-operand *field* (the register number), by a register-bank or
+field-position difference, or by taking the operand as an immediate/address. The offset
+(`#0` vs `#42`) doesn't matter either (attempt 29). The SGX545 loads from `[register
+contents + offset]`; the SGX530 does something else. The exact decode is **U**; attempt 31
+sweeps the register number to read it. Nothing about `limm` moves for `sgx.xml` on this
+evidence.
 
 ### What sgx.xml can take, and when
 
