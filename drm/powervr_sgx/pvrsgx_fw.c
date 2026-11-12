@@ -23,6 +23,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/seq_buf.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -218,6 +219,7 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 		entry[f->entries[i][0]] = f->entries[i][1];
 	for (u32 p = 0; p < ARRAY_SIZE(entry); p++)
 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
+	sdev->fw.event_entry = entry[0];
 
 	for (u32 i = 0; i < f->n_patches && !err; i++) {
 		u32 v = f->patches[i][1];
@@ -370,7 +372,9 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 #define PDTABLE_OFFSET	0xf000
 #define PDTABLE_SLOTS	(PAGE_SIZE / sizeof(u32))
 
-static_assert(CODE_ARENA_SIZE <= PDTABLE_OFFSET && PDTABLE_OFFSET + PAGE_SIZE <= 0x10000);
+/* The PD table sits past the code arena, inside the kernel code heap's first 64 KiB. */
+static_assert(PDTABLE_OFFSET >= CODE_ARENA_SIZE);
+static_assert(SZ_64K - PAGE_SIZE >= PDTABLE_OFFSET);
 
 static int pdtable_init(struct pvrsgx_device *sdev)
 {
@@ -405,6 +409,7 @@ int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd)
 void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
 {
 	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	/* The slot names the firmware's directory before another VM can take it. */
 	wmb();
 	ida_free(&sdev->fw.pd_slots, slot);
 }
@@ -486,10 +491,25 @@ static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
  * Where the event PDS registers are a guess, the program address must read
  * back before anything kicks the microkernel; if not, no kick.
  */
+/*
+ * The event program's address as the event PDS base register takes it. A core
+ * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there (stage 1, log
+ * 2026-11-11-2144), the 64 MiB the GPL DDK lets PDS code lie above
+ * PDS_EXEC_BASE: taken as an offset from it (G).
+ */
+static u32 event_pds_addr(struct pvrsgx_device *sdev)
+{
+	u32 a = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu;
+
+	if (!(sdev->family->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE))
+		a -= pvrsgx_heaps(sdev)->pds_pixel.base;
+	return a;
+}
+
 static int check_event_pds(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
-	u32 want = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu, got;
+	u32 want = event_pds_addr(sdev), got;
 
 	if (!sdev->family->event_pds_guessed)
 		return 0;
@@ -511,7 +531,14 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
+	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
+
+	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
+	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)
+		data0 = 2;
+	if (sdev->sweep_flags & PVRSGX_SWEEP_DM2)
+		uk_dm = 2;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -525,14 +552,13 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 		       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
 		       USE_CODE_BASE_ADDR_SHIFT);
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
-	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) |
-	       USE_CODE_BASE_DM_UKERNEL << dm);
+	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
 	sgx_wr_opt(sdev, cr->vendor_b30, 0x100);
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
-	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
-	sgx_wr(sdev, cr->event_pds_data0, 1);
-	sgx_wr(sdev, cr->event_pds_data1, 6);
+	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
+	sgx_wr(sdev, cr->event_pds_data0, data0);
+	sgx_wr(sdev, cr->event_pds_data1, data1);
 	/* Before the events are enabled, so a wrong guess starts nothing. */
 	err = check_event_pds(sdev);
 	if (err)
@@ -569,6 +595,9 @@ static void bringup_diag(struct pvrsgx_device *sdev, const char *when)
 		 when, sgx_rd(sdev, cr->clkgatestatus), sgx_rd(sdev, SGX_CR_EVENT_STATUS),
 		 sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT), sgx_rd(sdev, SGX_CR_BIF_INT_STAT),
 		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+	if (cr->pds_pc_base)
+		drm_info(&sdev->base, "%s: PDS PC base 0x%08x PDS 0x%08x\n", when,
+			 sgx_rd(sdev, cr->pds_pc_base), sgx_rd(sdev, cr->pds_ctrl));
 	if (sdev->ocp)
 		drm_info(&sdev->base,
 			 "%s: OCP revision 0x%08x sysconfig 0x%08x debug config 0x%08x status 0x%08x\n",
@@ -588,12 +617,12 @@ static bool code_base_probes;
 module_param(code_base_probes, bool, 0444);
 MODULE_PARM_DESC(code_base_probes, "Map code-base unit probes on a guessed core's first start");
 
+/* The image's probe for a unit of 2^k bytes, at offset off in the code arena. */
 static const struct {
-	u32 off, va;
+	u32 off, k;
 } code_base_probe[] = {
-	{ 0x5000, 0x00040000 }, { 0x6000, 0x00080000 }, { 0x7000, 0x00100000 },
-	{ 0x8000, 0x00200000 }, { 0x9000, 0x00400000 }, { 0xa000, 0x00800000 },
-	{ 0xb000, 0x01000000 }, { 0xc000, 0x04000000 }, { 0xd000, 0x08000000 },
+	{ 0x5000, 0 }, { 0x6000, 1 }, { 0x7000, 2 }, { 0x8000, 3 }, { 0x9000, 4 },
+	{ 0xa000, 5 }, { 0xb000, 6 }, { 0xc000, 8 }, { 0xd000, 9 },
 };
 
 static bool probes_wanted(struct pvrsgx_device *sdev)
@@ -601,32 +630,52 @@ static bool probes_wanted(struct pvrsgx_device *sdev)
 	return code_base_probes && sdev->family->event_pds_guessed;
 }
 
+/*
+ * Where code base 15 starts if its unit is 2^k bytes, or 0 if that address
+ * is past the core's space or in a kernel heap mapped already.
+ */
+static u64 probe_va(struct pvrsgx_device *sdev, unsigned int i)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	u64 va = (h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) << code_base_probe[i].k;
+	const struct pvrsgx_va_range *kh[] = { &h->kernel_code, &h->kernel_data, &h->sync };
+
+	if (va & (PAGE_SIZE - 1) || va + PAGE_SIZE > BIT_ULL(sdev->family->va_bits))
+		return 0;
+	for (unsigned int j = 0; j < ARRAY_SIZE(kh); j++)
+		if (va < kh[j]->end && va + PAGE_SIZE > kh[j]->base)
+			return 0;
+	return va;
+}
+
+static void probes_unmap(struct pvrsgx_device *sdev, unsigned int n)
+{
+	for (unsigned int i = 0; i < n; i++)
+		if (probe_va(sdev, i))
+			pvrsgx_mmu_unmap(sdev->kernel_mmu, probe_va(sdev, i), PAGE_SIZE);
+}
+
 static int probes_map(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_kmem *code = &sdev->fw.code;
-	unsigned int i;
-	int err;
 
-	for (i = 0; i < ARRAY_SIZE(code_base_probe); i++) {
-		err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, code_base_probe[i].va,
+	for (unsigned int i = 0; i < ARRAY_SIZE(code_base_probe); i++) {
+		u64 va = probe_va(sdev, i);
+		int err;
+
+		if (!va)
+			continue;
+		err = pvrsgx_mmu_map_pages(sdev->kernel_mmu, va,
 					   &code->pages[code_base_probe[i].off >> PAGE_SHIFT], 1,
 					   SGX_MMU_PTE_READONLY);
-		if (err)
-			goto undo;
+		if (err) {
+			probes_unmap(sdev, i);
+			return err;
+		}
+		drm_info(&sdev->base, "code-base unit probe %u B at 0x%08llx\n",
+			 1u << code_base_probe[i].k, va);
 	}
-	drm_info(&sdev->base, "code-base unit probes mapped\n");
 	return 0;
-
-undo:
-	while (i--)
-		pvrsgx_mmu_unmap(sdev->kernel_mmu, code_base_probe[i].va, PAGE_SIZE);
-	return err;
-}
-
-static void probes_unmap(struct pvrsgx_device *sdev)
-{
-	for (unsigned int i = 0; i < ARRAY_SIZE(code_base_probe); i++)
-		pvrsgx_mmu_unmap(sdev->kernel_mmu, code_base_probe[i].va, PAGE_SIZE);
 }
 
 /* Wait for init; on a guessed core, log every 100 ms that it doesn't come. */
@@ -661,14 +710,149 @@ static void clocks_on(struct pvrsgx_device *sdev)
 }
 
 /* The init kick; a core with one kick register (BRN_22934) starts on EVENT_KICK. */
+/*
+ * The init kick. With one kick register, the event-kicker word goes up by one
+ * first, as for every CCB kick: the GPL DDK's SGXInitialise does exactly this
+ * without MULTI_EVENT_KICK.
+ */
 static void init_kick(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 *kicker = sdev->fw.cpu[PVRSGX_FW_KICKER];
 
-	if (cr->event_kick2)
+	if (cr->event_kick2) {
 		sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
-	else
-		sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
+		return;
+	}
+	*kicker = (*kicker + 1) & 0xff;
+	/* The kicker word is in memory before the kick. */
+	wmb();
+	sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
+}
+
+/*
+ * Bring-up only, off by default: on a guessed core's first start, if the
+ * diagnostic entry's ladder doesn't run within 100 ms, reset and retry with
+ * the next combination of changes to the event program's hand-off to the
+ * USSE (docs/porting/cores/sgx530-stage1.md, "After the eighth attempt").
+ */
+static bool stage1_sweep;
+module_param(stage1_sweep, bool, 0444);
+MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
+
+#define D1	PVRSGX_SWEEP_DATA0_2
+#define W0	PVRSGX_SWEEP_DOUTU_W1_0
+#define IL	PVRSGX_SWEEP_INTERLEAVE
+#define DM	PVRSGX_SWEEP_DM2
+#define T4	PVRSGX_SWEEP_TEMPS4
+#define T0	PVRSGX_SWEEP_TEMPS0
+
+static const struct {
+	u32 flags;
+	const char *name;
+} sweep[] = {
+	{ 0, "baseline" },
+	{ D1, "event data 2" },
+	{ W0, "DOUTU word 1 = 0" },
+	{ IL, "2-dword interleave" },
+	{ DM, "code base 15 DM 2" },
+	{ D1 | W0, "data 2, word 1 = 0" },
+	{ D1 | IL, "data 2, interleave" },
+	{ D1 | DM, "data 2, DM 2" },
+	{ W0 | DM, "word 1 = 0, DM 2" },
+	{ D1 | W0 | DM, "data 2, word 1 = 0, DM 2" },
+	{ T4, "4 temporaries" },
+	{ D1 | T4, "data 2, 4 temporaries" },
+	{ T0, "0 temporaries" },
+};
+
+#undef D1
+#undef W0
+#undef IL
+#undef DM
+#undef T4
+#undef T0
+
+/*
+ * Whether the diagnostic ladder ran: its EVENT_TIMER write (0xa5a, timer
+ * off), a code-base probe's (0xb00 + k), its wait-word marker, or the
+ * heartbeat. An enabled timer counts down by itself, so a changed
+ * EVENT_TIMER alone proves nothing.
+ */
+#define LADDER_TIMER		0xa5a
+#define LADDER_MARKER		0xd1a60001
+
+static bool ladder_seen(struct pvrsgx_device *sdev)
+{
+	const u32 *t = fw_words(sdev, PVRSGX_FW_TA3DCTL);
+	u32 timer = sgx_rd(sdev, SGX_CR_EVENT_TIMER);
+
+	return timer == LADDER_TIMER || (timer >= 0xb00 && timer <= 0xb09) ||
+	       READ_ONCE(t[0x28]) == LADDER_MARKER || READ_ONCE(t[0x2a]);
+}
+
+/* Poll for 100 ms, logging PDS_PC_BASE every 10 ms: where the PDS is. */
+static bool ladder_ran(struct pvrsgx_device *sdev, const char *name)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 pc[10] = {};
+	bool seen = false;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pc) && !seen; i++) {
+		usleep_range(10000, 11000);
+		if (cr->pds_pc_base)
+			pc[i] = sgx_rd(sdev, cr->pds_pc_base);
+		seen = ladder_seen(sdev);
+	}
+	drm_info(&sdev->base,
+		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x\n",
+		 name, pc[0], pc[1], pc[2], pc[3], pc[4], pc[5], pc[6], pc[7], pc[8], pc[9],
+		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+	return seen;
+}
+
+static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	char when[64];
+	u32 clk;
+	int err;
+
+	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
+		if (v) {
+			sgx_wr(sdev, cr->event_pds_enable, 0);
+			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
+			sdev->sweep_flags = sweep[v].flags;
+			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
+			pvrsgx_reset(sdev, true);
+			/*
+			 * The SGX530's SOFT_RESET has no PDS bit: a unit still busy
+			 * here makes this variant depend on the last one.
+			 */
+			clk = sgx_rd(sdev, cr->clkgatestatus);
+			if (clk != clk_idle)
+				drm_warn(&sdev->base,
+					 "sweep variant %u: clock status 0x%08x after the reset, 0x%08x before the first kick: not independent of variant %u\n",
+					 v, clk, clk_idle, v - 1);
+			*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
+			err = init_script_part2(sdev);
+			if (err)
+				return err;
+			hc[HOSTCTL_INIT_STATUS] = 0;
+			/* The rebuilt program is in memory before the kick. */
+			wmb();
+			init_kick(sdev);
+		}
+		snprintf(when, sizeof(when), "variant %u (%s)", v, sweep[v].name);
+		if (ladder_ran(sdev, when)) {
+			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
+			return 0;
+		}
+		bringup_diag(sdev, when);
+	}
+	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
+	return 0;
 }
 
 /*
@@ -680,6 +864,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 *hc = fw_words(sdev, PVRSGX_FW_HOSTCTL);
 	bool first = !sdev->fw_started, was_powered = READ_ONCE(sdev->powered);
+	u32 clk_idle = 0;
 	int err;
 
 	WRITE_ONCE(sdev->powered, true);
@@ -751,15 +936,21 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		return err;
 
 	hc[HOSTCTL_INIT_STATUS] = 0;
-	if (sdev->family->event_pds_guessed)
+	if (sdev->family->event_pds_guessed) {
+		clk_idle = sgx_rd(sdev, cr->clkgatestatus);
 		bringup_diag(sdev, "before the kick");
+	}
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
 	init_kick(sdev);
 
-	err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
+	err = 0;
+	if (first && stage1_sweep && sdev->family->event_pds_guessed)
+		err = start_sweep(sdev, hc, clk_idle);
+	if (!err)
+		err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (first && probes_wanted(sdev))
-		probes_unmap(sdev);
+		probes_unmap(sdev, ARRAY_SIZE(code_base_probe));
 	if (err) {
 		drm_err(&sdev->base,
 			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",

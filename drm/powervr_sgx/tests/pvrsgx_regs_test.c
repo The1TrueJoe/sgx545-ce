@@ -17,6 +17,7 @@
 struct regs_fixture {
 	struct pvrsgx_device *sdev;
 	u32 *regs;
+	u32 kicker;	/* the event-kicker word, in memory */
 };
 
 static u32 reg(struct regs_fixture *fx, u32 off)
@@ -38,6 +39,8 @@ static void regs_fixture_init(struct kunit *test, struct regs_fixture *fx,
 	sdev->family = family;
 	sdev->cr = sdev->family->regs;
 	sdev->regs = (void __iomem __force *)fx->regs;
+	fx->kicker = 0;
+	sdev->fw.cpu[PVRSGX_FW_KICKER] = &fx->kicker;
 	sdev->kernel_mmu = pvrsgx_mmu_create(sdev);
 	sdev->idle_mmu = pvrsgx_mmu_create(sdev);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(sdev->kernel_mmu));
@@ -72,6 +75,7 @@ static void regs_test_sgx545(struct kunit *test)
 	init_kick(fx.sdev);
 	KUNIT_EXPECT_EQ(test, reg(&fx, SGX_CR_EVENT_KICK2), SGX_CR_EVENT_KICK2_NOW);
 	KUNIT_EXPECT_EQ(test, reg(&fx, SGX_CR_EVENT_KICK), REGS_PATTERN);
+	KUNIT_EXPECT_EQ(test, fx.kicker, 0);
 	regs_fixture_fini(&fx);
 }
 
@@ -101,6 +105,8 @@ static void regs_test_sgx530(struct kunit *test)
 	init_kick(fx.sdev);
 	KUNIT_EXPECT_EQ(test, reg(&fx, SGX_CR_EVENT_KICK), SGX_CR_EVENT_KICK_NOW);
 	KUNIT_EXPECT_EQ(test, reg(&fx, SGX_CR_EVENT_KICK2), REGS_PATTERN);
+	/* One kick register: the kicker word goes up first, as in the GPL DDK. */
+	KUNIT_EXPECT_EQ(test, fx.kicker, 1);
 	regs_fixture_fini(&fx);
 }
 
@@ -173,6 +179,8 @@ static void regs_test_sgx535_like(struct kunit *test)
 	init_kick(fx.sdev);
 	KUNIT_EXPECT_EQ(test, reg(&fx, SGX_CR_EVENT_KICK), SGX_CR_EVENT_KICK_NOW);
 	KUNIT_EXPECT_EQ(test, reg(&fx, SGX_CR_EVENT_KICK2), REGS_PATTERN);
+	/* One kick register: the kicker word goes up first, as in the GPL DDK. */
+	KUNIT_EXPECT_EQ(test, fx.kicker, 1);
 	regs_fixture_fini(&fx);
 }
 
