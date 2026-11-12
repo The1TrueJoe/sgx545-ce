@@ -37,14 +37,14 @@ kconfig() {
 
 # The driver by area, one patch each; nothing builds until the last adds the
 # Kconfig entry. Each file in exactly one group.
-AREAS="04-device:core hw regs device mmu
+AREAS="04-device:core hw regs device mmu cache
 05-firmware:fw fwif pds ccb
 06-memory:gem vm prime kobj
 07-jobs:job trace
 08-commands:cmd cmd_defs cmd_checks
 09-render:render transfer
-10-validate:validate usse_table
-11-driver:drv pm debugfs dump aux"
+10-validate:validate usse usse_table
+11-driver:drv pm debugfs dump aux of"
 rm -rf "$D" && mkdir -p "$D"
 all=$(cd "$DRM/powervr_sgx" && ls *.[ch] | sed 's/^pvrsgx_//; s/\.[ch]$//' | sort -u)
 listed=$(echo "$AREAS" | cut -d: -f2 | tr ' ' '\n' | sort)
