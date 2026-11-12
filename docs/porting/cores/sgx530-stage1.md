@@ -1062,6 +1062,38 @@ Read-back after the start:
 The self-loop holds the USSE; recovery reset first, and the start's teardown already holds
 the cores in reset on a timeout.
 
+## After the twenty-fifth attempt: phas.i must come first
+
+Attempt 25 (log 2026-11-12-0322): even the first `st.a.d` didn't land. The b2 fault address
+depends on the image — 0x09039000 (the USSE probe) vs 0x08039000 (the attempt-24 ladder),
+differing by 0x01000000 with a common low 0x39000. An image-dependent garbage fetch, before
+any instruction commits.
+
+Both the probe and the diagnostic ladder put work **before** `phas.i`. The real microkernel
+entry has `phas.i` as its very first instruction, and the SGX530 lacks
+`USE_UNLIMITED_PHASES`. So the SGX530 most likely requires `phas.i` first, to declare the
+task's phase before it fetches anything; starting with `limm`/`st.a.d` leaves the phase
+undefined and the fetch garbage. The SGX545 (unlimited phases) is lenient, which is why the
+ladder-first diagnostics worked in design but never on the SGX530. **The whole diagnostic
+approach, not the microkernel, was the blocker for the last several attempts.**
+
+**Attempt 26, two parts:**
+1. **The real image.** Run the normal `sgx530` firmware (not a diagnostic build) on the
+   `>> 8` driver. Its entry is `phas.i` first. Expected: the microkernel inits —
+   `INIT_STATUS` 1, version 0x00010000, heartbeat moving. That is **stage 1 passing**. The
+   kernel's status dump already reads init, version, wait and heartbeat.
+2. **The confirmation probe** (`cores/sgx530_usse_phas.py`): the USSE probe with `phas.i`
+   first, then `st.a.d` A, `str` `EVENT_TIMER`, `st.a.d` B, self-loop. If the markers now
+   land (ctlblk 0x28 = 0xbeef1, `EVENT_TIMER` 0xa5a, ctlblk 0x18 = 0xc0de2) where attempt 25
+   faulted, `phas.i`-first is confirmed as the SGX530's requirement.
+   - Build: `python3 ukernel/build.py sgx530_usse_phas …`, then mkukfw. Image 0x70 (112 B),
+     sha256 51fd3545…, same through asm.py and `sgx-asm`; `--check` crc 0x26a72325; packaged
+     084bd775…. Only the `ctlblk` patch.
+
+If part 1 inits, stage 1 is done and the next step is get-misc-info (microkernel.md stage 3)
+and the first TA. If it doesn't but part 2's markers land, the fault is past `phas.i` in the
+real entry, and the probe grows one real instruction at a time.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
