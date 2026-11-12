@@ -65,13 +65,14 @@ Userspace
 
 Questions for reviewers
 1. Placement. Imagination said in 2023 that SGX should have its own
-   driver [link]. Alessio, Luigi: drivers/gpu/drm/powervr_sgx beside
+   driver [1]. Alessio, Luigi: drivers/gpu/drm/powervr_sgx beside
    drivers/gpu/drm/imagination, or under it?
 2. Cedarview and Poulsbo. Their SGX sits behind gma500. A follow-up
-   publishes it as an auxiliary device this driver binds to, as
-   nova-drm and i915's GSC do; on two Cedarview laptops it renders with
-   the open firmware. [Paragraph on Gabriel Gama's gma500 3D work and
-   Patrik's Cedarview remark, after Joseph has written to them.]
+   has gma500 publish it as an auxiliary device that this driver binds
+   to, as nova-drm and i915's GSC do; on four Cedarview machines it
+   renders with the open firmware. Gabriel Gama's "drm/gma500: prepare
+   GEM and MMU for 3D" [2] takes the other route, 3D inside gma500.
+   Is a separate render driver the right split?
 3. Cache maintenance for imports is part of SUBMIT_JOBS, as per-job
    byte ranges, rather than a separate BO_SYNC-style ioctl. Is cache
    work in the submit path acceptable?
@@ -81,6 +82,9 @@ Questions for reviewers
    isn't collapsed. That was 10.6% of the X server's CPU in a
    window-drag profile before Mesa cached its objects. Is TTM, cached
    pages with explicit flushes, or a GFP_WC-style allocator the way?
+
+MAINTAINERS lists me alone for now; I'd welcome a reviewer who wants to
+share the work.
 
 Not in this series, each a short series of its own: transfer jobs, the
 gma500 auxiliary device, and the IGT port of the uAPI tests [link].
@@ -92,5 +96,8 @@ DMA-API debug. System suspend is tested with pm_test only. CI builds
 every patch on drm-misc-next with checkpatch --strict, sparse, smatch,
 coccinelle, gcc and clang W=1, kernel-doc, KUnit, and an i386/x86_64
 uAPI layout check.
+
+[1] https://lore.kernel.org/r/ccfae572cb6a5ba70eea273e641b66cd7f6fe58b.camel@imgtec.com
+[2] https://lore.kernel.org/r/20261109063303.32658-1-operatingsystemsdepression@gmail.com
 
 [Patch list and diffstat from git format-patch at cut time.]

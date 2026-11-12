@@ -21,7 +21,7 @@ signs and sends it himself (`b4 send` or `git send-email`).
 | "the uAPI, frame, hang, PRIME and unbind tests, also under lockdep, KASAN, ..." | K8 clean |
 | "CI builds every patch" | K9 |
 | "transfer jobs" listed as a follow-up | K12 (transfer left out of the series) |
-| the bracketed placeholders | Joseph: the AI disclosure, the Gama/Patrik paragraph, and the links (Mesa MR, the Imagination 2023 mail, IGT) |
+| the bracketed placeholders | Joseph: the AI disclosure. Links still to fill: the draft Mesa MR and the IGT branch. [1] and [2] are lore links built from Message-IDs read on mirrors; open each once in a browser before sending |
 
 
 ## Standards checklist (2026-11-08)
@@ -50,6 +50,7 @@ MAINTAINERS, Kconfig), committed as one patch and run through
 |---|---|
 | No `Signed-off-by` from the AI | pass |
 | No per-patch AI tags. The kernel dropped `Assisted-by:` in v7.4-rc1 (1e035297ffda); disclosure belongs in the cover letter | pass |
+| No `Assisted-by:` anywhere: not on kernel patches, not in Mesa, and not on the linux-firmware commit, although linux-firmware's README asks for one there | **Joseph's decision (2026-11-12)**. The disclosure is his paragraph in the cover letter |
 | AI-assistance disclosure in the cover letter (generated-content.rst) | **left for Joseph**: a placeholder in the letter, his wording |
 
 ### drm-uapi.rst (new uAPI)
@@ -153,3 +154,26 @@ archive refuse automated reads; not bypassed).
 4. Recheck To/Cc against MAINTAINERS and `get_maintainer.pl` on the day
    (the drm/imagination maintainers changed twice in 2026), then Joseph
    signs off and sends.
+
+## Decisions (2026-11-12, Joseph: "follow convention")
+
+- **Gama's gma500 3D RFC:** not written to first. Question 2 names it in one
+  neutral line, and gma500 0001 stays as it is.
+- **MAINTAINERS:** `M:` Joseph alone, no `R:` line. The cover letter offers a
+  reviewer slot in one sentence.
+- **Driver license:** the drm/imagination convention, `GPL-2.0-only OR MIT` on
+  the driver files (`MODULE_LICENSE("Dual MIT/GPL")`). The uAPI header keeps
+  `(GPL-2.0-only WITH Linux-syscall-note) OR MIT`, as `pvr_drm.h` does, and
+  the files shared with Mesa stay MIT. To do after the per-core restructure,
+  since it touches every file. The register header is derived from the GPL
+  `sgx545defs.h`; it stays `GPL-2.0-only` unless Joseph decides otherwise.
+- **Firmware license:** linux-firmware's LICENSE-CRITERIA, section 3.1 item 3:
+  a license must "include a patent grant adequate for device operation", and
+  "if your standard license text is silent on patents, expect this to be
+  raised in review"; "an explicit grant avoids the question". MIT is silent
+  on patents, so the microkernel becomes `MIT OR Apache-2.0` (Apache-2.0
+  carries the explicit grant). Section 2.2 names both as welcome.
+- **Firmware name:** `powervr_sgx/sgx545_v1.fw`, after drm/imagination's
+  `powervr/rogue_<bvnc>_v1.fw`. One name everywhere: the core table,
+  `MODULE_FIRMWARE`, the packages, the WHENCE draft and the docs. It ships
+  with the features-6 move in v0.2.0.
