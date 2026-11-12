@@ -1401,9 +1401,14 @@ Build each then mkukfw; all same through asm.py and `sgx-asm`. Readout is the fa
   Then set the entry (and every task's) `phas.i` `temps4` on the SGX530, a 530-only image
   change via a per-core flag; the SGX545 `phas.i #0,#0` is unchanged, golden intact. Re-run
   the real image with it: likely init completing.
-- **0x0c004000:** still 0 temps; `phas.i` isn't it either, and the temp allocation is
-  neither DOUTU word 0 nor `phas.i` — next look at `phas.i`'s other fields (rate, the
-  phase-count semantics without `USE_UNLIMITED_PHASES`) or a `setfc`/MOE-style setup.
+- **0x0c004000:** still 0 temps; `phas.i` isn't it either.
+
+**Attempt 36 result (log 2026-11-12-...):** `aluwr_ph8/ph6/ph63` all faulted at 0x0c004000.
+So `phas.i`'s temps4 isn't the temp source. Both temp-count hypotheses (DOUTU word 0,
+`phas.i` temps4) are ruled out. **The strongest remaining lead is the host-side init diff
+below** (the 530 writes 3 of the 545's 16 setup registers) — a driver-side change, the next
+step (attempt 37). A `setfc`/MOE-style USSE setup, or `phas.i`'s rate/phase semantics, are
+fallbacks only if the init writes don't help.
 
 ## The host-side init diff (the coordinator's survey, likely the register-file setup)
 
@@ -1437,7 +1442,7 @@ writes drop and reads return leftovers — attempts 31-35 exactly. Attempt 18 te
 block (0xa78/0xaac/0xabc/0xa00) only against "does the PDS run," never against "do writes
 land," and never wrote 0x810-0x818 / 0x800-0x804 / 0x4e8 / 0x13c at all.
 
-**Proposed: write the full 545 `init_regs` set on the 530**, then test with `aluwr`. If
+**Attempt 37 (the next step): write the full 545 `init_regs` set on the 530**, then test with `aluwr`. If
 writes then land (0x0fd7d000), bisect to the needed subset — start with the 0x810/0x814/0x818
 group. Driver-side (the 530 `init_regs` table), under the standing go (unnamed registers,
 known 545 values, as attempt 18). If it works, re-run the real image: likely init completing.
