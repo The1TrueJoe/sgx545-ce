@@ -881,9 +881,9 @@ static bool pds_held(struct pvrsgx_device *sdev, const u32 *pc, unsigned int n)
 
 /*
  * Poll for 100 ms, logging PDS_PC_BASE every 10 ms: where the PDS is.
- * 1 if the ladder ran, -EBUSY if the PDS is held in a loop, else 0.
+ * 1 if the ladder ran, -EBUSY if the PDS is held in a loop (at *held), else 0.
  */
-static int ladder_ran(struct pvrsgx_device *sdev, const char *name)
+static int ladder_ran(struct pvrsgx_device *sdev, const char *name, u32 *held)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	u32 pc[10] = {};
@@ -902,7 +902,10 @@ static int ladder_ran(struct pvrsgx_device *sdev, const char *name)
 		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
 	if (seen)
 		return 1;
-	return cr->pds_pc_base && pds_held(sdev, pc, i) ? -EBUSY : 0;
+	if (!cr->pds_pc_base || !pds_held(sdev, pc, i))
+		return 0;
+	*held = pc[i - 1];
+	return -EBUSY;
 }
 
 /*
@@ -968,11 +971,43 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	return 0;
 }
 
+/*
+ * After a loop held the PDS at row held: does the reset stop it? Sample
+ * PDS_PC_BASE and the clock status five times. If the PC is still on that
+ * row or the clocks are busy, hold the BIF and cores in reset through the
+ * unload, as the fault path does. (Other PDS activity, 0xf33c, isn't ours.)
+ */
+static int sweep_teardown(struct pvrsgx_device *sdev, u32 clk_idle, u32 held)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 pc[5], clk[5];
+	bool busy = false;
+
+	sgx_wr(sdev, cr->event_pds_enable, 0);
+	pvrsgx_reset(sdev, true);
+	for (unsigned int i = 0; i < ARRAY_SIZE(pc); i++) {
+		usleep_range(10000, 11000);
+		pc[i] = sgx_rd(sdev, cr->pds_pc_base);
+		clk[i] = sgx_rd(sdev, cr->clkgatestatus);
+		busy |= pc[i] == held || clk[i] != clk_idle;
+	}
+	drm_info(&sdev->base,
+		 "sweep teardown after the reset: PDS PC %x %x %x %x %x, clock status %x %x %x %x %x (idle %x)\n",
+		 pc[0], pc[1], pc[2], pc[3], pc[4],
+		 clk[0], clk[1], clk[2], clk[3], clk[4], clk_idle);
+	if (!busy)
+		return -ETIMEDOUT;
+	drm_err(&sdev->base, "sweep teardown: the reset doesn't stop the PDS; cores held in reset\n");
+	sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
+	sdev->lost = true;
+	return -EIO;
+}
+
 static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	char when[64];
-	u32 clk;
+	u32 clk, held = 0;
 	int err, ran;
 
 	for (unsigned int v = 0; v < SWEEP_COUNT; v++) {
@@ -1014,7 +1049,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			init_kick(sdev);
 		}
 		snprintf(when, sizeof(when), "variant %u (%s)", v, name);
-		ran = ladder_ran(sdev, when);
+		ran = ladder_ran(sdev, when, &held);
 		if (ran > 0) {
 			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
 			return 0;
@@ -1024,7 +1059,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			bringup_diag(sdev, when);
 			drm_info(&sdev->base, "sweep: %s holds the PDS in its loop; stopping\n",
 				 when);
-			return -ETIMEDOUT;
+			return sweep_teardown(sdev, clk_idle, held);
 		}
 		bringup_diag(sdev, when);
 	}
