@@ -3736,7 +3736,8 @@ sample_only_load(struct sgx_ctx *c, nir_intrinsic_instr *ld, unsigned comps)
          return false;
       nir_tex_instr *t = nir_instr_as_tex(ui);
       int ci = nir_tex_instr_src_index(t, nir_tex_src_coord);
-      if (t->op != nir_texop_tex || ci < 0 || u != &t->src[ci].src ||
+      if (t->op != nir_texop_tex || (t->backend_flags & SGX_TEX_PLANAR) ||
+          ci < 0 || u != &t->src[ci].src ||
           nir_tex_instr_src_index(t, nir_tex_src_bias) >= 0 ||
           nir_tex_instr_src_index(t, nir_tex_src_projector) >= 0 ||
           _mesa_hash_table_search(c->proj, t) ||
@@ -4588,6 +4589,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
    s->coord_pa = -1;
    s->sampler = tex->texture_index;
    s->fetch = tex->backend_flags & SGX_TEX_FETCH;
+   bool planar = tex->backend_flags & SGX_TEX_PLANAR;
+   s->plane = tex->backend_flags >> SGX_TEX_PLANE_SHIFT & 3;
    /* non-dependent: the coordinate is (the start of) a varying the PDS
     * iterates, no bias; the PDS then samples and leaves the texel in pa */
    nir_legacy_src ls = nir_legacy_chase_src(&tex->src[ci].src);
@@ -4599,6 +4602,8 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
                 : NULL;
    if (he && !ss)
       ss = _mesa_hash_table_search(c->sample_set, he->data);
+   if (planar)
+      ss = he = NULL;
    if (ss) {
       /* a set only samples read: no plain iteration (drop_sample_only_iters) */
       s->dependent = false;
@@ -4621,7 +4626,7 @@ emit_tex(struct sgx_ctx *c, nir_tex_instr *tex)
          sgx_fail(c, "projected read of a varying that isn't iterated");
          return;
       }
-   } else if (!vertex && bi < 0 && pi < 0) {
+   } else if (!vertex && bi < 0 && pi < 0 && !planar) {
       /* (a whole varying, or its first components; directly or through a
        * mov that takes its first components in order) */
       int pa = -1;

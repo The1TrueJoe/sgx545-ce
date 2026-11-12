@@ -88,13 +88,9 @@ struct sgx_compile_options {
     * an integer 1 for an integer sampler */
    uint32_t tex_f32;
    /* bit n set, texture unit n is a 4 (RGBA32) or 2 (RG32) channel 32-bit
-    * texture stored as an R32 texture N times as wide, texel (x, y) channel
-    * c at (N * x + c, y) in every level; NEAREST, s wrap REPEAT, T1 0x12
-    * (sgx_lower_tex: one dependent read per channel, at a level it picks) */
+    * texture stored as N R32 planes of its size, channel c in plane c
+    * (sgx_lower_tex: one dependent read per plane, sgx_sample_info.plane) */
    uint32_t tex_r32x4, tex_r32x2;
-   /* bit n set, unit n's GL s wrap clamps (CLAMP_TO_EDGE; border as edge);
-    * clear, it repeats. tex_r32x4 / tex_r32x2 units only */
-   uint32_t tex_r32_clamp;
    /* fragment shader: the driver's PDS samples a non-dependent texture from
     * the coordinate set itself, so a varying only such samples read needs no
     * plain iteration of its own (one PDS sample, no iteration).
@@ -242,6 +238,9 @@ struct sgx_sample_info {
     * explicit LOD; the driver gives it state of its own: NEAREST filtering
     * and mip selection, clamped, whatever the bound sampler says */
    uint8_t fetch;
+   /* dependent: a tex_r32x4 / tex_r32x2 unit's plane (channel), 0-3; the
+    * driver's state addresses that plane */
+   uint8_t plane;
    uint64_t smp; /* dependent: the smp, destination r0, texture state #0 */
 };
 
@@ -348,11 +347,10 @@ bool sgx_lower_clip_fs(struct nir_shader *fs, unsigned ucp_enables);
  * explicit LOD, the Offset variants and rectangle textures through the
  * texture's size, 1D as 2D, texelFetch as an explicit-LOD read at the
  * texel's center (marked sgx_sample_info.fetch), and the reads of
- * opts->tex_r32x4 / tex_r32x2 units. The txs and query_levels instructions it
- * adds (and the program's own textureSize) are the driver's to lower before
- * sgx_compile; for an r32 unit, query_levels is the number of levels its
- * sampler can select (1 without mipmapping). Call after the texture and
- * sampler indices are final */
+ * opts->tex_r32x4 / tex_r32x2 units as one read per plane. The txs
+ * instructions it adds (and the program's own textureSize) are the driver's
+ * to lower before sgx_compile. Call after the texture and sampler indices
+ * are final */
 bool sgx_lower_tex(struct nir_shader *s,
                    const struct sgx_compile_options *opts);
 

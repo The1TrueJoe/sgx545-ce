@@ -2204,45 +2204,17 @@ txf_to_txl_instr(nir_builder *b, nir_tex_instr *tex, void *data)
    return true;
 }
 
-/* a txl of channel tex's unit at coordinate coord and level lod, its first
- * component */
-static nir_def *
-r32_read(nir_builder *b, nir_tex_instr *tex, nir_def *coord, nir_def *lod)
-{
-   int ti = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
-   int si = nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
-   nir_tex_instr *t = nir_tex_instr_create(b->shader, ti >= 0 ? 4 : 2);
-   t->op = nir_texop_txl;
-   t->sampler_dim = tex->sampler_dim;
-   t->is_array = tex->is_array;
-   t->coord_components = tex->coord_components;
-   t->dest_type = tex->dest_type;
-   t->texture_index = t->sampler_index = tex->texture_index;
-   t->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
-   t->src[1] = nir_tex_src_for_ssa(nir_tex_src_lod, lod);
-   if (ti >= 0) {
-      t->src[2] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
-                                      tex->src[ti].src.ssa);
-      t->src[3] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
-                                      tex->src[si >= 0 ? si : ti].src.ssa);
-   }
-   if (tex->op == nir_texop_txf)
-      t->backend_flags |= SGX_TEX_FETCH;
-   nir_def_init(&t->instr, &t->def, 4, tex->def.bit_size);
-   nir_builder_instr_insert(b, &t->instr);
-   return nir_channel(b, &t->def, 0);
-}
-
-/* a texel of a tex_r32x4 / tex_r32x2 unit: channel c of texel x is R32
- * texel N * x + c. The level is picked here (NEAREST_MIPMAP_NEAREST's
- * rule), since the wide view's footprint would pick another, and each
- * channel is read at its subtexel's center at that level */
+/* a texel of a tex_r32x4 / tex_r32x2 unit: N planes, each an R32 texture
+ * of the texel's size, channel c in plane c. One read per plane at the
+ * read's own coordinate and LOD, tagged with its plane
+ * (sgx_sample_info.plane); the driver points each at its plane */
 static bool
 r32_instr(nir_builder *b, nir_tex_instr *tex, void *data)
 {
    const struct sgx_compile_options *o = data;
    unsigned u = tex->texture_index;
    if (!o || u >= 32 || nir_tex_instr_is_query(tex) ||
+       (tex->backend_flags & SGX_TEX_PLANAR) ||
        tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ||
        tex->sampler_dim == GLSL_SAMPLER_DIM_BUF ||
        tex->sampler_dim == GLSL_SAMPLER_DIM_MS ||
@@ -2253,70 +2225,23 @@ r32_instr(nir_builder *b, nir_tex_instr *tex, void *data)
    if (!n)
       return false;
    b->cursor = nir_before_instr(&tex->instr);
-   bool fetch = tex->op == nir_texop_txf;
-   nir_def *coord = tex->src[nir_tex_instr_src_index(tex, nir_tex_src_coord)].src.ssa;
-   unsigned dims = tex->coord_components - tex->is_array;
-   nir_def *size = nir_channels(b, nir_get_texture_size(b, tex),
-                                nir_component_mask(dims));
-   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
-   nir_def *lod;
-   if (fetch) {
-      lod = li >= 0 ? nir_i2f32(b, tex->src[li].src.ssa) : nir_imm_float(b, 0);
-   } else {
-      nir_def *lambda;
-      if (tex->op == nir_texop_txl) {
-         lambda = tex->src[li].src.ssa;
-      } else if (b->shader->info.stage == MESA_SHADER_FRAGMENT) {
-         nir_def *p = nir_fmul(b, nir_channels(b, coord, nir_component_mask(dims)),
-                               nir_i2f32(b, size));
-         lambda = nir_flog2(b, nir_fmax(b, nir_fast_length(b, nir_ddx(b, p)),
-                                        nir_fast_length(b, nir_ddy(b, p))));
-         int bi = nir_tex_instr_src_index(tex, nir_tex_src_bias);
-         if (bi >= 0)
-            lambda = nir_fadd(b, lambda, tex->src[bi].src.ssa);
-      } else {
-         lambda = nir_imm_float(b, 0);
-      }
-      /* ceil(lambda + 1/2) - 1 above 1/2, else the base level */
-      nir_def *levels = nir_build_texture_query(
-         b, tex, nir_texop_query_levels, 1, nir_type_int32, false, false);
-      lod = nir_fmax(b, nir_fadd_imm(b, nir_fceil(b, nir_fadd_imm(b, lambda, 0.5)), -1.0),
-                     nir_imm_float(b, 0.0));
-      lod = nir_fmin(b, lod, nir_fadd_imm(b, nir_i2f32(b, levels), -1.0));
+   /* (a dependent read has no projection: the divide here) */
+   int pi = nir_tex_instr_src_index(tex, nir_tex_src_projector);
+   if (pi >= 0) {
+      int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+      nir_def *q = nir_frcp(b, tex->src[pi].src.ssa);
+      nir_src_rewrite(&tex->src[ci].src, nir_fmul(b, tex->src[ci].src.ssa, q));
+      nir_tex_instr_remove_src(tex, pi);
    }
-   /* the level's size and texel center (i + 0.5) / size_l, s apart */
-   nir_def *sz = nir_u2f32(b, nir_umax(b, nir_ushr(b, size, nir_f2u32(b, lod)),
-                                       nir_imm_int(b, 1)));
-   nir_def *x;
-   nir_def *c[4];
-   for (unsigned d = 0; d < tex->coord_components; d++) {
-      nir_def *v = nir_channel(b, coord, d);
-      if (d >= dims)
-         c[d] = fetch ? nir_i2f32(b, v) : v;
-      else if (fetch)
-         c[d] = nir_fmul(b, nir_fadd_imm(b, nir_i2f32(b, v), 0.5),
-                         nir_frcp(b, nir_channel(b, sz, d)));
-      else
-         c[d] = v;
-   }
-   nir_def *w = nir_channel(b, sz, 0);
-   if (fetch) {
-      x = nir_i2f32(b, nir_channel(b, coord, 0));
-   } else {
-      x = nir_ffloor(b, nir_fmul(b, nir_channel(b, coord, 0), w));
-      if (o->tex_r32_clamp >> u & 1)
-         x = nir_fmin(b, nir_fmax(b, x, nir_imm_float(b, 0.0)),
-                      nir_fadd_imm(b, w, -1.0));
-   }
-   /* (a repeat's x outside [0, W) is the hardware's s wrap at N * W) */
-   nir_def *rw = nir_frcp(b, nir_fmul_imm(b, w, n));
-   nir_def *x4 = nir_fmul_imm(b, x, n);
    unsigned bits = tex->def.bit_size;
    nir_def *res[4];
    for (unsigned k = 0; k < 4; k++) {
       if (k < n) {
-         c[0] = nir_fmul(b, nir_fadd_imm(b, x4, k + 0.5), rw);
-         res[k] = r32_read(b, tex, nir_vec(b, c, tex->coord_components), lod);
+         nir_tex_instr *t =
+            nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+         t->backend_flags |= SGX_TEX_PLANAR | k << SGX_TEX_PLANE_SHIFT;
+         nir_builder_instr_insert(b, &t->instr);
+         res[k] = nir_channel(b, &t->def, 0);
       } else if (k < 3) {
          res[k] = nir_imm_intN_t(b, 0, bits);
       } else {

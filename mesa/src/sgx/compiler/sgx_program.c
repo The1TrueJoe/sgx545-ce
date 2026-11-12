@@ -150,6 +150,7 @@ sgx_finish_program(struct sgx_ctx *c, struct sgx_shader *out)
          o->coord_pa = s->coord_pa;
          o->f16 = s->f16_return;
          o->fetch = s->fetch;
+         o->plane = s->plane;
          o->reg = s->dependent ? phys(c, &s->ins->op[0]) : s->pa;
          if (s->dependent && smp_template(c, s, &o->smp))
             goto fail;

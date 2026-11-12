@@ -115,12 +115,15 @@ struct sgx_iter {
 
 /* nir_tex_instr.backend_flags: a texelFetch lowered to txl */
 #define SGX_TEX_FETCH 1
+#define SGX_TEX_PLANAR 2 /* a plane of a tex_r32x4 / x2 unit: always dependent */
+#define SGX_TEX_PLANE_SHIFT 2
 
 struct sgx_sample {
    unsigned id;
    unsigned sampler;
    bool dependent, proj;
    bool fetch; /* a texelFetch (SGX_TEX_FETCH) */
+   unsigned plane; /* SGX_TEX_PLANAR: its plane */
    unsigned dim; /* 2 = 2D, 3 = cube */
    unsigned set; /* non-dependent: the coordinate's texture coordinate set */
    int coord_pa; /* ... and its plain iteration, -1 none */
