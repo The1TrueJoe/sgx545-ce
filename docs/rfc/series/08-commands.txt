@@ -1,8 +1,8 @@
 drm/powervr_sgx: Add the client command checks
 
 Userspace describes a job's work as plain structs, never as a firmware
-structure: a render command, one TA-kick command per kick, or a
-transfer command. Each starts with its size and a chain of extensions
+structure: a render command and one TA-kick command per kick. Each
+starts with its size and a chain of extensions
 for the fields only one core has.
 
 The kernel copies each struct as copy_struct_from_user() does: a

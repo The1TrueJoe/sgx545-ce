@@ -11,10 +11,12 @@ symlink) and the tests build against it. `uapi/check.sh` compiles it for i386 an
 literal layouts in `uapi/layout.inc`. The client commands are defined in
 [`uapi/powervr_sgx_cmd.xml`](uapi/powervr_sgx_cmd.xml) (section 3).
 
-**Status (2026-11-12):** revision 3 is on `dev` (merge 77057bb1, DRM minor 3): the plain
-per-command structs (section 3.1), the D6 per-job cache ranges (section 10, D6), the
-kernel and the Mesa winsys, tested on CE5300 boards. Revision 2, the command streams, is
-retired: nothing on `dev` builds or accepts it.
+**Status (2026-11-12):** revision 4, DRM version 1.0, is in progress on
+`wip/uapi-r4-kernel` and `wip/uapi-r4-mesa`: dense ioctl numbers, `VM_BIND` without
+fences, and the upstream header without the transfer job (section 2.1). `dev` has revision 3
+(merge 77057bb1, DRM 0.3) until they merge: the plain per-command structs (section 3.1),
+the D6 per-job cache ranges (section 10, D6), the kernel and the Mesa winsys, tested on
+CE5300 boards. Revisions 1 and 2, the command streams, are retired.
 
 Identifiers spell the driver name in full: `drm_powervr_sgx_*` and
 `DRM_IOCTL_POWERVR_SGX_*`. `pvr` is the prefix of upstream's Rogue driver, whose module is
@@ -92,10 +94,33 @@ kerneldoc; `Documentation/gpu/powervr_sgx/uapi.rst` pulls it in the way
 | 0x08 | `GET_CONTEXT_STATE` | RW | guilty, innocent or OK after a reset | design; `drm-uapi.rst` "Device reset" |
 | 0x09 | `CREATE_RT_DATASET` | RW | everything tiling a target of a given size needs | capture: STATE.md 6 |
 | 0x0a | `DESTROY_RT_DATASET` | W | | |
-| 0x0b | | | retired: `SUBMIT_JOBS` with command streams (revision 2), never reused | |
-| 0x0c | `UPLOAD_CODE` | RW | copy USSE code into a code object and validate it (D9, D12) | hardware: P1 (7.2); design |
-| 0x0d | | | retired: `UPLOAD_CODE` of revision 1, never reused | |
-| 0x0e | `SUBMIT_JOBS` | RW | render scenes and transfers, syncobj in/out, cache ranges of imports | capture: TEX.md 3, STATE.md 1 |
+| 0x0b | `UPLOAD_CODE` | RW | copy USSE code into a code object and validate it (D9, D12) | hardware: P1 (7.2); design |
+| 0x0c | `SUBMIT_JOBS` | RW | render scenes (and, downstream, transfers), syncobj in/out, cache ranges of imports | capture: TEX.md 3, STATE.md 1 |
+
+The numbers are dense from 0x00. A new ioctl takes the next number.
+
+### 2.1 Versions
+
+The DRM driver's version is the uAPI's: 1.0 from revision 4, the first upstream one. A
+change that only adds (an ioctl, a query, a flag, an extension) raises the minor version,
+and the new thing is used only where the minor version says it is there. Mesa refuses a
+kernel whose major version isn't 1.
+
+| revision | DRM version | what changed |
+|---|---|---|
+| 1 | 0.1 | command streams through `SUBMIT_JOBS` at 0x0c, `UPLOAD_CODE` at 0x0d, `VM_MAP` and `VM_UNMAP` |
+| 2 | 0.1 | `VM_BIND` replaces `VM_MAP` and `VM_UNMAP`; the ioctls after it renumbered (`SUBMIT_JOBS` 0x0b, `UPLOAD_CODE` 0x0c) |
+| 3 | 0.3 | plain per-command structs with extension chains (section 3.1), `SUBMIT_JOBS` at 0x0e; one PB per device; explicit sync with per-job cache ranges (D6) |
+| 4 | 1.0 | ioctls renumbered from 0 with no gaps (`UPLOAD_CODE` 0x0b, `SUBMIT_JOBS` 0x0c); `VM_BIND` takes no fences (`sync_ops` must be empty); the transfer job out of the upstream header, its type value reserved |
+
+Revision 3 moved `SUBMIT_JOBS` to a number neither earlier revision used, so an older
+binary's first submit failed with `-EINVAL`. From revision 4 the version check does that job: a revision-3 Mesa requires minor
+version 3 or later and refuses 1.0, and a revision-4 Mesa refuses 0.x.
+
+The transfer job (`DRM_POWERVR_SGX_JOB_TYPE_TRANSFER`, transfer contexts,
+`drm_powervr_sgx_cmd_transfer`) stays in the downstream driver for the kernel's tests; Mesa
+doesn't use it. The upstream header reserves its job type value, so adding it later is
+a minor-version change.
 
 ### DEV_QUERY
 
@@ -106,13 +131,13 @@ the two sizes. A NULL pointer returns the size.
 |---|---|---|
 | `GPU_INFO_GET` | `core_id` and `core_revision`, raw from `EUR_CR_CORE_ID` and `EUR_CR_CORE_REVISION`; `fw_interface_version` | capture: rev `0x1000e` on the CE5300 (SRVINIT.md). gap: Cedarview's value (G25) |
 | `LIMITS_GET` | RT size and samples limits, PB min/default/max in pages, largest TA kick count | capture: default PB of 0x400 pages (STATE.md 6). gap: RT limits (G14) |
-| `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25) |
+| `QUIRKS_GET` | quirk numbers, mandatory ones first, as pvr. A quirk, once listed for a GPU, is never removed for it: userspace may rely on the kernel reporting it | design. The list is empty on rev 1014 until an erratum that reaches userspace is documented (G25) |
 | `HEAP_INFO_GET` | array of `drm_powervr_sgx_heap`, see section 5 | capture, section 5 |
 
 ### CREATE_BO, GET_BO_MMAP_OFFSET
 
-GEM on `drm_gem_shmem`. Objects are zeroed at allocation, and PRIME goes through the DRM
-core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds,
+GEM on `drm_gem_shmem`. Objects are always zeroed at allocation, and userspace may rely
+on it. PRIME goes through the DRM core. `DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS` is required before `GET_BO_MMAP_OFFSET` succeeds,
 and before an mmap of the object's exported dma-buf does.
 The CPU mapping's cache mode is a kernel decision and not part of the uAPI. It defaults
 to write-combined until coherency is established (G19).
@@ -195,10 +220,11 @@ kernel code heap, P3). Per-draw PDS programs stay in ordinary objects.
 
 Same shape as pvr: the client manages the address space and picks each mapping's
 address, and the kernel tracks mappings with `drm_gpuvm`. `VM_BIND` takes an array of
-`{op, handle, bo_offset, device_addr, size, flags}`, each a `MAP` or an `UNMAP`, and
-`sync_ops`. `DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC` is required: the ioctl waits for its
-`sync_ops` waits, applies the ops and returns when they are done, and its signals get an
-already signaled fence. The ops apply in array order and all or none of them do: every op is
+`{op, handle, bo_offset, device_addr, size, flags}`, each a `MAP` or an `UNMAP`.
+`DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC` is required: the ioctl applies the ops and returns
+when they are done. A synchronous `VM_BIND` takes no fences (`drm-vm-bind-async.rst`), so
+`sync_ops` must be empty (`-EINVAL` otherwise). The field stays for an asynchronous flag
+later, as Rogue merged synchronous binds first. The ops apply in array order and all or none of them do: every op is
 checked, and everything it needs allocated, before any mapping changes.
 
 Rules the kernel enforces:
@@ -304,7 +330,7 @@ otherwise kernel constants in this version (G12).
 
 | field | meaning |
 |---|---|
-| `type` | `RENDER` or `TRANSFER` |
+| `type` | `RENDER`, or downstream `TRANSFER` (section 2.1) |
 | `context_handle` | context of the matching type |
 | `flags` | per type: transfer has `DST_TWIDDLED`, render has none yet |
 | `cmd` | a `drm_powervr_sgx_cmd_render` or `drm_powervr_sgx_cmd_transfer` (section 3) |
@@ -1128,6 +1154,11 @@ leaves room for growth later with no uAPI change. It may be wrong for Minecraft-
 **Decided (Joseph, 2026-11-03): keep `DRM_POWERVR_SGX_JOB_TYPE_NULL`.** A job with no GPU
 work that still goes through the scheduler and signals its fences, for IGT, fence and
 scheduler tests without a GPU workload. It can be dropped before the RFC if reviewers object.
+
+**Open for revision 4 (U9, 2026-11-12):** Mesa has no user for it; only the kernel's tests
+submit NULL jobs. Reviewers ask for a userspace user of each uAPI item, so the upstream
+header may reserve its type value, as it does the transfer job's (section 2.1).
+`GET_CONTEXT_STATE` has one: Mesa's reset status for `ARB_robustness`.
 
 ### D12. Code objects and the upload ioctl
 

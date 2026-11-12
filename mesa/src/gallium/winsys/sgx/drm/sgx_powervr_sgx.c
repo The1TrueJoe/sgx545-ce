@@ -72,8 +72,8 @@ struct zombie {
    uint64_t point;
 };
 
-/* the uAPI revision this backend speaks: the driver's DRM minor version */
-#define PSGX_UAPI_REVISION 3
+/* the uAPI this backend speaks: the driver's DRM major version */
+#define PSGX_UAPI_MAJOR 1
 
 struct psgx_dev {
    struct sgxws_dev base;
@@ -164,7 +164,6 @@ timeline_value(struct psgx_dev *dd)
 
 /* ------------------------------------------------------------------ memory */
 
-#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
 /* VM_BIND: ops applied in order, all or nothing; synchronous */
 static int
 vm_bind(struct psgx_dev *dd, struct drm_powervr_sgx_vm_bind_op *ops, unsigned n)
@@ -187,22 +186,12 @@ unmap_op(uint64_t va, uint64_t size)
       .size = size,
    };
 }
-#endif
 
 static void
 vm_unmap(struct psgx_dev *dd, uint64_t va, uint64_t size)
 {
-#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
    struct drm_powervr_sgx_vm_bind_op op = unmap_op(va, size);
    int e = vm_bind(dd, &op, 1);
-#else
-   struct drm_powervr_sgx_ioctl_vm_unmap_args a = {
-      .vm_context_handle = dd->vm,
-      .device_addr = va,
-      .size = size,
-   };
-   int e = xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_UNMAP, &a);
-#endif
 
    if (e)
       mesa_loge("sgx: VM unmap %#llx +%#llx failed: %d", (unsigned long long)va,
@@ -229,7 +218,6 @@ reap(struct psgx_dev *dd, bool all)
    if (all)
       timeline_wait(dd, dd->point, 5000);
    done = timeline_value(dd);
-#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
    /* the done ones' unmaps in as few VM_BINDs as the kernel takes */
    {
       struct drm_powervr_sgx_vm_bind_op ops[256];
@@ -250,7 +238,6 @@ reap(struct psgx_dev *dd, bool all)
       if (nops && vm_bind(dd, ops, nops))
          mesa_loge("sgx: VM unmap of %u buffers failed", nops);
    }
-#endif
    for (unsigned i = 0; i < dd->n_zombies; i++) {
       struct zombie *z = &dd->zombies[i];
 
@@ -258,9 +245,6 @@ reap(struct psgx_dev *dd, bool all)
          dd->zombies[n++] = *z;
          continue;
       }
-#ifndef DRM_IOCTL_POWERVR_SGX_VM_BIND
-      vm_unmap(dd, z->va, z->size);
-#endif
       gem_close(dd, z->handle);
       util_vma_heap_free(&dd->vma[z->heap], z->va, z->size);
    }
@@ -285,7 +269,6 @@ va_alloc(struct psgx_dev *dd, enum sgx_heap heap, uint64_t size, uint64_t align)
 static int
 vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
 {
-#ifdef DRM_IOCTL_POWERVR_SGX_VM_BIND
    struct drm_powervr_sgx_vm_bind_op op = {
       .op = DRM_POWERVR_SGX_VM_BIND_OP_MAP,
       .handle = handle,
@@ -294,16 +277,6 @@ vm_map(struct psgx_dev *dd, uint32_t handle, uint64_t va, uint64_t size)
    };
 
    return vm_bind(dd, &op, 1);
-#else
-   struct drm_powervr_sgx_ioctl_vm_map_args a = {
-      .vm_context_handle = dd->vm,
-      .device_addr = va,
-      .handle = handle,
-      .size = size,
-   };
-
-   return xioctl(dd->fd, DRM_IOCTL_POWERVR_SGX_VM_MAP, &a);
-#endif
 }
 
 static int
@@ -382,7 +355,7 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
       goto fail_map;
    }
    if ((e = vm_map(dd, impl->handle, va, bytes))) {
-      mesa_loge("sgx: VM_MAP heap %u at %#llx +%#llx failed: %d", heap,
+      mesa_loge("sgx: VM_BIND map of heap %u at %#llx +%#llx failed: %d", heap,
                 (unsigned long long)va, (unsigned long long)bytes, e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[heap], va, bytes);
@@ -526,7 +499,7 @@ psgx_bo_import(struct sgxws_dev *d, struct sgxws_bo *bo, int fd, uint32_t size)
       goto fail_map;
    }
    if ((e = vm_map(dd, handle, va, bytes))) {
-      mesa_loge("sgx: VM_MAP of an imported dma-buf failed: %d", e);
+      mesa_loge("sgx: VM_BIND map of an imported dma-buf failed: %d", e);
       simple_mtx_lock(&dd->lock);
       util_vma_heap_free(&dd->vma[impl->heap], va, bytes);
       simple_mtx_unlock(&dd->lock);
@@ -1121,9 +1094,10 @@ sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
    if (opts->trace)
       mesa_logw("sgx: SGX_TRACE is for the services driver; ignored");
    ver = drmGetVersion(fd);
-   if (!ver || ver->version_minor < PSGX_UAPI_REVISION) {
-      mesa_loge("sgx: powervr_sgx speaks uAPI revision %d, this Mesa %d",
-                ver ? ver->version_minor : -1, PSGX_UAPI_REVISION);
+   if (!ver || ver->version_major != PSGX_UAPI_MAJOR) {
+      mesa_loge("sgx: powervr_sgx uAPI %d.%d, this Mesa speaks %d.x",
+                ver ? ver->version_major : -1, ver ? ver->version_minor : -1,
+                PSGX_UAPI_MAJOR);
       drmFreeVersion(ver);
       e = -ENODEV;
       goto fail;

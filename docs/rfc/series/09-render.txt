@@ -1,4 +1,4 @@
-drm/powervr_sgx: Add render and transfer jobs
+drm/powervr_sgx: Add render jobs
 
 - A render job is the client's TA kicks and render, built by the kernel
   into the microkernel's TA command from checked command fields.
@@ -6,4 +6,3 @@ drm/powervr_sgx: Add render and transfer jobs
   outside every client heap; its first render context sets its size.
 - Render target datasets: render details, region headers and tail
   pointers, kernel-owned.
-- A transfer job is a blit through the 3D core, built the same way.
