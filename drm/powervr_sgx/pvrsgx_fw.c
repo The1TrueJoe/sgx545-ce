@@ -870,19 +870,25 @@ MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unname
 struct sweep_variant {
 	u32 flags, enable;
 	u16 data0;
-	u8 dest, cc, data1, prog, a68_low, vendor;
+	u8 dest, cc, data1, prog, a68_low, vendor, doutu_bit;
 };
 
 /*
- * The DOUTU's task fetches its code linearly from PDS_EXEC_BASE + 0 (stage 1,
- * log 2026-11-12-0202). Alias the code arena's page 0, the image's first
- * 4 KiB with its event entry, ladder and init, there: does the microkernel
- * initialise from it? V4, the branch page, is dropped: a USSE fetch would
- * run its words as USSE code.
+ * The DOUTU's task fetches its code from PDS_EXEC_BASE + its address (stage
+ * 1, log 2026-11-12-0202). Which bits of DOUTU word 0 move it, by how much?
+ * The baseline, then word 0 = the temporaries | one bit, b0-b23, low bits
+ * first: a fault page past PDS_EXEC_BASE is that bit's weight. A bit that
+ * lands on the kernel code heap starts the image (EVENT_TIMER 0xa5a).
+ * (The alias variant, attempt 20, stays available as a flag.)
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .flags = PVRSGX_SWEEP_EXEC0_ALIAS },
+	{ .doutu_bit = 1 }, { .doutu_bit = 2 }, { .doutu_bit = 3 }, { .doutu_bit = 4 },
+	{ .doutu_bit = 5 }, { .doutu_bit = 6 }, { .doutu_bit = 7 }, { .doutu_bit = 8 },
+	{ .doutu_bit = 9 }, { .doutu_bit = 10 }, { .doutu_bit = 11 }, { .doutu_bit = 12 },
+	{ .doutu_bit = 13 }, { .doutu_bit = 14 }, { .doutu_bit = 15 }, { .doutu_bit = 16 },
+	{ .doutu_bit = 17 }, { .doutu_bit = 18 }, { .doutu_bit = 19 }, { .doutu_bit = 20 },
+	{ .doutu_bit = 21 }, { .doutu_bit = 22 }, { .doutu_bit = 23 }, { .doutu_bit = 24 },
 };
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
@@ -978,11 +984,14 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 {
 	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2", "HALT" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
-			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ? "" : "baseline");
+			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ||
+			  sv->doutu_bit ? "" : "baseline");
 
 	if (sv->prog)
 		n += scnprintf(buf + n, len - n, " program %s",
 			       prog[sv->prog < ARRAY_SIZE(prog) ? sv->prog : 0]);
+	if (sv->doutu_bit)
+		n += scnprintf(buf + n, len - n, " DOUTU bit %u", sv->doutu_bit - 1);
 	if (sv->a68_low)
 		n += scnprintf(buf + n, len - n, " 0xa68 low 0x%x", sv->a68_low);
 
@@ -1130,6 +1139,7 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_prog = 0;
 	sdev->sweep_a68_low = 0;
 	sdev->sweep_vendor = 0;
+	sdev->sweep_doutu_bit = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -1222,6 +1232,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_prog = sv->prog;
 			sdev->sweep_a68_low = sv->a68_low;
 			sdev->sweep_vendor = sv->vendor;
+			sdev->sweep_doutu_bit = sv->doutu_bit;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			err = exec0_fill(sdev);
 			if (err)
