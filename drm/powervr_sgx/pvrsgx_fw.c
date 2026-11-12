@@ -414,6 +414,22 @@ void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
 	ida_free(&sdev->fw.pd_slots, slot);
 }
 
+/*
+ * Bring-up only (gap 19, test T1): map the kernel data arena READONLY on a
+ * guessed core, so a task's store to it should fault.
+ */
+static bool stage1_data_ro;
+module_param(stage1_data_ro, bool, 0444);
+MODULE_PARM_DESC(stage1_data_ro, "Map a guessed core's kernel data arena GPU read-only (gap 19 test)");
+
+static u32 data_pte_flags(struct pvrsgx_device *sdev)
+{
+	if (stage1_data_ro && sdev->family->event_pds_guessed)
+		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_READONLY;
+	return SGX_MMU_PTE_CACHECONSISTENT |
+	       (sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT);
+}
+
 int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
@@ -441,8 +457,7 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 	 * read-only. Without EDMPROTECT where the core needs it (data_no_edmprotect).
 	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, pvrsgx_heaps(sdev)->kernel_data.base,
-				DATA_ARENA_SIZE, SGX_MMU_PTE_CACHECONSISTENT |
-				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT));
+				DATA_ARENA_SIZE, data_pte_flags(sdev));
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, pvrsgx_heaps(sdev)->kernel_code.base,
@@ -479,6 +494,10 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	pvrsgx_kmem_free(sdev, &sdev->fw.pdtable);
 	pvrsgx_kmem_free(sdev, &sdev->fw.exec0);
 	ida_destroy(&sdev->fw.pd_slots);
+	for (int i = 0; i < ARRAY_SIZE(sdev->dirswap_mmu); i++) {
+		pvrsgx_mmu_destroy(sdev->dirswap_mmu[i]);
+		sdev->dirswap_mmu[i] = NULL;
+	}
 }
 
 /*
@@ -911,6 +930,66 @@ static void scan_arena(struct pvrsgx_device *sdev, const struct pvrsgx_kmem *km,
 	}
 	drm_info(&sdev->base, "scan: 0x%08x %u times in the %s arena (0x%x bytes)\n",
 		 stage1_scan, hits, name, km->size);
+}
+
+/*
+ * Bring-up only (gap 19, test T2, the fact sheet's gap 7): with a task still
+ * running after a failed start, move list 0 between directories and log the
+ * BIF's fault state after each step. A' maps the kernel code and data heaps
+ * as the firmware's directory does; B maps only the code. A task loading
+ * from the data arena must fault once list 0 is on B and the directory cache
+ * is invalidated: no translation of the old directory may survive.
+ */
+static bool stage1_dirswap;
+module_param(stage1_dirswap, bool, 0444);
+MODULE_PARM_DESC(stage1_dirswap, "On a guessed core's failed start, switch list 0 between two directories (gap 7 test)");
+
+static void dirswap_report(struct pvrsgx_device *sdev, const char *step)
+{
+	msleep(50);
+	drm_info(&sdev->base, "dirswap %s: list 0 0x%08x BIF int 0x%x fault 0x%08x\n", step,
+		 sgx_rd(sdev, SGX_CR_BIF_DIR_LIST_BASE0), sgx_rd(sdev, SGX_CR_BIF_INT_STAT),
+		 sgx_rd(sdev, SGX_CR_BIF_FAULT));
+}
+
+static void fw_dirswap(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	struct pvrsgx_mmu *a, *b;
+
+	if (!stage1_dirswap || !pvrsgx_core_single_context(sdev->family))
+		return;
+	a = pvrsgx_mmu_create(sdev);
+	b = pvrsgx_mmu_create(sdev);
+	if (IS_ERR(a) || IS_ERR(b)) {
+		if (!IS_ERR(a))
+			pvrsgx_mmu_destroy(a);
+		if (!IS_ERR(b))
+			pvrsgx_mmu_destroy(b);
+		return;
+	}
+	sdev->dirswap_mmu[0] = a;
+	sdev->dirswap_mmu[1] = b;
+	pvrsgx_mmu_share(a, sdev->kernel_mmu, h->kernel_code.base, h->kernel_code.end);
+	pvrsgx_mmu_share(a, sdev->kernel_mmu, h->kernel_data.base, h->kernel_data.end);
+	pvrsgx_mmu_share(b, sdev->kernel_mmu, h->kernel_code.base, h->kernel_code.end);
+	/* The directories are in memory before list 0 names them. */
+	wmb();
+	drm_info(&sdev->base, "dirswap: firmware PD 0x%08x, A' 0x%08x, B 0x%08x\n",
+		 pvrsgx_mmu_pd_addr(sdev->kernel_mmu), pvrsgx_mmu_pd_addr(a),
+		 pvrsgx_mmu_pd_addr(b));
+	dirswap_report(sdev, "before");
+	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE0, pvrsgx_mmu_pd_addr(a));
+	pvrsgx_bif_inval_dc(sdev);
+	dirswap_report(sdev, "A' with INVALDC");
+	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE0, pvrsgx_mmu_pd_addr(b));
+	dirswap_report(sdev, "B without INVALDC");
+	pvrsgx_bif_inval_dc(sdev);
+	dirswap_report(sdev, "B with INVALDC");
+	/* Back on the firmware's directory before the stop's reset. */
+	sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE0, pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	pvrsgx_bif_inval_dc(sdev);
+	dirswap_report(sdev, "back on the firmware's");
 }
 
 static void fw_scan(struct pvrsgx_device *sdev)
@@ -1527,6 +1606,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		if (sdev->family->event_pds_guessed) {
 			pvrsgx_fw_dump_status_words(sdev);
 			fw_scan(sdev);
+			fw_dirswap(sdev);
 		}
 		return err;
 	}

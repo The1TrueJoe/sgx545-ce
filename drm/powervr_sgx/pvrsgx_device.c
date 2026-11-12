@@ -112,7 +112,7 @@ static void soft_reset(struct pvrsgx_device *sdev, bool bif)
 }
 
 /* BIF_CTRL is 0 whenever the microkernel runs: its invalidates pulse a bit, then write 0. */
-static void inval_dc(struct pvrsgx_device *sdev)
+void pvrsgx_bif_inval_dc(struct pvrsgx_device *sdev)
 {
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, SGX_CR_BIF_CTRL_INVALDC);
 	sgx_wr(sdev, SGX_CR_BIF_CTRL, 0);
@@ -141,7 +141,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		reset_sleep(sdev);
 		soft_reset(sdev, false);
 		reset_sleep(sdev);
-		inval_dc(sdev);
+		pvrsgx_bif_inval_dc(sdev);
 
 		/* Let each faulting request complete on a scratch page. */
 		for (int n = 0; n < 32; n++) {
@@ -160,7 +160,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 			reset_sleep(sdev);
 			soft_reset(sdev, false);
 			reset_sleep(sdev);
-			inval_dc(sdev);
+			pvrsgx_bif_inval_dc(sdev);
 			pvrsgx_mmu_unmap(sdev->reset_mmu, addr, SGX_MMU_PAGE_SIZE);
 		}
 	} else {
@@ -176,7 +176,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		       pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
 	sgx_wr(sdev, sgx_cr_bif_dir_list_base(0),
 	       pvrsgx_mmu_pd_addr(pvrsgx_idle_mmu(sdev)));
-	inval_dc(sdev);
+	pvrsgx_bif_inval_dc(sdev);
 
 	sgx_wr(sdev, SGX_CR_SOFT_RESET, 0);
 	reset_sleep(sdev);

@@ -217,6 +217,8 @@ struct pvrsgx_device {
 	bool pm_pinned;
 	/** @sweep_flags: The bring-up start sweep's changes (PVRSGX_SWEEP_*), 0 normally. */
 	u32 sweep_flags;
+	/** @dirswap_mmu: Bring-up only: the gap-7 test's two directories, freed at fini. */
+	struct pvrsgx_mmu *dirswap_mmu[2];
 	/** @sweep_dest: The sweep's MOVS destination for the event program, + 1; 0 none. */
 	u8 sweep_dest;
 	/** @sweep_cc: The sweep's MOVS condition for the event program, + 1; 0 none. */
@@ -375,6 +377,7 @@ void pvrsgx_kmem_free(struct pvrsgx_device *sdev, struct pvrsgx_kmem *km);
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_fini(struct pvrsgx_device *sdev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
+void pvrsgx_bif_inval_dc(struct pvrsgx_device *sdev);
 void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);
