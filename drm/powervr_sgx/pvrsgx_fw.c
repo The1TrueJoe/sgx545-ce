@@ -434,9 +434,9 @@ MODULE_PARM_DESC(stage1_data_ro, "Map a guessed core's kernel data arena GPU rea
  *   - the kernel data arena mapped with EDMPROTECT, to test the store path
  *     under the vendor's requestor assumption.
  */
-bool pvrsgx_stage1_vendor;
-module_param_named(stage1_vendor, pvrsgx_stage1_vendor, bool, 0444);
-MODULE_PARM_DESC(stage1_vendor, "The vendor-stack event program and launch words (sgx530 vendor-setup §9 probe)");
+bool pvrsgx_stage1_vlaunch;
+module_param_named(stage1_vlaunch, pvrsgx_stage1_vlaunch, bool, 0444);
+MODULE_PARM_DESC(stage1_vlaunch, "The vendor-stack event program and launch words (sgx530 vendor-setup §9 probe)");
 
 static u32 data_pte_flags(struct pvrsgx_device *sdev)
 {
@@ -446,7 +446,7 @@ static u32 data_pte_flags(struct pvrsgx_device *sdev)
 	if (stage1_data_ro)
 		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_READONLY;
 	/* §9 maps it with EDMPROTECT, undoing data_no_edmprotect for the probe. */
-	if (pvrsgx_stage1_vendor)
+	if (pvrsgx_stage1_vlaunch)
 		return SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT;
 	return SGX_MMU_PTE_CACHECONSISTENT |
 	       (sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT);
@@ -705,7 +705,7 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	int err;
 
 	/* §9: the vendor's event control words. */
-	if (pvrsgx_stage1_vendor) {
+	if (pvrsgx_stage1_vlaunch) {
 		data0 = 3;
 		data1 = 0x00013d01;
 	}
