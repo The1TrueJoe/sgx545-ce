@@ -992,10 +992,37 @@ static void fw_dirswap(struct pvrsgx_device *sdev)
 	dirswap_report(sdev, "back on the firmware's");
 }
 
+/*
+ * Bring-up only (H-B): before the scan, have the host flush the BIF and
+ * invalidate its directory cache, so a store held there reaches memory.
+ * BIF_CTRL FLUSH is bit 2 in the GPL sgx530defs.h (EUR_CR_BIF_CTRL_FLUSH).
+ */
+static bool stage1_flush;
+module_param(stage1_flush, bool, 0444);
+MODULE_PARM_DESC(stage1_flush, "Before stage1_scan, flush the BIF from the host (stage-1 test)");
+
+#define SGX530_CR_BIF_CTRL_FLUSH	BIT(2)
+
+static void fw_host_flush(struct pvrsgx_device *sdev)
+{
+	u32 ev = sgx_rd(sdev, SGX_CR_EVENT_STATUS), req = sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT);
+
+	sgx_wr(sdev, SGX_CR_BIF_CTRL, SGX530_CR_BIF_CTRL_FLUSH);
+	sgx_wr(sdev, SGX_CR_BIF_CTRL, 0);
+	pvrsgx_bif_inval_dc(sdev);
+	msleep(10);
+	drm_info(&sdev->base,
+		 "host flush: event status 0x%08x -> 0x%08x, BIF mem req 0x%x -> 0x%x, int 0x%x\n",
+		 ev, sgx_rd(sdev, SGX_CR_EVENT_STATUS), req, sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT),
+		 sgx_rd(sdev, SGX_CR_BIF_INT_STAT));
+}
+
 static void fw_scan(struct pvrsgx_device *sdev)
 {
 	if (!stage1_scan)
 		return;
+	if (stage1_flush)
+		fw_host_flush(sdev);
 	/* The GPU's writes before the CPU's reads. */
 	rmb();
 	scan_arena(sdev, &sdev->fw.data, "data");
