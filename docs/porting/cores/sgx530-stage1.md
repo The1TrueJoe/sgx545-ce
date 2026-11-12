@@ -1153,6 +1153,112 @@ mirror with `[moe]` dropped from the `ld.a.d` and `st.a.d`.
   encoding differs. Next is an offset sweep (vary #42) to read the effective-address
   formula, as the USE_CODE_BASE bits were read.
 
+## After the twenty-eighth attempt: not [moe], not a scaled offset
+
+Attempt 28 (log 2026-11-12-0336): the no-`[moe]` probe faults at the same 0x0fd79000. So
+`[moe]` is not the cause, and 0x0fd79000 is a deterministic function of r17 (0x0f003000) and
+the `ld.a.d` that is neither `r17 + 42 × a clean unit` nor MOE-derived.
+
+**Attempt 29** isolates one `ld.a.d`, gated by `str` (a register write, not `a.d`
+addressing, so it signals success without depending on the thing under test). `EVENT_TIMER`
+= 0xa5a means the load did not fault; a fault names the effective address.
+
+| Probe | `ld.a.d` | Asks |
+|---|---|---|
+| `sgx530_usse_ld0` | `r3, r17, #0` | does the offset matter? If it still faults at 0x0fd79000, the address doesn't depend on the offset |
+| `sgx530_usse_ld0nb` | `r3, r5, #0`, r5 = `limm` 0x0f004000 | does the base register matter? If the fault stays at 0x0fd79000, the base operand isn't read from the register |
+
+- Build each: `python3 ukernel/build.py sgx530_usse_ld0 …` / `… sgx530_usse_ld0nb …`, then
+  mkukfw. `sgx530_usse_ld0`: image sha256 675b7843…, crc 0xc7a8e64a, packaged 7013b5a6….
+  `sgx530_usse_ld0nb`: image d0ce59a3…, crc 0xd7ce33b4, packaged e1d819da…. Both same
+  through asm.py and `sgx-asm`.
+- Reading:
+  - **ld0 passes (`EVENT_TIMER` 0xa5a):** r17 + 0 is a valid address; the offset scaling is
+    wrong. Next: an offset sweep to read the unit.
+  - **ld0 faults at 0x0fd79000:** the offset is irrelevant; the base/address comes from
+    elsewhere. Then ld0nb separates the register from a fixed source.
+  - **ld0nb's fault moves with r5, ld0's with r17:** the base register works, so it's the
+    offset. If both stay at 0x0fd79000 whatever the base, the `a.d` addressing reads its
+    base from a fixed place (an internal/index register), not the operand — an ISA
+    difference to decode from the hwt_* suites, document C, and hand to cleanroom-isa.
+
+## After the twenty-ninth attempt: limm, not ld
+
+Attempt 29 (log 2026-11-12-0340) found the real cause: **`limm` loads the wrong value on the
+SGX530.**
+- **ld0** (`ld.a.d r3, r17, #0`): b1 fault at 0x0fd79000 — the offset doesn't matter.
+- **ld0nb** (`ld.a.d r3, r5, #0`, r5 = `limm` 0x0f004000): b1 fault at **0x0c004000**. The
+  base register is read, and the loaded value is 0x0c004000, not 0x0f004000.
+
+0x0c004000 = (bits 26-31) | (bits 0-20) of 0x0f004000, with **bits 21-25 dropped** (worth
+0x03000000, the exact difference). So `ld` is fine; the SGX530 decodes the `limm` value
+field differently from the SGX545, reading bits 21-25 from a different place in the
+instruction word (as 0, where the SGX545 encoding puts them). Every large `limm` in the
+image — and the patched r17 — loads wrong, which is why the first `limm`-built address
+faulted. Tag C (attempt 29). The low field (0-20) and bits 26-31 are correct.
+
+**Attempt 30: the `limm` field sweep** (`cores/sgx530_limm_b21.py` … `b27.py`). Each `limm`s
+r5 = a single bit 21-27, then `ld.a.d r3, r5, #0`; the fault page is the value the SGX530
+loaded, so it reads where each value bit lands.
+
+| Probe | r5 value | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| b21 | 0x00200000 | 95130a769f8fccdb… | 38e9b5547babb439… |
+| b22 | 0x00400000 | 2d012fa428a416c4… | c43d04a4e107c711… |
+| b23 | 0x00800000 | ac21851a3603ef16… | eaf9700b460e8b79… |
+| b24 | 0x01000000 | 72ae46039b9b122a… | 53f4edc3c9710c6a… |
+| b25 | 0x02000000 | 8230559bf0473b63… | aedb1b4b53b4c8e6… |
+| b26 | 0x04000000 | 073cbbc7686de92a… | 79c09d2225fefa74… |
+| b27 | 0x08000000 | 9a9a05867a58946a… | ecfdf000ac1d8f09… |
+
+Build each with `python3 ukernel/build.py sgx530_limm_b<n> …` then mkukfw; all same through
+asm.py and `sgx-asm`. `EVENT_TIMER` 0xa5a means the value decoded to a mapped address (no
+fault); otherwise the fault page is the decoded value. A bit at its own weight is correct;
+one landing elsewhere, or faulting at 0, shows the SGX530's field position for that bit.
+
+With the sweep, write the SGX530's `limm` value-field layout into ISA.md (C); the encoding
+goes to cleanroom-isa for `sgx.xml` and to the driver for `fw_limm`; then the image builds
+with `ISA_CORE = 530` and gets its own golden. The SGX545 golden is untouched.
+
+## After the thirtieth attempt: ld.a.d's source operand, not limm
+
+Attempt 30 (log 2026-11-12-...) **retracted the limm reading.** The seven `sgx530_limm_b21..b27`
+probes each `limm`ed a different single bit into r5, then `ld.a.d r3, r5, #0`, and **all
+faulted at the same 0x0c004000** — the `limm` value doesn't matter. So `limm` is fine
+(ISA.md retraction, commit 628f2415).
+
+The fault address depends on **which register `ld.a.d` names**, not its contents:
+- `ld.a.d r3, r17, #0` → 0x0fd79000;
+- `ld.a.d r3, r5, #0` → 0x0c004000 (any r5).
+
+So the SGX530 derives `ld.a.d`'s base from the source-operand field (the register number),
+not from the register's contents. The offset doesn't matter either (attempt 29). This is an
+`ld.a.d` source-operand decode difference from the SGX545 (which loads `[contents +
+offset]`).
+
+**Attempt 31: the register-number sweep** (`cores/sgx530_ldreg_r0.py` …). `ld.a.d r3, rN,
+#0` with the register value unused; the fault page is the address the SGX530 derives from
+naming rN. r5 and r17 are known (0x0c004000, 0x0fd79000); these fill in the rest.
+
+| Probe | reg | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| r0 | 0 | fdf991dfae928e52… | a1f0273a986cfd72… |
+| r1 | 1 | 10c357de7fb026ed… | 9bf16d19208814da… |
+| r2 | 2 | e306298f6590af2b… | 35f83e3a8f747b3a… |
+| r3 | 3 | fcf0c79f98111276… | a9c77fb5bdab5199… |
+| r4 | 4 | de7729ecacc0688a… | 63c98cbec606820d… |
+| r6 | 6 | 375fa4590dc1ec5e… | 45d33975e862cb01… |
+| r8 | 8 | 95ce1938a9843280… | d60bd70036780c14… |
+| r16 | 16 | 9c284028437ded28… | 8576a33a8d1b85ca… |
+| r31 | 31 | ec3ec17493749fef… | 1a46787cacb89952… |
+
+Build each `python3 ukernel/build.py sgx530_ldreg_r<n> …` then mkukfw; all same through
+asm.py and `sgx-asm`. `EVENT_TIMER` 0xa5a = the derived address was mapped (no fault); else
+the fault page is that address. Map reg number → address: a clean linear or bit-placed
+relation reveals how the SGX530 reads the source-operand field (a shifted/narrower register
+field, or the field used as an immediate/address). Then document it C in ISA.md and hand the
+`ld.a.d` operand decode to cleanroom-isa.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

@@ -337,6 +337,10 @@ USSE_PROBE = None            # a minimal self-looping event task (cores/sgx530_u
 USSE_PHAS = False            # USSE probe: emit phas.i first (cores/sgx530_usse_phas.py)
 USSE_MIRROR = False          # USSE probe: mirror the real entry preamble (cores/sgx530_usse_mirror.py)
 USSE_MOE = True              # USSE mirror probe: False drops [moe] (cores/sgx530_usse_nomoe.py)
+USSE_LDGATE = False          # isolate one ld.a.d, str-gated (cores/sgx530_usse_ld*.py)
+USSE_LDOFF = 0x2a            # the ld.a.d offset for USSE_LDGATE (default HEARTBEAT)
+USSE_LDBASE = None           # None = r17 (ctlblk); an int = limm it into r5 as the base
+USSE_LDREG = None            # ld-gate: name register rN as the base, value unused (reg sweep)
 
 # ---- clock gating, reset, BIF (EUR_CR byte offsets and fields) --------------
 CR_CLKGATECTL = 0x000
