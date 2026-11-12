@@ -462,6 +462,20 @@ def build(a):
         # SGX530 needs it before any work (no USE_UNLIMITED_PHASES).
         if USSE_PHAS:
             a.phas()
+        if USSE_ALUWRITE:
+            # does a non-limm ALU write land? or r5, r5, r17 = r5's leftover (0x0c004000)
+            # | r17's (0x0fd79000) = 0x0fd7d000, then ld.a.d r3, r5, #0. Fault at
+            # 0x0fd7d000 => the ALU wrote r5; at 0x0c004000 => it did not. No limm.
+            a.patch(17, "ctlblk")
+            a.i("or r5, r5, r17")
+            a.i("ld.a.d r3, r5, #0")
+            a.i("wdf")
+            a.i(f"limm r0, #{DIAG_TIMER}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r0")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_LIMMTEST is not None:
             # does limm write its destination on the 530? limm rK, #0xa5a then
             # str rK to EVENT_TIMER (str reads the register). EVENT_TIMER = 0xa5a =>
