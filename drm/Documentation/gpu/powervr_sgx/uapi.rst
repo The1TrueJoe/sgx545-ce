@@ -36,6 +36,7 @@ DEV_QUERY
                  drm_powervr_sgx_heap_id
                  drm_powervr_sgx_heap
                  drm_powervr_sgx_dev_query_heap_info
+                 DRM_POWERVR_SGX_CAP_BACKWARD_BLITS
 
 CREATE_BO
 ---------
@@ -44,6 +45,8 @@ CREATE_BO
 
 .. kernel-doc:: include/uapi/drm/powervr_sgx_drm.h
    :identifiers: drm_powervr_sgx_ioctl_create_bo_args
+                 DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS
+                 DRM_POWERVR_SGX_BO_CODE
                  drm_powervr_sgx_ioctl_get_bo_mmap_offset_args
 
 UPLOAD_CODE

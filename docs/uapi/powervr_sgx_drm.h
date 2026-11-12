@@ -28,7 +28,7 @@ extern "C" {
  *    offset in hexadecimal. Padding and reserved fields must be zero; the
  *    kernel always checks them and returns -EINVAL otherwise.
  *  - User pointers and device-virtual addresses are __u64. A device-virtual
- *    address at or above 2^&drm_powervr_sgx_dev_query_limits.va_bits is
+ *    address at or above 2^(&drm_powervr_sgx_dev_query_limits.va_bits) is
  *    rejected.
  *  - Structs reached through &struct drm_powervr_sgx_obj_array can grow at the
  *    end. A short object is zero-extended. In an object longer than the kernel
