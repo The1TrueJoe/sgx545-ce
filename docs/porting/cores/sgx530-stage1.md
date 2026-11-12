@@ -1401,9 +1401,133 @@ Build each then mkukfw; all same through asm.py and `sgx-asm`. Readout is the fa
   Then set the entry (and every task's) `phas.i` `temps4` on the SGX530, a 530-only image
   change via a per-core flag; the SGX545 `phas.i #0,#0` is unchanged, golden intact. Re-run
   the real image with it: likely init completing.
-- **0x0c004000:** still 0 temps; `phas.i` isn't it either, and the temp allocation is
-  neither DOUTU word 0 nor `phas.i` — next look at `phas.i`'s other fields (rate, the
-  phase-count semantics without `USE_UNLIMITED_PHASES`) or a `setfc`/MOE-style setup.
+- **0x0c004000:** still 0 temps; `phas.i` isn't it either.
+
+**Attempt 36 result (log 2026-11-12-...):** `aluwr_ph8/ph6/ph63` all faulted at 0x0c004000.
+So `phas.i`'s temps4 isn't the temp source. Both temp-count hypotheses (DOUTU word 0,
+`phas.i` temps4) are ruled out. **The strongest remaining lead is the host-side init diff
+below** (the 530 writes 3 of the 545's 16 setup registers) — a driver-side change, the next
+step (attempt 37). A `setfc`/MOE-style USSE setup, or `phas.i`'s rate/phase semantics, are
+fallbacks only if the init writes don't help.
+
+## The host-side init diff (the coordinator's survey, likely the register-file setup)
+
+The 545 `init_regs` (part 2) writes **16** setup registers; our 530 `init_regs` writes **3**.
+All of these offsets are unnamed in both the 530 and 545 GPL headers — they come from the
+captured 545 srvinit script (SRVINIT.md), so **G**. The 530 was stripped to the minimum plus
+0xa74 (attempt 18). Missing on the 530 (13), with the 545's values:
+
+| offset | 545 value | note |
+|---|---|---|
+| 0x818 | 0x7ff | USE/partition allocation (G) — prime temp-setup suspect |
+| 0x810 | 1 | " |
+| 0x814 | 0xffff | " |
+| 0x800 | 0x30 | " (0x800 is `EVENT_STATUS_TPC_CLEAR`'s offset on the 530; the write is a different block) |
+| 0x804 | 0xffff | " |
+| 0x4e8 | 0x100 | (G) |
+| 0xa00 | 0x7c000 | (G) |
+| 0x13c | 0 | (G) |
+| 0xa7c | 0 | (G) |
+| 0xa80 | 0 | (G) |
+| 0xa78 | 0x2c | tested alone in attempt 18 (no PDS effect) |
+| 0xaac | 0x45 | " |
+| 0xabc | 0xe | `PDS` on the 530 (K); tested alone, no effect |
+
+The 530 writes only `EVENT_HOST_ENABLE`, `EVENT_HOST_ENABLE2`, `0xa74 = 0x208200`.
+
+**The hypothesis (strong): the missing writes include the host-side USE register-file /
+temp-partition setup the task needs.** 0x810/0x814/0x818 = 1/0xffff/0x7ff and 0x800/0x804 =
+0x30/0xffff read like resource allocation. Without them the task has no register file, so
+writes drop and reads return leftovers — attempts 31-35 exactly. Attempt 18 tested the PDS
+block (0xa78/0xaac/0xabc/0xa00) only against "does the PDS run," never against "do writes
+land," and never wrote 0x810-0x818 / 0x800-0x804 / 0x4e8 / 0x13c at all.
+
+**Attempt 37 (approved): write the 545 `init_regs` offsets the 530 skips.** The coordinator
+approved, under the standing go, these exact offsets at the 545 captured values (G): 0x800,
+0x804, 0x810, 0x814, 0x818, 0x4e8, 0x13c, 0xa00, 0xa7c, 0xa80, plus 0xa78/0xaac/0xabc. (These
+are ask-first: unnamed in both GPL headers. Approval is per these offsets, not implied by the
+diff.) Run it as a driver-side sweep, not folded into `sgx530_init_regs` until a variant
+proves what's needed:
+- each offset read once before the first write, logged;
+- the recovery reset first;
+- the full set together first, with `aluwr` as the readout;
+- if writes land (0x0fd7d000), bisect starting with 0x810/0x814/0x818, so the table keeps
+  only what's needed;
+- stop at the first hang; a plug cycle only to recover, the board owner told.
+
+Record the values G (545 capture) and the effect C once measured. If writes land, re-run the
+real image: likely init completing.
+
+## After the thirty-seventh attempt: consolidation — the USSE executes but no write retires
+
+Attempt 37 (log b487d86a): the init-regs writes are flat, and the read-backs close the lead
+— **0x810/0x814/0x818/0x800/0x4e8/0xaac don't latch** (read 0 after the write), so those
+registers aren't implemented on the SGX530 and can't be the register-file setup. (0x804,
+0xa00, 0xa78, 0xabc do latch.) Read-backs recorded C in sgx530.md; the host-side init-regs
+lead is closed.
+
+**The consolidated finding (C, from attempts 24-37):**
+- The open microkernel's USSE code **executes** on the SGX530: `phas.i`, `ld.a.d` (it
+  generates the address and faults/loads), an unconditional `ba` (the self-loop runs), and
+  instruction fetch all work, with the code base at `>> 8` and `phas.i` first.
+- **No register write retires.** `limm`, an ALU `or`, and `str` to `EVENT_TIMER` all fail to
+  change the register a later read sees. Reads (`ld.a.d rN`) return each register's stable
+  power-on leftover, the same across boots (attempts 31-34).
+- **Ruled out as the cause:** the DOUTU word-0 temp field (35), `phas.i`'s temps4 (36), and
+  the host-side init-regs setup (37). DOUTU word 1 = 2 and word 2 = 0 are flag/unused, not a
+  temp field (PDS.md); the SGXMKIF init struct has no register-file field.
+
+So the SGX530 runs the task but writes results nowhere a read sees — a register-file /
+write-back / bank difference, not a single misplaced field. The two readings left:
+1. **Writes are dropped** — the task has no writable register file (0 temporaries), from a
+   setup the SGX530 needs that neither the DOUTU, `phas.i`, nor the host init provides.
+2. **Writes land in a bank reads don't see** — compute writes go to one bank, `ld.a.d`
+   reads its base from another, for the same register number.
+
+**Direction (for the coordinator):** our event entry uses **temporaries** as the pointer
+base (UKERNEL.md: "a reserved temp, not a secondary attribute", because the bare-DOUTU event
+context has no SA DMA), relying on SGX545 behavior. The SGX530 lacks `USE_UNLIMITED_PHASES`
+and has 2 USE pipes (not 4); its DDK microkernel may structure the EDM task differently
+(phases, or primary/secondary attributes set by the PDS rather than temporaries). Rather
+than more single-register sweeps, the next step is likely to compare how TI's GPL/DDK SGX530
+EDM task is built, or to decode the SGX530's USSE register-bank/write-back with cleanroom-isa.
+A cheap probe meanwhile: a PDS `DOUTA` that writes a primary attribute before the DOUTU,
+then a USSE read of it — if attributes are visible where temporaries aren't, the microkernel
+should use them on the SGX530.
+
+## Attempt 38: instruction pairing (the GPL feature-flag lead)
+
+The GPL `sgxfeaturedefs.h` gives the likely cause. The SGX545 has
+`SGX_FEATURE_USE_NO_INSTRUCTION_PAIRING`; the **SGX530 lacks it** (its block has only
+`NUM_USE_PIPES 2`, `AUTOCLOCKGATING`, 28-bit space). So the SGX530's USSE **pairs /
+schedules adjacent instructions**, and the open microkernel is written for the no-pairing
+SGX545. If the SGX530 pairs a write with the next, dependent instruction — `or r5, r5, r17`
+with the following `ld.a.d r3, r5` — the `ld` reads r5's **pre-write** value. That is exactly
+"reads return stable leftovers, writes don't appear": the write happens, the paired read
+sees the old value. ISA.md: `nosched` (h11/h22) suppresses this, and the vendor compiler sets
+it around a register write (ISA.md "the compiler puts `nosched` on the words between an
+internal register's write"); the SGX545 never needs it.
+
+**The test: space the write from the read with nops** (`cores/sgx530_aluwr_nop{1,2,4,8}.py`):
+`or r5, r5, r17`, N nops, `ld.a.d r3, r5, #0`. If the `ld` then faults at **0x0fd7d000** (the
+`or` result), a scheduling/pairing hazard is the cause, and the write was landing all along.
+
+| Probe | nops | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| nop1 | 1 | d296a90ac9be258b… | afb04b326b7b272f… |
+| nop2 | 2 | 2e8d6976207d8e3c… | b5e3e7fad93dbd58… |
+| nop4 | 4 | b5bc6ad91895e152… | 784507c19b3b1ee4… |
+| nop8 | 8 | ecb151283f792a27… | 57476af8622e0928… |
+
+Build each then mkukfw; all same through asm.py and `sgx-asm`. The smallest N that gives
+0x0fd7d000 is the hazard distance.
+
+**If it's pairing:** the fix is per-core — on the SGX530, break scheduling between a write
+and its dependent use, either with `nosched` on the writing instruction or by spacing
+(the assembler/`sgx.xml` for `nosched`, via cleanroom-isa; or the microkernel emits the
+barriers for the SGX530 build). The SGX545 image is unchanged. Then re-run the real image:
+with the hazard handled, `limm`, the stores and init should work. This also fits why *every*
+write looked dropped: the microkernel is dense with write-then-use pairs.
 
 ## Abort conditions
 
