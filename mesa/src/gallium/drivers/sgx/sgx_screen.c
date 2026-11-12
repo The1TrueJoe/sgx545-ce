@@ -57,7 +57,7 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
    {"nomrt", SGX_DEBUG_NO_MRT,
     "one colour buffer, as before MRT (a draw a pass a buffer, H1: a second PBE emit hangs the GPU)"},
    {"ubo", SGX_DEBUG_UBO,
-    "uniform blocks, 12 a stage of 16 KiB, each copied into the frame for a draw (ARB_uniform_buffer_object): until that passes on a board"},
+    "uniform blocks, 12 a stage of 16 KiB, each copied into the frame for a draw (ARB_uniform_buffer_object; with glsl130 only, as their offsets are integers): until that passes on a board"},
    {"zlsdump", SGX_DEBUG_ZLS_DUMP,
     "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
@@ -111,6 +111,14 @@ sgx_get_screen_fd(struct pipe_screen *pscreen)
    return sgx_screen(pscreen)->fd;
 }
 
+/* uniform blocks: SGX_DEBUG=ubo, and only with the native integers */
+static bool
+sgx_ubos(void)
+{
+   return (sgx_drv_debug & (SGX_DEBUG_UBO | SGX_DEBUG_GLSL130)) ==
+          (SGX_DEBUG_UBO | SGX_DEBUG_GLSL130);
+}
+
 static void
 sgx_init_shader_caps(struct pipe_screen *pscreen)
 {
@@ -147,11 +155,11 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
        * size on top, which leaves GL's 512 components to the application */
       caps->max_const_buffer0_size =
          (s == MESA_SHADER_VERTEX ? 128 + 9 : 128) * 4 * sizeof(float);
-      /* and uniform blocks 1-12 (SGX_DEBUG=ubo): the compiler's ld.a.d from
-       * the address the driver puts in constant SGX_K_UBO + n, of a copy the
-       * winsys makes in the frame (sgxws_ubo) */
-      caps->max_const_buffers =
-         sgx_drv_debug & SGX_DEBUG_UBO ? 1 + SGX_MAX_UBOS : 1;
+      /* and 12 uniform blocks (SGX_DEBUG=ubo, with the native integers: the
+       * float path makes a block offset a float): the compiler's ld.a.d
+       * from the address the driver puts in constant SGX_K_UBO + n, of a
+       * copy the winsys makes in the frame (sgxws_ubo) */
+      caps->max_const_buffers = sgx_ubos() ? 1 + SGX_MAX_UBOS : 1;
       /* u[i]: indexed from SA, or from the block when the array doesn't fit
        * (without it GLSL selects over the whole array, a load per element) */
       caps->indirect_const_addr = true;
@@ -206,7 +214,7 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
    /* uniform blocks (SGX_DEBUG=ubo): GL 3.1's 16 KiB; st takes
     * ARB_uniform_buffer_object at no less. They are copied for each frame,
     * so any offset will do */
-   if (sgx_drv_debug & SGX_DEBUG_UBO)
+   if (sgx_ubos())
       caps->max_constant_buffer_size = 16384;
    caps->constant_buffer_offset_alignment = 16;
    /* a pass a colour buffer (sgx_draw_vbo); SGX_DEBUG=nomrt for one */

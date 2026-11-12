@@ -163,11 +163,9 @@ match_fs(struct sgx_pipe_shader *so)
 
       if (!l || comp != c || (load && l != load))
          return;
-      if (l->intrinsic == nir_intrinsic_load_ubo) {
-         if (!nir_src_is_const(l->src[0]) || nir_src_as_uint(l->src[0]) != 0 ||
-             !nir_src_is_const(l->src[1]))
-            return;
-      } else if (l->intrinsic == nir_intrinsic_load_uniform) {
+      /* (a load_ubo is a uniform block's, compiled: st's default uniforms
+       * are load_uniform, as nothing lowers them to constant buffer 0) */
+      if (l->intrinsic == nir_intrinsic_load_uniform) {
          if (!nir_src_is_const(l->src[0]))
             return;
       } else {
@@ -175,12 +173,9 @@ match_fs(struct sgx_pipe_shader *so)
       }
       load = l;
    }
-   /* load_ubo: a byte offset into constant buffer 0; load_uniform: vec4 slots */
-   if (load->intrinsic == nir_intrinsic_load_ubo)
-      so->ubo_offset = nir_src_as_uint(load->src[1]);
-   else
-      so->ubo_offset =
-         (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
+   /* load_uniform's vec4 slots */
+   so->ubo_offset =
+      (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
    so->kind = SGX_SHADER_FS_UNIFORM;
 }
 

@@ -912,15 +912,16 @@ staging(struct sgx_context *ctx, size_t dwords)
    return ctx->staging;
 }
 
-/* uniform block n of a stage for this draw: where its copy's address goes
- * (sa: an index into the program's constants, -1 none; mem: a word of its
- * memory block, 0 none). An unbound block reads as zeros */
+/* uniform block n of a stage for this draw (load_ubo's block n, which st
+ * binds as constant buffer 1 + n): where its copy's address goes (sa: an
+ * index into the program's constants, -1 none; mem: a word of its memory
+ * block, 0 none). An unbound block reads as zeros */
 static void
 record_ubo(struct sgx_context *ctx, mesa_shader_stage stage, unsigned n,
            int sa, unsigned mem)
 {
    static const uint32_t zeros[4];
-   const struct pipe_constant_buffer *cb = &ctx->ubos[stage][n - 1];
+   const struct pipe_constant_buffer *cb = &ctx->ubos[stage][n];
    struct sgxws_ubo *u;
 
    if (ctx->n_draw_ubos == SGXWS_MAX_UBOS)
@@ -1000,7 +1001,7 @@ fill_consts(struct sgx_context *ctx, mesa_shader_stage stage,
 
       /* uniform block n's address: the winsys's copy of it, written in
        * where the constant lives (sgxws_ubo); 0 until then */
-      if (k->k > SGX_K_UBO && k->k <= SGX_K_UBO + SGX_MAX_UBOS) {
+      if (k->k >= SGX_K_UBO && k->k < SGX_K_UBO + SGX_MAX_UBOS) {
          record_ubo(ctx, stage, k->k - SGX_K_UBO,
                     k->slot != 0xffff ? (int)(base + k->slot) : -1,
                     mem ? k->mem : 0);
