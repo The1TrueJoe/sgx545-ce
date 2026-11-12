@@ -18,7 +18,9 @@
  *
  *   explicit  wait for the job's syncobj, then DIRTYFB;
  *   implicit  DIRTYFB at once: the KMS commit must wait for the job's fence in
- *             the shared dma_resv;
+ *             the shared dma_resv (on the test kernels the copy may land after
+ *             the ioctl returns, so the check waits up to 2 s for it, but a
+ *             stale pixel always fails);
  *   control   no BO list, DIRTYFB at once: the scanout may well be stale (not
  *             counted), which shows the implicit frames' check can fail. In
  *             a) the import isn't listed, so it gets no coherence (the uAPI
@@ -233,6 +235,26 @@ static int submit_frame(struct sgx_ctx *c, struct kms *k, uint32_t fb_id, uint32
 	return e;
 }
 
+/* Scanout pixels that are neither the triangle nor the background, and stale ones. */
+static void scanout_check(const struct kms *k, unsigned w, unsigned h, uint32_t tri, uint32_t bg,
+			  unsigned *bad, unsigned *poison)
+{
+	*bad = 0;
+	*poison = 0;
+	/* the display ignores alpha: compare XRGB */
+	for (unsigned y = 0; y < h; y++)
+		for (unsigned x = 0; x < w; x++) {
+			uint32_t v = k->scanout[(size_t)y * k->scanout_stride + x] | 0xff000000u;
+
+			if (v == (POISON | 0xff000000u))
+				(*poison)++;
+			else if (v != tri && v != bg)
+				(*bad)++;
+		}
+	if ((k->scanout[(size_t)(h / 2) * k->scanout_stride + w / 2] | 0xff000000u) != tri)
+		(*bad)++;
+}
+
 /* Pixels of the w x h image at p (stride in pixels) that are not what the frame should hold. */
 static unsigned check(const uint32_t *p, uint32_t stride, unsigned w, unsigned h, uint32_t tri, uint32_t bg,
 		      unsigned *poison)
@@ -356,7 +378,7 @@ int main(int argc, char **argv)
 				.vs = vs, .fs = fs, .color = { f & 1 ? 1.0f : 0, 1, 0, 1 },
 			};
 			uint32_t want_tri = f & 1 ? 0xffffff00 : 0xff00ff00, want_bg = 0xff000080;
-			unsigned gpu_bad, gpu_poison, out_bad = 0, out_poison = 0;
+			unsigned gpu_bad, gpu_poison, out_bad = 0, out_poison = 0, out_wait_ms = 0;
 			static const char *const mode_name[] = { "explicit", "implicit", "control" };
 			int mode = f % 3;
 
@@ -372,25 +394,25 @@ int main(int argc, char **argv)
 			}
 			gpu_bad = check(map, stride, w, h, want_tri, want_bg, &gpu_poison);
 			if (k.scanout) {
-				/* the display ignores alpha: compare XRGB */
-				out_bad = 0;
-				for (unsigned y = 0; y < h; y++)
-					for (unsigned x = 0; x < w; x++) {
-						uint32_t v = k.scanout[(size_t)y * k.scanout_stride + x] | 0xff000000u;
+				int64_t t0 = now_ns();
 
-						if (v == (POISON | 0xff000000u))
-							out_poison++;
-						else if (v != want_tri && v != want_bg)
-							out_bad++;
-					}
-				if ((k.scanout[(size_t)(h / 2) * k.scanout_stride + w / 2] | 0xff000000u) != want_tri)
-					out_bad++;
+				scanout_check(&k, w, h, want_tri, want_bg, &out_bad, &out_poison);
+				/*
+				 * An implicit frame's copy may finish after DIRTYFB returns (the
+				 * test kernels' sysfb patch copies from a worker once the fence
+				 * signals): wait for it, but a stale pixel is never right.
+				 */
+				while (mode == 1 && out_bad && !out_poison && now_ns() - t0 < 2000000000ll) {
+					usleep(5000);
+					scanout_check(&k, w, h, want_tri, want_bg, &out_bad, &out_poison);
+				}
+				out_wait_ms = (unsigned)((now_ns() - t0) / 1000000);
 			}
-			printf("%c) frame %u %-8s: buffer %s (centre %08x, %u wrong, %u stale), scanout %s (%u wrong, %u stale)\n",
+			printf("%c) frame %u %-8s: buffer %s (centre %08x, %u wrong, %u stale), scanout %s (%u wrong, %u stale, %u ms)\n",
 			       'a' + pass - 1, f, mode_name[mode], gpu_bad ? "WRONG" : "right",
 			       map[(size_t)(h / 2) * stride + w / 2], gpu_bad, gpu_poison,
 			       !k.scanout ? "not checked" : out_bad + out_poison ? "WRONG" : "right",
-			       out_bad, out_poison);
+			       out_bad, out_poison, out_wait_ms);
 			/* An unlisted import (a's control frames) has no coherence to check. */
 			if ((gpu_bad && !(mode == 2 && pass == 1)) ||
 			    (mode != 2 && (out_bad || out_poison)))
