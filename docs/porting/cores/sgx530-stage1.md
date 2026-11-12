@@ -1970,3 +1970,66 @@ above) is the lead, with H-C the black-box fallback.
 
 Net: H-A and H-B are both negative. The store reaches the MMU and is not held in the BIF, yet does
 not commit. The remaining lead is the launch/write context that §9 programs; H-C stays the fallback.
+
+## §9 ran: the task LAUNCHES and RUNS (gate 2 closed); gate 1 likely passed
+
+The vendor-launch test (§9) ran on the board (21:15–21:17 UTC, EDMPROTECT on,
+clean recovery). `stage1_vlaunch` confirmed applied: the event PDS base read back
+the §9 address, data 0x3 / 0x13d01 (`0xa6c`=3, `0xa70`=0x00013d01).
+
+**Gate 2 is closed — the biggest result so far.** Under §9's 8-word interleave +
+launch words, on all four loads USE went busy (0x00110000) after the kick and
+stayed busy through 500 ms: **the task runs**. There was **no code-base-0 fault**
+(0x0f400000) on any load, so the launch vectors into the microkernel code at the
+right base. This closes the pre-§9 launch failure (gate 2, the DOUTU-after-layout
+problem): the vendor's launch-word set and data layout start the task correctly.
+
+**The readouts** (all faulted during the running task, then -ETIMEDOUT, clean):
+
+| probe | BIF_INT_STAT | BIF_FAULT | note |
+|---|---|---|---|
+| `aluwr` (temp retire) | 0x4002 (load) | **0x0fa93000** | — |
+| `aluwr_pa0w` (pa retire) | 0x4002 (load) | **0x0fa93000** | same as aluwr |
+| `stout_o0` (store, EDMPROTECT on) | 0x4004 (store) | 0x02d3b000 | scan 0x0fd7d000: 0 hits |
+| `stout_r5` | 0x4004 (store) | 0x02d3b000 | scan 0x0c004000: 0 hits |
+
+**Decode — gate 1 (does a temp / pa write retire):**
+
+The stage-1 pass value was 0x0fd7d000 = r5's leftover 0x0c004000 | r17's
+0x0fd79000, measured under the *old* launch. Under §9 the launch seeds the
+register file for real (the vendor init DMAs the control block into sa and seeds
+pa0–2, vendor-setup §5), so r5 and r17 hold **different** leftovers, and the OR of
+them is a **new** value — 0x0fa93000 is therefore the expected "it retired" value
+under §9, not the stage-1 one. The tell: **`aluwr` (writes temp r5) and
+`aluwr_pa0w` (writes pa0) fault at the identical address 0x0fa93000** though they
+write different destinations. Same source operands → same OR result → the write
+retired in both. Two different destinations agreeing is the signature of a
+retiring write, not of a leftover (two different registers would hold different
+leftovers).
+
+**The clean confirmation: `aluwr_o0`.** It writes output o0, the one register
+class that retired even in stage 1 (C), then loads through o0 — so its fault
+address *is* the true `r5|r17` under §9's seed. If `aluwr_o0` faults at
+0x0fa93000, then temp (aluwr) == pa (aluwr_pa0w) == output (aluwr_o0), and **all
+three retire → the write-retire blocker is solved by §9's launch.** That is the
+next thing to run (image below).
+
+**Decode — the store.** `stout` stores to `[pa0]`, relying on the driver's
+standalone DOUTA to put a mapped scratch address in pa0. But §9's launch **seeds
+pa0 itself** (vendor-setup §5), so pa0 is no longer the DOUTA scratch — it is
+0x02d3b000, which faults (unmapped / EDMPROTECT). So the 0x4004 at 0x02d3b000 is
+"a store to §9's seeded pa0 faults," not "a store never commits." **The stout
+probe is not valid under §9**; a store test under §9 needs a destination from a
+§9-stable source (a sa word the launch maps, or a computed address). To be built
+after gate 1 is confirmed.
+
+**Next:** run `aluwr_o0` (gate-1 confirmation). Then the bisect
+(word2→word1→word0 bit21→`0xa70`): re-run `aluwr` + `aluwr_o0` with each launch
+word reverted toward our old value; the word whose reversion breaks the retire is
+the one that grants the write context. The bisect needs **no new image** — it is
+driver-side word changes plus the existing `aluwr`/`aluwr_o0`.
+
+`aluwr_o0` image (asm.py oracle, core-rev 0x00010205): img
+`3d8e8a728ac5fd1c97cd3f2c91ce878fd0a4bd4ee1ddd722ee93c506d8053aa8`, pkg
+`c30c27a11f3589598a9c86acaf71c4b4715d47cb8e44f2f7de2ad5a89693f678` (72 B, crc
+0x8050de8b, temps 18, event entry 0x0).
