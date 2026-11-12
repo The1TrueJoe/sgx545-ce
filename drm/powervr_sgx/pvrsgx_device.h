@@ -147,6 +147,7 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_DOUTA_1ROW		BIT(20)	/* ... with one data row, DOUTU word 1 = 0 */
 #define PVRSGX_SWEEP_DOUTA_X2		BIT(21)	/* ... and that DOUTA in the .x2.s27 form */
 #define PVRSGX_SWEEP_DOUTA_CTLBLK	BIT(22)	/* ... of the control block's version word */
+#define PVRSGX_SWEEP_PDS3_MIRROR	BIT(23)	/* DOUTA + DOUTU laid out as the SGX545's pds3 */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4

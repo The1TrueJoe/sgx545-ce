@@ -907,15 +907,16 @@ struct sweep_variant {
 };
 
 /*
- * A task store to the kernel data arena faults on the SGX530 (stage 1, log
- * 2026-11-12-0620), which is mapped EDMPROTECT. Does code base 15's data
- * master decide it? The baseline (3, the SGX545's EDM), then 0, 1 and 2. PA0
- * already holds the control block's version word's address from the store
- * test's DOUTA; a store that lands shows in that word, logged per variant.
+ * A DOUTA ahead of the DOUTU leaves the task starting at code base 0 in our
+ * layouts (stage 1, logs 2026-11-12-0517 to -0606). Laid out as the SGX545's
+ * own pds3 instead: the baseline, then that program writing 0x0e880000
+ * (unmapped, a value PA0 hasn't held) to PA0, with two data rows (event data
+ * 0 = 2, 1 = 8). A task that starts and loads through PA0 faults there.
  */
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	{ .cb15_dm = 0 + 1 }, { .cb15_dm = 1 + 1 }, { .cb15_dm = 2 + 1 },
+	{ .flags = PVRSGX_SWEEP_PDS3_MIRROR, .doutu0 = 0x0e880000, .data0 = 2 + 1,
+	  .data1 = 8 + 1 },
 };
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
@@ -965,7 +966,8 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 #define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15 | \
 				 PVRSGX_SWEEP_DOUTU_OR | PVRSGX_SWEEP_TEMPS_FIELD | \
 				 PVRSGX_SWEEP_DOUTA_PA0 | PVRSGX_SWEEP_DOUTA_1ROW | \
-				 PVRSGX_SWEEP_DOUTA_X2 | PVRSGX_SWEEP_DOUTA_CTLBLK)
+				 PVRSGX_SWEEP_DOUTA_X2 | PVRSGX_SWEEP_DOUTA_CTLBLK | \
+				 PVRSGX_SWEEP_PDS3_MIRROR)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1060,6 +1062,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " temps field %u", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_PA0)
 		n += scnprintf(buf + n, len - n, " DOUTA PA0 0x%x", sv->doutu0);
+	if (sv->flags & PVRSGX_SWEEP_PDS3_MIRROR)
+		n += scnprintf(buf + n, len - n, " pds3 mirror PA0 0x%x", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_CTLBLK)
 		n += scnprintf(buf + n, len - n, " one-row DOUTA PA0 ctlblk");
 	else if (sv->flags & PVRSGX_SWEEP_DOUTA_1ROW)
