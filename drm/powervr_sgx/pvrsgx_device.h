@@ -144,6 +144,11 @@ struct pvrsgx_fw {
 #define PVRSGX_SWEEP_DOUTU_OR		BIT(17)	/* the event DOUTU word 0 |= @sweep_doutu0 */
 #define PVRSGX_SWEEP_TEMPS_FIELD	BIT(18)	/* its temporaries field (b24-31) = @sweep_doutu0 */
 #define PVRSGX_SWEEP_DOUTA_PA0		BIT(19)	/* a DOUTA of @sweep_doutu0 to PA0 first */
+#define PVRSGX_SWEEP_DOUTA_1ROW		BIT(20)	/* ... with one data row, DOUTU word 1 = 0 */
+#define PVRSGX_SWEEP_DOUTA_X2		BIT(21)	/* ... and that DOUTA in the .x2.s27 form */
+#define PVRSGX_SWEEP_DOUTA_CTLBLK	BIT(22)	/* ... of the control block's version word */
+#define PVRSGX_SWEEP_PDS3_MIRROR	BIT(23)	/* DOUTA + DOUTU laid out as the SGX545's pds3 */
+#define PVRSGX_SWEEP_PDS3_IN0		BIT(24)	/* ... with the DOUTA's value from in0 */
 
 /* @sweep_prog values for the fault-detected programs (pvrsgx_pds.c). */
 #define PVRSGX_SWEEP_PROG_F1		4
@@ -238,6 +243,8 @@ struct pvrsgx_device {
 	u32 sweep_cb15;
 	/** @sweep_regset: The sweep's SGX545 part-2 writes (pvrsgx_fw.c), a bit each. */
 	u16 sweep_regset;
+	/** @sweep_cb15_dm: The sweep's code base 15 data master, + 1; 0 none. */
+	u8 sweep_cb15_dm;
 	/** @sweep_saved: Registers the sweep wrote, with their values before. */
 	struct pvrsgx_core_init_reg sweep_saved[16];
 	/** @sweep_nsaved: Entries in @sweep_saved. */

@@ -436,10 +436,13 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 		return err;
 	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
 
-	/* PTE flags as the DDK maps the same buffers: data read-write, code read-only. */
+	/*
+	 * PTE flags as the DDK maps the same buffers: data read-write, code
+	 * read-only. Without EDMPROTECT where the core needs it (data_no_edmprotect).
+	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, pvrsgx_heaps(sdev)->kernel_data.base,
-				DATA_ARENA_SIZE,
-				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT);
+				DATA_ARENA_SIZE, SGX_MMU_PTE_CACHECONSISTENT |
+				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT));
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, pvrsgx_heaps(sdev)->kernel_code.base,
@@ -669,6 +672,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 		data1 = sdev->sweep_data1 - 1;
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DM2)
 		uk_dm = 2;
+	if (sdev->sweep_cb15_dm)
+		uk_dm = sdev->sweep_cb15_dm - 1;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -883,6 +888,41 @@ static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
+/*
+ * Bring-up only: a value a store test's task stores. If the start fails,
+ * log every place it is in the firmware's data and code arenas.
+ */
+static uint stage1_scan;
+module_param(stage1_scan, uint, 0444);
+MODULE_PARM_DESC(stage1_scan, "On a guessed core's failed start, find this value in the firmware arenas");
+
+static void scan_arena(struct pvrsgx_device *sdev, const struct pvrsgx_kmem *km,
+		       const char *name)
+{
+	const u32 *w = km->cpu;
+	unsigned int hits = 0;
+
+	for (u32 i = 0; w && i < km->size / 4; i++) {
+		if (READ_ONCE(w[i]) != stage1_scan)
+			continue;
+		if (hits++ < 8)
+			drm_info(&sdev->base, "scan: 0x%08x in the %s arena at +0x%04x (0x%08x)\n",
+				 stage1_scan, name, i * 4, km->dev_addr + i * 4);
+	}
+	drm_info(&sdev->base, "scan: 0x%08x %u times in the %s arena (0x%x bytes)\n",
+		 stage1_scan, hits, name, km->size);
+}
+
+static void fw_scan(struct pvrsgx_device *sdev)
+{
+	if (!stage1_scan)
+		return;
+	/* The GPU's writes before the CPU's reads. */
+	rmb();
+	scan_arena(sdev, &sdev->fw.data, "data");
+	scan_arena(sdev, &sdev->fw.code, "code");
+}
+
 static bool stage1_vendor;
 module_param(stage1_vendor, bool, 0444);
 MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unnamed init writes");
@@ -895,30 +935,28 @@ MODULE_PARM_DESC(stage1_vendor, "With stage1_sweep, also try the SGX545's unname
 struct sweep_variant {
 	u32 flags, enable, doutu0, cb15;
 	u16 regset;
+	u8 cb15_dm;
 	bool doutu_set;
 	u16 data0;
 	u8 dest, cc, data1, prog, a68_low, vendor, doutu_bit;
 };
 
 /*
- * No register write from the task lands (stage 1, logs 2026-11-12-0353 to
- * -0507). Is a primary attribute the PDS writes visible to it? The
- * baseline; then the event program does a DOUTA of 0x0e850000 (unmapped,
- * past the PDS vertex heap on the SGX530) to PA0 before its DOUTU, with
- * event data 0 = 2 for its two data rows. A task loading through PA0
- * faults there if it sees the value. Event data 1 at 6, as attempt 40 ran
- * it (its DOUTU took a zero word, log 2026-11-12-0517), then at 8, the two
- * rows' length in dwords if that's what 0x0a70 is.
+ * A DOUTA ahead of the DOUTU leaves the task starting at code base 0, even
+ * laid out as the SGX545's pds3 (stage 1, log 2026-11-12-0642). With a task
+ * that loads through PA0, each baseline reads PA0 back as its fault page:
+ * the baseline, pds3's layout with its DOUTA of in0, the baseline, a one-row
+ * DOUTA of the control block's version word (for the store test), and the
+ * baseline, which reads it back without a fault.
  */
-#define DOUTA_PA0(d1)	{ .flags = PVRSGX_SWEEP_DOUTA_PA0, .doutu0 = 0x0e850000, \
-			  .data0 = 2 + 1, .data1 = (d1) + 1 }
-
 static const struct sweep_variant sweep[] = {
 	{ 0 },
-	DOUTA_PA0(6), DOUTA_PA0(8),
+	{ .flags = PVRSGX_SWEEP_PDS3_MIRROR | PVRSGX_SWEEP_PDS3_IN0, .data0 = 2 + 1,
+	  .data1 = 8 + 1 },
+	{ 0 },
+	{ .flags = PVRSGX_SWEEP_DOUTA_1ROW | PVRSGX_SWEEP_DOUTA_CTLBLK },
+	{ 0 },
 };
-
-#undef DOUTA_PA0
 
 /* Code page 0 mapped read-only at PDS_EXEC_BASE, for the alias variant only. */
 static int alias_map(struct pvrsgx_device *sdev)
@@ -966,7 +1004,9 @@ static void alias_watch(struct pvrsgx_device *sdev, const u32 *hc, const char *n
 			 PVRSGX_SWEEP_EXEC0_BRA)
 #define SWEEP_PAGE_FLAGS	(EXEC0_FLAGS | PVRSGX_SWEEP_EXEC0_ALIAS | PVRSGX_SWEEP_CB15 | \
 				 PVRSGX_SWEEP_DOUTU_OR | PVRSGX_SWEEP_TEMPS_FIELD | \
-				 PVRSGX_SWEEP_DOUTA_PA0)
+				 PVRSGX_SWEEP_DOUTA_PA0 | PVRSGX_SWEEP_DOUTA_1ROW | \
+				 PVRSGX_SWEEP_DOUTA_X2 | PVRSGX_SWEEP_DOUTA_CTLBLK | \
+				 PVRSGX_SWEEP_PDS3_MIRROR | PVRSGX_SWEEP_PDS3_IN0)
 
 /*
  * Map the sweep's page at PDS_EXEC_BASE, or unmap it, as the variant asks:
@@ -1016,7 +1056,8 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 	static const char *const prog[] = { "?", "A", "C", "D", "F1", "F2", "HALT" };
 	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
 			  sv->data1 || sv->prog || sv->a68_low || sv->vendor ||
-			  sv->doutu_bit || sv->doutu_set || sv->regset ? "" : "baseline");
+			  sv->doutu_bit || sv->doutu_set || sv->regset ||
+			  sv->cb15_dm ? "" : "baseline");
 
 	if (sv->prog)
 		n += scnprintf(buf + n, len - n, " program %s",
@@ -1060,8 +1101,19 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 		n += scnprintf(buf + n, len - n, " temps field %u", sv->doutu0);
 	if (sv->flags & PVRSGX_SWEEP_DOUTA_PA0)
 		n += scnprintf(buf + n, len - n, " DOUTA PA0 0x%x", sv->doutu0);
+	if (sv->flags & PVRSGX_SWEEP_PDS3_IN0)
+		n += scnprintf(buf + n, len - n, " pds3 mirror PA0 in0");
+	else if (sv->flags & PVRSGX_SWEEP_PDS3_MIRROR)
+		n += scnprintf(buf + n, len - n, " pds3 mirror PA0 0x%x", sv->doutu0);
+	if (sv->flags & PVRSGX_SWEEP_DOUTA_CTLBLK)
+		n += scnprintf(buf + n, len - n, " one-row DOUTA PA0 ctlblk");
+	else if (sv->flags & PVRSGX_SWEEP_DOUTA_1ROW)
+		n += scnprintf(buf + n, len - n, " one-row DOUTA%s PA0 0x%x",
+			       sv->flags & PVRSGX_SWEEP_DOUTA_X2 ? ".x2" : "", sv->doutu0);
 	if (sv->regset)
 		n += scnprintf(buf + n, len - n, " part-2 set 0x%x", sv->regset);
+	if (sv->cb15_dm)
+		n += scnprintf(buf + n, len - n, " code base 15 DM %u", sv->cb15_dm - 1);
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
@@ -1125,9 +1177,10 @@ static int ladder_ran(struct pvrsgx_device *sdev, const char *name, u32 *held)
 		seen = ladder_seen(sdev);
 	}
 	drm_info(&sdev->base,
-		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x\n",
+		 "sweep %s: PDS PC %x %x %x %x %x %x %x %x %x %x, timer 0x%08x, ctl 0x18 0x%x\n",
 		 name, pc[0], pc[1], pc[2], pc[3], pc[4], pc[5], pc[6], pc[7], pc[8], pc[9],
-		 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+		 sgx_rd(sdev, SGX_CR_EVENT_TIMER),
+		 READ_ONCE(fw_words(sdev, PVRSGX_FW_TA3DCTL)[0x18]));
 	if (seen)
 		return 1;
 	if (!cr->pds_pc_base || !pds_held(sdev, pc, i))
@@ -1185,6 +1238,7 @@ static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
 	sdev->sweep_doutu_bit = 0;
 	sdev->sweep_doutu_set = false;
 	sdev->sweep_regset = 0;
+	sdev->sweep_cb15_dm = 0;
 	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 	pvrsgx_reset(sdev, true);
 	err = init_script_part2(sdev);
@@ -1282,6 +1336,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			sdev->sweep_doutu_set = sv->doutu_set;
 			sdev->sweep_cb15 = sv->cb15;
 			sdev->sweep_regset = sv->regset;
+			sdev->sweep_cb15_dm = sv->cb15_dm;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			err = exec0_fill(sdev);
 			if (err)
@@ -1302,6 +1357,8 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 					 "sweep variant %u: clock status 0x%08x after the reset, 0x%08x before the first kick: not independent of variant %u\n",
 					 v, clk, clk_idle, v - 1);
 			*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
+			/* The store test's word, so each variant shows its own store. */
+			WRITE_ONCE(fw_words(sdev, PVRSGX_FW_TA3DCTL)[0x18], 0);
 			err = init_script_part2(sdev);
 			if (err)
 				return err;
@@ -1467,8 +1524,10 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		/* Memory only: a heartbeat of 0 means the event program never ran. */
-		if (sdev->family->event_pds_guessed)
+		if (sdev->family->event_pds_guessed) {
 			pvrsgx_fw_dump_status_words(sdev);
+			fw_scan(sdev);
+		}
 		return err;
 	}
 	if (sdev->family->event_pds_guessed)
