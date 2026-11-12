@@ -26,6 +26,11 @@ glmark2 draws in a window: "laggy while a game runs"), and `firefox` (a long
 page scrolled by key and by wheel).
 
 Variants: `default`; `slots3` (`SGX_SLOTS=3` for X and the clients);
+`nolevers` (`SGX_DEBUG=nolazyclear,nozsdiscard`: the A/B of lazy clears and
+depth discards); `gpuimport` (`SGX_DEBUG=gpuimport`: scanout buffers the GPU's, imported by
+the display device, the explicit-sync uAPI's direction); `flatten`
+(`SGX_COMPILER_DEBUG=flattenuniform`: uniform
+conditions flattened into selects again, the A/B of branching on them);
 `nocomp` (xfwm4 without its compositor); `xpresent` and `vbloff` (xfwm4
 synced to vblank through Present, or not at all); `software` (no GPU: Xorg
 without glamor and llvmpipe from the root's own Mesa, the baseline);

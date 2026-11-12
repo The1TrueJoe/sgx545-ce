@@ -18,27 +18,59 @@ here=$(cd "$(dirname "$0")" && pwd)
 BOX=${BOX:?the address of the box}
 DESK=${DESK:-/opt/desk}
 WORKLOADS=${WORKLOADS:-idle drag term menus drag-gl firefox}
-E() { sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-	-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
-	-o ServerAliveInterval=15 root@$BOX "$@"; }
+# ssh with retries: the box's sshd turns down connections that come fast
+# (255: ssh's own failure, not the command's)
+E() {
+	for i in 1 2 3 4 5 6; do
+		sshpass -p "${BOX_PASS:?the root password of the box}" ssh -o PubkeyAuthentication=no \
+			-o PreferredAuthentications=password -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+			-o LogLevel=ERROR -o ConnectTimeout=8 -o ServerAliveInterval=15 root@$BOX "$@" &&
+			r=0 || r=$?
+		[ $r -ne 255 ] && return $r
+		sleep 3
+	done
+	return $r
+}
 mkdir -p "$OUT"
 E "test -e /dev/dri/renderD128 && test -d $DESK/usr/bin && ! pidof Xorg" || {
 	echo "lag-run.sh: the box needs powervr_sgx up, the root at $DESK, and no X running" >&2
 	exit 1
 }
-E "uname -a; cat /proc/cpuinfo | grep -m1 'model name'; cat /sys/class/drm/card0/device/driver/module/srcversion 2>/dev/null" > "$OUT/box.txt"
+E "uname -a; cat /proc/cpuinfo | grep -m1 'model name'; cat /sys/class/drm/card0/device/driver/module/srcversion 2>/dev/null; true" > "$OUT/box.txt"
 # the Mesa under test
 # (the box's umask is 077: a tree only root can read leaves "desk" on the
-# root's own Mesa, silently)
-(cd "$MESA" && tar cf - lib share) | E "rm -rf $DESK/opt/sgx && mkdir -m 755 -p $DESK/opt/sgx && \
-	tar xf - -C $DESK/opt/sgx && chmod -R a+rX $DESK/opt/sgx"
+# root's own Mesa, silently; busybox's chmod -R fails on the dangling dri
+# links, and that's fine)
+(cd "$MESA" && COPYFILE_DISABLE=1 tar cf - lib share) | E "rm -rf $DESK/opt/sgx && mkdir -m 755 -p $DESK/opt/sgx && \
+	tar xf - -C $DESK/opt/sgx && { chmod -R a+rX $DESK/opt/sgx 2>/dev/null; true; }"
 E "rm -rf /tmp/lagrig && mkdir -p /tmp/lagrig"
 for f in ../desktop-up.sh ../xorg.conf lag-wl.sh lag-box.sh; do
 	E "cat > /tmp/lagrig/$(basename $f)" < "$here/$f"
 done
+# a variant starts from a box with no X and nothing of the last one running
+settle() {
+	E "for p in \$(ps | grep -E '[l]ag-box|[l]ag-wl|[p]erf record' | awk '{print \$1}'); do kill \$p; done; \
+		for i in \$(seq 1 20); do pidof Xorg > /dev/null || break; sleep 2; done; \
+		pidof Xorg > /dev/null && sh /tmp/lagrig/desktop-up.sh $DESK stop > /dev/null 2>&1; \
+		grep -q ' $DESK/' /proc/mounts && echo 'binds still mounted' >&2; true"
+}
 for v in "$@"; do
+	settle
 	echo "== $v"
-	E "rm -rf /tmp/lagout/$v; sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" || echo "$v failed"
+	# not retried once it started (a retry would run the variant again): a
+	# long keepalive instead; retried only when ssh itself failed (255) and the
+	# variant never started on the box (sshd turned the connection down)
+	for try in 1 2 3; do
+		sleep 3
+		sshpass -p "$BOX_PASS" ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password \
+			-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 \
+			-o ServerAliveInterval=15 -o ServerAliveCountMax=40 root@$BOX \
+			"rm -rf /tmp/lagout/$v; SCANOUT=${SCANOUT:-} SCANOUT_BYTES=${SCANOUT_BYTES:-} NOPERF=${NOPERF:-} CORES=${CORES:-} RSPCHECK=${RSPCHECK:-} PERFARGS='${PERFARGS:-}' \
+			sh /tmp/lagrig/lag-box.sh $DESK /tmp/lagrig /tmp/lagout/$v $v $WORKLOADS" && r=0 || r=$?
+		[ $r -eq 255 ] && ! E "test -d /tmp/lagout/$v" && continue
+		break
+	done
+	[ $r -eq 0 ] || echo "$v failed"
 	mkdir -p "$OUT/$v"
 	E "cd /tmp/lagout/$v && tar cf - ." | tar xf - -C "$OUT/$v"
 	E "rm -rf /tmp/lagout/$v"
