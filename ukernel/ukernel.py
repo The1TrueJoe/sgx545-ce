@@ -2661,6 +2661,18 @@ def build(a):
             a.i(f"str #{CR_EVENT_TIMER // 4}, r0")
             a.end()
 
+    if BASE_PADS:
+        # bring-up only (cores/sgx530_bases.py): a pad per USE code base, on
+        # 128 B boundaries past the image, for the host to point code base n at.
+        # Each writes EVENT_TIMER = PAD_TIMER + n (b24 clear) and ends
+        for n in BASE_PADS:
+            k = sum(1 for kind, _ in a.lines if kind != "label")
+            a.lines.extend([("raw", (0, 0))] * (-k % 16))   # 16 instructions = 128 B
+            a.label(f"pad_{n}")
+            a.i(f"limm r0, #{PAD_TIMER + n}")
+            a.i(f"str #{CR_EVENT_TIMER // 4}, r0")
+            a.end()
+
     return a
 
 

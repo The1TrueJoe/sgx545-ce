@@ -462,6 +462,47 @@ at the DOUT that hands the task to the USSE, as if the USSE doesn't take it.
 A probe marker (`EVENT_TIMER` 0xb0k) in any variant means the task started at another
 code-base unit. 0xa5a means it started at our image.
 
+## After the ninth attempt: which code base does the task use?
+
+Attempt 9 (log 2026-11-11-2324) ran 13 variants with the probes mapped. No ladder, no
+probe. Within every variant, `PDS_PC_BASE` cycled through:
+- our event program's MOVS and HALT;
+- 0xf35c (0xf75c with `sgx530_diag`);
+- 0.
+
+So the PDS keeps re-running our program and never starts a task.
+
+0xf35c and 0xf75c aren't in anything we build. As dwords from `PDS_EXEC_BASE` they
+are 0x0d83cd70 and 0x0d83dd70, in the PDS pixel heap, where nothing is mapped; our image
+starts at dword 0x500000. Their 0x1000 shift between images is unexplained.
+
+**Code-base pads.** If the DOUTU's code-base index is read differently on the SGX530
+(field position or width), the task goes through a base other than 15. `cores/sgx530_bases.py`
+is the ladder at offset 0 plus a pad per code base 0-14 past the image, on 128 B
+boundaries. Pad n writes `EVENT_TIMER` = 0xc00 + n and ends.
+- Offsets: pad n at 0x4380 + 0x80·n (pad 14 at 0x4a80).
+- The image is 19096 B (0x4a98), sha256 7b51cdce…, the same through asm.py and `sgx-asm`.
+- `--check`: crc 0x465944e3, features 0x4, the same entry and patches. The packaged file is f7de7b95….
+
+For the sweep, the host points `USE_CODE_BASE_n` (n 0-14) at kernel code + pad n,
+>> 7, in two passes:
+- every DM 3, as base 15;
+- the usual DMs: 1 for 0-9, 0 for 10-14.
+
+Base 15 stays as it is. 0xc0n means the task went through base n. 0xa5a means base 15
+after all.
+
+**Calibrate the fault path (K registers only).** Every "no fault, so not that address"
+inference so far assumes the SGX530 reports BIF faults as we read them, and it never has.
+As the last step of the sweep:
+1. point `EVENT_KICKER` at an unmapped address, such as 0x0e800000, the empty reserved
+   code heap;
+2. increment the kicker word and kick;
+3. sample `BIF_INT_STAT`, `BIF_FAULT` and `BIF_MEM_REQ_STAT`.
+
+A fault at 0x0e800000 confirms the path. None means the earlier "would fault" arguments
+don't hold, and the probes and pads are the only evidence of where a task went.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
