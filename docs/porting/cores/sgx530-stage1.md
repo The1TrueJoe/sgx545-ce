@@ -1529,6 +1529,37 @@ barriers for the SGX530 build). The SGX545 image is unchanged. Then re-run the r
 with the hazard handled, `limm`, the stores and init should work. This also fits why *every*
 write looked dropped: the microkernel is dense with write-then-use pairs.
 
+## After the thirty-eighth attempt: pairing ruled out
+
+Attempt 38 (log ...): `aluwr_nop1/2/4/8` all faulted at 0x0c004000 — up to 8 nops between the
+`or` and the `ld` don't reveal the write. And attempt 32's `ldpre_r5` ran 23 `limm`s before
+its `ld r5` and still saw the leftover. A scheduling/pairing window of 8-23 instructions isn't
+the cause; **pairing is out**. So the write genuinely does not retire anywhere a read sees,
+even with large separation.
+
+**What's now established (C):** the USSE executes, and no register write (by `limm`, ALU `or`,
+`str`, or an `ld` destination) is ever visible to any read; reads return stable leftovers.
+Ruled out: the DOUTU word-0 temp field (35), `phas.i` temps4 (36), host init-regs (37,
+several unimplemented), and instruction pairing (38). This is a register-file / write-back
+difference, and the cheap single-variable hypotheses are exhausted.
+
+**Attempt 39 (cheap, the kernel session's angle): low registers.** `cores/sgx530_aluwr_dst{0,1,2,3}.py`:
+`or rD, rD, r17` then `ld rD` for D = 0-3, to check whether a low register is a writable
+temporary where r5 isn't. Expected `or` result (fault page) if it writes: r0 0x0fd7d000, r1
+0x0ff7b000, r2 0x0ff7d000, r3 0x0ff7d000; the register's leftover if not (r0 0x0055d000, r1
+0x0722a000, r2 0x003e1000, r3 0x08439000). Images: dst0 6f023fd2…, dst1 db215ee8…, dst2
+fd6a024d…, dst3 854e77b8… (packaged 43860788…, abc1853a…, be8af3a4…, a90c2e2b…).
+
+**Direction (for the coordinator).** The cheap probes are spent. Two substantive options:
+1. **The PDS primary-attribute probe (the original (c)):** the driver's `pds0` does a `DOUTD`
+   of a known value into a primary attribute, then the USSE reads it. If attributes
+   (PDS-set) are visible where temporaries (USSE-written) aren't, the SGX530 microkernel
+   should use attributes for its pointers, not temporaries — a 530-specific restructure. This
+   is the most informative remaining probe; it's joint (driver `pds0` + a USSE-read image).
+2. **An AM335x vendor capture.** TI's DDK SGX530 microkernel works; a capture of how it sets
+   up the EDM task (temps, phases, register file) would show the answer directly, the way the
+   SGX545 capture did. If Joseph can get a board, capture beats continued probing here.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
