@@ -523,6 +523,39 @@ static int check_event_pds(struct pvrsgx_device *sdev)
 	return 0;
 }
 
+/*
+ * Bring-up only, off by default: point code bases 0-14 at the landing pads of
+ * the SGX530 bases image (pad n at code offset 0x4380 + 0x80 n writes
+ * EVENT_TIMER = 0xc00 + n), so a task that goes through another base than 15
+ * says which. The usual data masters (1 for 0-9, 0 for 10-14), or all 3.
+ */
+static bool code_base_pads;
+module_param(code_base_pads, bool, 0444);
+MODULE_PARM_DESC(code_base_pads, "Point code bases 0-14 at the SGX530 bases image's landing pads");
+
+#define PAD0_OFFSET	0x4380
+#define PAD_STRIDE	0x80
+
+static bool pads_wanted(struct pvrsgx_device *sdev)
+{
+	return code_base_pads && sdev->family->event_pds_guessed;
+}
+
+static void pads_set(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+	u32 base = (u32)pvrsgx_heaps(sdev)->kernel_code.base + PAD0_OFFSET;
+
+	for (u32 n = 0; n < 15; n++) {
+		u32 dm = sdev->sweep_flags & PVRSGX_SWEEP_PADS_DM3 ? 3 :
+			 n < 10 ? USE_CODE_BASE_DM_PIXEL : 0;
+
+		sgx_wr(sdev, use_code_base(sdev, n),
+		       (base + n * PAD_STRIDE) >> USE_CODE_BASE_ADDR_SHIFT |
+		       dm << cr->use_code_base_dm_shift);
+	}
+}
+
 /* Init script part 2 (docs/SRVINIT.md, "Init scripts"): the core's script, then the bases. */
 static int init_script_part2(struct pvrsgx_device *sdev)
 {
@@ -531,26 +564,40 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
 	u32 dm = cr->use_code_base_dm_shift;
-	u32 data0 = 1, data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
+	/*
+	 * Event data 0 is where the event program's code starts. The SGX530 counts
+	 * dwords (stage 1, log 2026-11-12-0002: the PDS starts at program + 0x0a6c),
+	 * so it is the 4-dword data segment; the SGX545's 1 is that in 16-byte rows (G).
+	 */
+	u32 data0 = fam->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS ? 1 : 4;
+	u32 data1 = 6, uk_dm = USE_CODE_BASE_DM_UKERNEL;
 	int err;
 
 	/* The bring-up sweep's changes (sweep[] below); none in a normal start. */
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DATA0_2)
 		data0 = 2;
+	if (sdev->sweep_data0)
+		data0 = sdev->sweep_data0 - 1;
+	if (sdev->sweep_data1)
+		data1 = sdev->sweep_data1 - 1;
 	if (sdev->sweep_flags & PVRSGX_SWEEP_DM2)
 		uk_dm = 2;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
 	/* Code bases 0-9 the pixel shader heap, 10-13 the vertex shader heap, 15 ours. */
-	for (u32 i = 0; i < 10; i++)
-		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
-		       ((u32)(h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_DM_PIXEL << dm);
-	for (u32 i = 0; i < 4; i++)
-		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
-		       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-		       USE_CODE_BASE_ADDR_SHIFT);
+	if (pads_wanted(sdev)) {
+		pads_set(sdev);
+	} else {
+		for (u32 i = 0; i < 10; i++)
+			sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
+			       ((u32)(h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
+				USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_DM_PIXEL << dm);
+		for (u32 i = 0; i < 4; i++)
+			sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
+			       (u32)(h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
+			       USE_CODE_BASE_ADDR_SHIFT);
+	}
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
 	       ((u32)h->kernel_code.base >> USE_CODE_BASE_ADDR_SHIFT) | uk_dm << dm);
 	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
@@ -563,7 +610,8 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	err = check_event_pds(sdev);
 	if (err)
 		return err;
-	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+	sgx_wr(sdev, cr->event_pds_enable, sdev->sweep_flags & PVRSGX_SWEEP_ENABLE ?
+	       sdev->sweep_enable : cr->event_pds_enable_all);
 	return 0;
 }
 
@@ -740,38 +788,62 @@ static bool stage1_sweep;
 module_param(stage1_sweep, bool, 0444);
 MODULE_PARM_DESC(stage1_sweep, "Try variants of the event program setup on a guessed core's first start");
 
-#define D1	PVRSGX_SWEEP_DATA0_2
-#define W0	PVRSGX_SWEEP_DOUTU_W1_0
-#define IL	PVRSGX_SWEEP_INTERLEAVE
-#define DM	PVRSGX_SWEEP_DM2
-#define T4	PVRSGX_SWEEP_TEMPS4
-#define T0	PVRSGX_SWEEP_TEMPS0
+/*
+ * Each variant one change from the normal start, + 1 where 0 means none:
+ * the event program's MOVS destination and condition, the event data words
+ * 0xa6c and 0xa70; or flags.
+ */
+struct sweep_variant {
+	u32 flags, enable;
+	u8 dest, cc, data0, data1;
+};
 
-static const struct {
-	u32 flags;
-	const char *name;
-} sweep[] = {
-	{ 0, "baseline" },
-	{ D1, "event data 2" },
-	{ W0, "DOUTU word 1 = 0" },
-	{ IL, "2-dword interleave" },
-	{ DM, "code base 15 DM 2" },
-	{ D1 | W0, "data 2, word 1 = 0" },
-	{ D1 | IL, "data 2, interleave" },
-	{ D1 | DM, "data 2, DM 2" },
-	{ W0 | DM, "word 1 = 0, DM 2" },
-	{ D1 | W0 | DM, "data 2, word 1 = 0, DM 2" },
-	{ T4, "4 temporaries" },
-	{ D1 | T4, "data 2, 4 temporaries" },
-	{ T0, "0 temporaries" },
+#define D1(b)		{ .data1 = (b) + 1 }
+#define F(f)		{ .flags = (f) }
+
+static const struct sweep_variant sweep[] = {
+	{ 0 },
+	/* First: does the PDS execute the MOVS? With cc 0 it skips to the HALT. */
+	{ .cc = 0 + 1 },
+	D1(0), D1(1), D1(2), D1(3), D1(4), D1(8), D1(16),
+	{ .dest = 4 + 1 }, { .dest = 6 + 1 }, { .dest = 7 + 1 }, { .dest = 1 + 1 },
+	{ .dest = 0 + 1 }, { .dest = 2 + 1 }, { .cc = 3 + 1 },
+	F(PVRSGX_SWEEP_DOUTU_W1_0), F(PVRSGX_SWEEP_INTERLEAVE), F(PVRSGX_SWEEP_ALL_SLOTS),
+	F(PVRSGX_SWEEP_TEMPS4), F(PVRSGX_SWEEP_TEMPS0), F(PVRSGX_SWEEP_DM2),
+	F(PVRSGX_SWEEP_DOUTU_W1_0 | PVRSGX_SWEEP_DM2),
+	F(PVRSGX_SWEEP_ALL_SLOTS | PVRSGX_SWEEP_TEMPS4),
+	/* Crossed with 0xa70 = 4 (the data segment). */
+	{ .data1 = 4 + 1, .cc = 0 + 1 }, { .data1 = 4 + 1, .dest = 4 + 1 },
+	{ .data1 = 4 + 1, .dest = 6 + 1 }, { .data1 = 4 + 1, .dest = 7 + 1 },
+	{ .data1 = 4 + 1, .dest = 1 + 1 }, { .data1 = 4 + 1, .dest = 0 + 1 },
+	{ .data1 = 4 + 1, .dest = 2 + 1 },
+	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_DOUTU_W1_0 },
+	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_ALL_SLOTS },
+	{ .data1 = 4 + 1, .flags = PVRSGX_SWEEP_TEMPS4 },
+	/* 0xa70 = 6, the whole program, is the baseline's: the single variants above. */
 };
 
 #undef D1
-#undef W0
-#undef IL
-#undef DM
-#undef T4
-#undef T0
+#undef F
+
+static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
+{
+	int n = scnprintf(buf, len, "%s", sv->flags || sv->dest || sv->cc || sv->data0 ||
+			  sv->data1 ? "" : "baseline");
+
+	if (sv->data0)
+		n += scnprintf(buf + n, len - n, " data0 %d", sv->data0 - 1);
+	if (sv->data1)
+		n += scnprintf(buf + n, len - n, " data1 %d", sv->data1 - 1);
+	if (sv->dest)
+		n += scnprintf(buf + n, len - n, " dest %d", sv->dest - 1);
+	if (sv->cc)
+		n += scnprintf(buf + n, len - n, " cc %d", sv->cc - 1);
+	if (sv->flags & PVRSGX_SWEEP_ENABLE)
+		n += scnprintf(buf + n, len - n, " enable 0x%x", sv->enable);
+	if (sv->flags & ~PVRSGX_SWEEP_ENABLE)
+		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~(u32)PVRSGX_SWEEP_ENABLE);
+}
 
 /*
  * Whether the diagnostic ladder ran: its EVENT_TIMER write (0xa5a, timer
@@ -788,6 +860,7 @@ static bool ladder_seen(struct pvrsgx_device *sdev)
 	u32 timer = sgx_rd(sdev, SGX_CR_EVENT_TIMER);
 
 	return timer == LADDER_TIMER || (timer >= 0xb00 && timer <= 0xb09) ||
+	       (timer >= 0xc00 && timer <= 0xc0e) ||
 	       READ_ONCE(t[0x28]) == LADDER_MARKER || READ_ONCE(t[0x2a]);
 }
 
@@ -812,6 +885,67 @@ static bool ladder_ran(struct pvrsgx_device *sdev, const char *name)
 	return seen;
 }
 
+/*
+ * The sweep's last step, if nothing ran: does this core report a BIF fault
+ * at all? Point EVENT_KICKER at the hole below the kernel code heap, where
+ * nothing is mapped, kick, and log BIF_INT_STAT, BIF_FAULT and
+ * BIF_MEM_REQ_STAT every 10 ms; then the recovery reset, which completes
+ * faulting requests on its scratch page.
+ */
+static int fault_check(struct pvrsgx_device *sdev, u32 *hc)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	u32 hole = h->pds_vertex.end, st[10], fa[10], rq[10];
+	int err;
+
+	if (hole >= h->kernel_code.base)
+		return 0;
+	sgx_wr(sdev, sdev->cr->event_pds_enable, 0);
+	sdev->sweep_flags = 0;
+	sdev->sweep_dest = 0;
+	sdev->sweep_cc = 0;
+	sdev->sweep_data0 = 0;
+	sdev->sweep_data1 = 0;
+	pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
+	pvrsgx_reset(sdev, true);
+	err = init_script_part2(sdev);
+	if (err)
+		return err;
+	sgx_wr(sdev, SGX_CR_EVENT_KICKER, hole);
+	hc[HOSTCTL_INIT_STATUS] = 0;
+	/* The host control word is in memory before the kick. */
+	wmb();
+	init_kick(sdev);
+	for (unsigned int i = 0; i < ARRAY_SIZE(st); i++) {
+		usleep_range(10000, 11000);
+		st[i] = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+		fa[i] = sgx_rd(sdev, SGX_CR_BIF_FAULT);
+		rq[i] = sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT);
+	}
+	drm_info(&sdev->base,
+		 "fault check, EVENT_KICKER 0x%08x: BIF int %x %x %x %x %x %x %x %x %x %x\n",
+		 hole, st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7], st[8], st[9]);
+	drm_info(&sdev->base,
+		 "fault check: BIF fault %x %x %x %x %x %x %x %x %x %x req %x %x %x %x %x %x %x %x %x %x\n",
+		 fa[0], fa[1], fa[2], fa[3], fa[4], fa[5], fa[6], fa[7], fa[8], fa[9],
+		 rq[0], rq[1], rq[2], rq[3], rq[4], rq[5], rq[6], rq[7], rq[8], rq[9]);
+	/* Recovery: the kicker back, no kick, the reset that completes faults. */
+	sgx_wr(sdev, SGX_CR_EVENT_KICKER, sdev->fw.addr[PVRSGX_FW_KICKER]);
+	pvrsgx_reset(sdev, true);
+	st[0] = sgx_rd(sdev, SGX_CR_BIF_INT_STAT);
+	if (st[0] & sdev->cr->bif_int_stat_fault_req) {
+		/* Still faulting: hold the cores in reset and touch nothing more. */
+		drm_err(&sdev->base, "fault check: BIF int 0x%x after recovery; cores held in reset\n",
+			st[0]);
+		sgx_wr(sdev, SGX_CR_SOFT_RESET,
+		       sdev->cr->soft_reset_bif | sdev->cr->soft_reset_cores);
+		sdev->lost = true;
+		return -EIO;
+	}
+	drm_info(&sdev->base, "fault check: recovered, BIF int 0x%x\n", st[0]);
+	return 0;
+}
+
 static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 {
 	const struct pvrsgx_core_regs *cr = sdev->cr;
@@ -820,10 +954,21 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 	int err;
 
 	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
+		const struct sweep_variant *sv = &sweep[v];
+		char name[40];
+
+		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
+			continue;
+		sweep_name(sv, name, sizeof(name));
 		if (v) {
 			sgx_wr(sdev, cr->event_pds_enable, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
-			sdev->sweep_flags = sweep[v].flags;
+			sdev->sweep_flags = sv->flags;
+			sdev->sweep_dest = sv->dest;
+			sdev->sweep_cc = sv->cc;
+			sdev->sweep_data0 = sv->data0;
+			sdev->sweep_data1 = sv->data1;
+			sdev->sweep_enable = sv->enable;
 			pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0, sdev->fw.event_entry);
 			pvrsgx_reset(sdev, true);
 			/*
@@ -844,7 +989,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 			wmb();
 			init_kick(sdev);
 		}
-		snprintf(when, sizeof(when), "variant %u (%s)", v, sweep[v].name);
+		snprintf(when, sizeof(when), "variant %u (%s)", v, name);
 		if (ladder_ran(sdev, when)) {
 			drm_info(&sdev->base, "sweep: %s runs the diagnostic ladder\n", when);
 			return 0;
@@ -852,7 +997,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 		bringup_diag(sdev, when);
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");
-	return 0;
+	return fault_check(sdev, hc);
 }
 
 /*
@@ -951,6 +1096,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		err = wait_for_init(sdev, &hc[HOSTCTL_INIT_STATUS]);
 	if (first && probes_wanted(sdev))
 		probes_unmap(sdev, ARRAY_SIZE(code_base_probe));
+	if (err && sdev->lost)
+		return err;
 	if (err) {
 		drm_err(&sdev->base,
 			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",
@@ -1001,6 +1148,9 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
 		synchronize_irq(sdev->irq);
+		/* A start that left the BIF faulting holds the cores in reset already. */
+		if (sdev->lost)
+			return;
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
