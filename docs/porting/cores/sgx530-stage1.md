@@ -581,6 +581,26 @@ Then two enable values with the kicker fix: 0xa58 = 0x7fffffff, and 0xa58 = 0.
 A cell whose PC reaches the HALT, or leaves the first instruction, narrows it down even
 if no task starts.
 
+## After the twelfth attempt: 0xa6c is the code start
+
+Attempt 12 (log 2026-11-12-0002) found what 0xa6c does: it is where the PDS starts
+executing, in dwords from the event program's start (C).
+- 0 starts the PDS on the program's first word, 1 on the next, 4 on the MOVS.
+- 0xa70 changed nothing in that test.
+- The 1 used since attempt 1 started the PDS on data word 1. That explains attempts 1-11.
+- On the SGX545, 1 plausibly counts one 16-byte row (G).
+
+The SGX530's start now writes 0xa6c = 4, the program's 4-dword data segment. The PDS then
+sits on the MOVS, and still no task starts.
+
+**Attempt 13** reruns the earlier variants from that start, with no image change. Its
+first useful read is cc 0:
+- the PC moves to the HALT: the PDS executes the MOVS and waits on its DOUT;
+- the PC stays on the MOVS: it is stuck before executing it.
+
+The MOVS-side variants are crossed with the two likeliest readings of 0xa70: 4, the data
+segment in dwords, and 6, the whole program.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
