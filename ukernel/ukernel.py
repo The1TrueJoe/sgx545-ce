@@ -470,8 +470,14 @@ def build(a):
             # base: None = the patched r17 (ctlblk); an int = limm that value into r5.
             a.patch(14, "pdtable")
             base = "r17"
+            if USSE_LDPRELOAD:
+                # preload r0..r22 with distinct unmapped values rN = (N+1)<<16, so the
+                # fault page names which register the 530 actually read for operand rK
+                for n in range(23):
+                    if n != 3:                     # r3 is the ld destination
+                        a.i(f"limm r{n}, #{(n + 1) << 16}")
             if USSE_LDREG is not None:
-                base = f"r{USSE_LDREG}"             # name this register; its value is unused
+                base = f"r{USSE_LDREG}"             # name this register
             elif USSE_LDBASE is not None:
                 a.i(f"limm r5, #{USSE_LDBASE}")
                 base = "r5"
