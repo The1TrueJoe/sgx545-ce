@@ -860,6 +860,35 @@ If init passes:
   without an alias.
 - V4 (the BRA page) is moot: the fetch is the USSE's.
 
+## The attempt after 20: where the DOUTU's code address comes from
+
+The alias of attempt 20 is a diagnostic. The driver has to set the right address instead.
+
+**What points at the answer (K).** The GPL DDK's `sgxconfig.h` refuses to build, on a core
+without `SGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE` (the SGX530 lacks it), unless the kernel
+code heap lies within 64 MiB above the PDS pixel heap. TI's SGX530 layout puts kernel code at
+`PDS_EXEC_BASE` + 0x01400000. That fits attempt 19 exactly (G): on such a core, the EDM
+task's code address is an offset from `PDS_EXEC_BASE` with a limited range, and our word 0
+(base index 15 in b0-3, offset 0) gave offset 0.
+
+**Attempt 21: map DOUTU word 0's address bits, one bit per variant.** No alias. The detector
+is the BIF fault page (calibrated), and the markers for a start that lands on mapped code.
+- Word 0 = the temporary count (b24-31 = 6, as now) | 1 << b, for b = 0 ... 23, one variant
+  each, from b0 up.
+- Each logs `BIF_FAULT`'s page and requestor. The fault page minus `PDS_EXEC_BASE` gives
+  bit b's weight, for any weight of 4 KiB or more. Bits that leave the page at offset 0
+  weigh less than a page, or nothing.
+- If the 18-bit field holds the offset in 128 B units, bits 21 and 19 together give 0x01400000:
+  the kernel code heap. A variant landing there runs the image (`EVENT_TIMER` 0xa5a), and
+  the sweep stops.
+- Some weights land the fetch on mapped data, for example the kernel data arena at
+  +0x01800000. The task may then run data as code, but it can only touch our own mapped
+  GPU buffers, which every start rebuilds. The recovery reset follows each variant, as always.
+
+**Then the fix:** word 0 = (kernel code − `PDS_EXEC_BASE`) in the measured units, in the
+measured field, for the SGX530 only. The alias goes away. Recording the field as C finishes
+the open question of what the SGX530's DOUTU word 0 holds.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
