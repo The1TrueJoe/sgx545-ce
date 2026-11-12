@@ -314,6 +314,13 @@ MULTI_MEM_CONTEXTS = True    # BIF directory lists 1-15 + BANK0 routing. False: 
 MULTI_EVENT_KICK = True      # host side only: the host's init kick uses EVENT_KICK2.
                              # The event entry tells init from a kick by
                              # ui32InitStatus, so the microkernel is the same either way
+EDM_HOST_MEMORY = False      # SGX530 EDM path: st.a.d drops, so the host owns memory +
+                             # completion. Only pixel_done changes — it can't run the
+                             # WAIT_3D/WAIT_FREE rendezvous (markers drop) and would exit
+                             # early on SC_INFLIGHT=0, so it raises ONE SW_EVENT per render
+                             # and the host signals the fence + advances the CCB read offset.
+                             # Everything else works as-is (dropped stores are harmless no-ops,
+                             # the kick path is command-driven). (cores/sgx530_edm.py)
 FIX_HW_BRN_28889 = False     # never issue a BIF and a data-cache invalidate together
 WAIT_BOUND = 0               # 0: a wait() spins until its bits set. N: give up after N
                              # polls (16-bit), log it (WAIT_TIMEOUT_*) and go on

@@ -2493,10 +2493,13 @@ def build(a):
     a.i("wdf")
     a.i("test.and.ne p0, r1, r1")
     a.i("(p0) ba xfer_done")
-    a.i(f"ld.a.d r1, r17, #{SC_INFLIGHT} [moe]")      # a render in flight?
-    a.i("wdf")
-    a.i("test.and.eq p0, r1, r1")
-    a.i("(p0) ba pixel_done_end")                     # no render: spurious 3D-end
+    if not EDM_HOST_MEMORY:
+        a.i(f"ld.a.d r1, r17, #{SC_INFLIGHT} [moe]")      # a render in flight?
+        a.i("wdf")
+        a.i("test.and.eq p0, r1, r1")
+        a.i("(p0) ba pixel_done_end")                     # no render: spurious 3D-end
+        # EDM_HOST_MEMORY: SC_INFLIGHT is a dropped marker (always 0), so skip this
+        # check — else every PIXELBE_END looks spurious and we never raise SW_EVENT.
     # ISP-idle rendezvous: if CLKGATECTL&3==2 (clock-on-demand; 0xA6AA,
     # so always), poll CLKGATESTATUS (0x008) bit 0 until it reads 0. Bounded,
     # so a stuck clock can never wedge the EDM; after the bound we proceed anyway.
@@ -2525,18 +2528,32 @@ def build(a):
         a.i("test.xor.ne p0, r6, r7")                 # under the bound -> keep polling
         a.i("(p0) ba pixel_isp_loop")
     a.label("pixel_isp_done")
-    a.i("limm r4, #0")
-    a.i(f"st.a.d r17, #{WAIT_3D}, r4 [moe]")           # WAIT_3D = 0 (3D writeout done)
-    a.i("idf")
-    a.i("wdf")
-    a.i(f"ld.a.d r1, r17, #{WAIT_FREE} [moe]")         # DPM free already done?
-    a.i("wdf")
-    a.i("test.and.eq p0, r1, r1")
-    a.i("(p0) ba render_complete")                     # both halves done -> complete
-    a.label("pixel_done_end")
-    a.i("idf")
-    a.i("wdf")
-    a.end()                                            # 3D writeout done; await 0x1
+    if EDM_HOST_MEMORY:
+        # host-owned completion: the WAIT_3D/WAIT_FREE rendezvous can't run (both st.a.d
+        # drop on the 530), so raise ONE SW_EVENT per render. The host's SW_EVENT IRQ
+        # signals the oldest job's dma_fence and advances the CCB read offset. free_done
+        # (DPM free) acks and ends on its own (SC_INFLIGHT=0 -> render_done_noop), so there
+        # is exactly one SW_EVENT per render and no double-complete.
+        if not MULTI_MEM_CONTEXTS:
+            a.restore_fw_pd()                          # firmware PD back before signalling
+        a.i(f"limm r0, #{SW_EVENT}")
+        a.i(f"str #{CR_EVENT_STATUS // 4}, r0")        # raise the host IRQ
+        a.i("idf")
+        a.i("wdf")
+        a.end()
+    else:
+        a.i("limm r4, #0")
+        a.i(f"st.a.d r17, #{WAIT_3D}, r4 [moe]")           # WAIT_3D = 0 (3D writeout done)
+        a.i("idf")
+        a.i("wdf")
+        a.i(f"ld.a.d r1, r17, #{WAIT_FREE} [moe]")         # DPM free already done?
+        a.i("wdf")
+        a.i("test.and.eq p0, r1, r1")
+        a.i("(p0) ba render_complete")                     # both halves done -> complete
+        a.label("pixel_done_end")
+        a.i("idf")
+        a.i("wdf")
+        a.end()                                            # 3D writeout done; await 0x1
 
     # ======================================================================
     # free_done: 0x1 (DPM 3D memory free) -- rendezvous half 2
