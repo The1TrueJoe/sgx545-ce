@@ -27,6 +27,7 @@ void sgx_tex_set_tail(struct sgx_resource *res, unsigned l);
 /* the device layout of a texture: size in bytes, and each level and face's
  * offset */
 size_t sgx_tex_size(const struct pipe_resource *prsc);
+size_t sgx_tex_plane_stride(const struct pipe_resource *prsc);
 size_t sgx_tex_offset(const struct pipe_resource *prsc, unsigned level,
                       unsigned layer);
 

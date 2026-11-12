@@ -930,7 +930,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       opts.tex_bgra = ~not_bgra & ~(depth | shadow);
       opts.tex_f32 = depth | shadow;
-      /* RGBA32 and RG32: N reads of the R32 texture N times as wide */
+      /* RGBA32 and RG32: a read of each channel's R32 plane */
       opts.tex_r32x4 = so->r32x4;
       opts.tex_r32x2 = so->r32x2;
       opts.tex_r32_clamp = so->r32_clamp;

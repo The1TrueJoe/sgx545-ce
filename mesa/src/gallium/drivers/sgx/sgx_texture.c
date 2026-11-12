@@ -72,8 +72,8 @@ sgx_tex_format(enum pipe_format format)
    case PIPE_FORMAT_Z24_UNORM_S8_UINT:
    case PIPE_FORMAT_Z32_FLOAT:
    /* 32-bit words returned unchanged (docs/GL3.md, H2): R32 one a texel;
-    * RG32 and RGBA32 as an R32 texture two or four times as wide
-    * (sgx_tex_raw32), the compiler fetching each word */
+    * RG32 and RGBA32 as an R32 plane a channel (sgx_tex_raw32), the
+    * compiler reading each */
    case PIPE_FORMAT_R32_UINT:
    case PIPE_FORMAT_R32_SINT:
    case PIPE_FORMAT_R32_FLOAT:
@@ -87,8 +87,11 @@ sgx_tex_format(enum pipe_format format)
    }
 }
 
-/* The 32-bit words of a texel of an R32, RG32 or RGBA32 format (1, 2, 4),
- * stored as that many R32 texels in a row; 0 for other formats */
+/* The 32-bit words of a texel of an R32, RG32 or RGBA32 format (1, 2, 4);
+ * RG32 and RGBA32 are stored planar, one R32 texture a channel at
+ * sgx_tex_plane_stride apart, so that a pass per channel can render into
+ * them (the PBE writes 32 bits a pixel) and a read per channel sample them;
+ * 0 for other formats */
 unsigned
 sgx_tex_raw32(enum pipe_format format)
 {
@@ -115,11 +118,12 @@ sgx_tex_word32(enum pipe_format format)
    return sgx_tex_format(format) == SGX_TEXSTATE_FORMAT_F32;
 }
 
-/* a level's width in device texels: an RG32 or RGBA32 texel is two or four */
+/* a level's width in device texels (a plane's, for a planar format) */
 static unsigned
 dev_width(enum pipe_format format, unsigned w)
 {
-   return w * MAX2(sgx_tex_raw32(format), 1);
+   (void)format;
+   return w;
 }
 
 /* sampled B, G, R, A ordered (sgx_tex_format): the compiler unpacks zyxw */
@@ -240,9 +244,21 @@ sgx_tex_dev_last(const struct pipe_resource *prsc)
    return util_logbase2(MAX2(prsc->width0, prsc->height0));
 }
 
+/* the bytes from one channel's plane of an RG32 or RGBA32 texture to the
+ * next (a whole R32 chain, on 4 KiB); 0 for other formats */
+size_t
+sgx_tex_plane_stride(const struct pipe_resource *prsc)
+{
+   if (sgx_tex_raw32(prsc->format) < 2)
+      return 0;
+   return align64(chain_offset(prsc, sgx_tex_dev_last(prsc) + 1), 4096);
+}
+
 size_t
 sgx_tex_size(const struct pipe_resource *prsc)
 {
+   if (sgx_tex_raw32(prsc->format) > 1)
+      return sgx_tex_raw32(prsc->format) * sgx_tex_plane_stride(prsc);
    return prsc->array_size > 1 ? prsc->array_size * face_stride(prsc)
                                : chain_offset(prsc, sgx_tex_dev_last(prsc) + 1);
 }
@@ -290,13 +306,19 @@ encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
       return;
    }
    if (sgx_tex_raw32(prsc->format)) {
-      /* a texel's words as consecutive R32 texels of a row */
-      size_t pitch = (size_t)depth_pitch(dev_width(prsc->format, w)) * 4;
+      /* word c of each texel into plane c, an R32 row each */
+      size_t pitch = (size_t)depth_pitch(dev_width(prsc->format, w)) * 4,
+             ps = sgx_tex_plane_stride(prsc);
+      unsigned n = sgx_tex_raw32(prsc->format);
 
-      for (unsigned y = y0; y < y1; y++)
-         memcpy(dst + y * pitch + (size_t)x0 * cbpp,
-                src + y * src_stride + (size_t)x0 * cbpp,
-                (size_t)(x1 - x0) * cbpp);
+      for (unsigned c = 0; c < n; c++)
+         for (unsigned y = y0; y < y1; y++) {
+            uint32_t *d = (uint32_t *)(dst + c * ps + y * pitch);
+            const uint32_t *s = (const uint32_t *)(src + y * src_stride);
+
+            for (unsigned x = x0; x < x1; x++)
+               d[x] = s[x * n + c];
+         }
       return;
    }
    if (!twiddled(w, h)) {
@@ -519,11 +541,18 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    if (x0 >= x1 || y0 >= y1 || sgx_tex_depth(prsc->format))
       return;
    if (sgx_tex_raw32(prsc->format)) {
-      size_t pitch = (size_t)depth_pitch(dev_width(prsc->format, w)) * 4;
+      size_t pitch = (size_t)depth_pitch(dev_width(prsc->format, w)) * 4,
+             ps = sgx_tex_plane_stride(prsc);
+      unsigned n = sgx_tex_raw32(prsc->format);
 
-      for (unsigned y = y0; y < y1; y++)
-         memcpy(dst + y * stride + (size_t)x0 * cbpp,
-                src + y * pitch + (size_t)x0 * cbpp, (size_t)(x1 - x0) * cbpp);
+      for (unsigned c = 0; c < n; c++)
+         for (unsigned y = y0; y < y1; y++) {
+            uint32_t *d = (uint32_t *)(dst + y * stride);
+            const uint32_t *s = (const uint32_t *)(src + c * ps + y * pitch);
+
+            for (unsigned x = x0; x < x1; x++)
+               d[x * n + c] = s[x];
+         }
       return;
    }
    if (!twiddled(w, h)) {
@@ -682,7 +711,8 @@ sgx_tex_words(const struct pipe_sampler_view *view,
    if (sgx_tex_word32(prsc->format)) {
       /* rows of depth_pitch texels, strided as a render target is read
        * (16x16: T0 00060e00, T1 d200f00f), base level only; an RG32 or
-       * RGBA32 texture as the R32 one two or four times as wide */
+       * RGBA32 texture's plane 0 (a read of channel c adds c planes,
+       * sgx_tex_plane_stride) */
       unsigned dw = dev_width(prsc->format, w);
       unsigned p = depth_pitch(dw) - 1;
 
@@ -692,11 +722,7 @@ sgx_tex_words(const struct pipe_sampler_view *view,
          t0.pitch_hi = p >> 3;
          if (sampler) {
             t0.wrap_t = wrap(sampler->wrap_t);
-            /* an RG32 or RGBA32 one is read at subtexel centres the
-             * compiler wraps itself: s repeats (sgx_lower_tex) */
-            t0.wrap_s = wrap(sgx_tex_raw32(prsc->format) > 1
-                                ? PIPE_TEX_WRAP_REPEAT
-                                : sampler->wrap_s);
+            t0.wrap_s = wrap(sampler->wrap_s);
          }
       }
       sgx_pack(&t[1], TEXSTATE_WORD1, t1)
