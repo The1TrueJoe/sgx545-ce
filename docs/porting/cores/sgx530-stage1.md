@@ -1495,6 +1495,40 @@ A cheap probe meanwhile: a PDS `DOUTA` that writes a primary attribute before th
 then a USSE read of it — if attributes are visible where temporaries aren't, the microkernel
 should use them on the SGX530.
 
+## Attempt 38: instruction pairing (the GPL feature-flag lead)
+
+The GPL `sgxfeaturedefs.h` gives the likely cause. The SGX545 has
+`SGX_FEATURE_USE_NO_INSTRUCTION_PAIRING`; the **SGX530 lacks it** (its block has only
+`NUM_USE_PIPES 2`, `AUTOCLOCKGATING`, 28-bit space). So the SGX530's USSE **pairs /
+schedules adjacent instructions**, and the open microkernel is written for the no-pairing
+SGX545. If the SGX530 pairs a write with the next, dependent instruction — `or r5, r5, r17`
+with the following `ld.a.d r3, r5` — the `ld` reads r5's **pre-write** value. That is exactly
+"reads return stable leftovers, writes don't appear": the write happens, the paired read
+sees the old value. ISA.md: `nosched` (h11/h22) suppresses this, and the vendor compiler sets
+it around a register write (ISA.md "the compiler puts `nosched` on the words between an
+internal register's write"); the SGX545 never needs it.
+
+**The test: space the write from the read with nops** (`cores/sgx530_aluwr_nop{1,2,4,8}.py`):
+`or r5, r5, r17`, N nops, `ld.a.d r3, r5, #0`. If the `ld` then faults at **0x0fd7d000** (the
+`or` result), a scheduling/pairing hazard is the cause, and the write was landing all along.
+
+| Probe | nops | img sha256 (16) | packaged (16) |
+|---|---|---|---|
+| nop1 | 1 | d296a90ac9be258b… | afb04b326b7b272f… |
+| nop2 | 2 | 2e8d6976207d8e3c… | b5e3e7fad93dbd58… |
+| nop4 | 4 | b5bc6ad91895e152… | 784507c19b3b1ee4… |
+| nop8 | 8 | ecb151283f792a27… | 57476af8622e0928… |
+
+Build each then mkukfw; all same through asm.py and `sgx-asm`. The smallest N that gives
+0x0fd7d000 is the hazard distance.
+
+**If it's pairing:** the fix is per-core — on the SGX530, break scheduling between a write
+and its dependent use, either with `nosched` on the writing instruction or by spacing
+(the assembler/`sgx.xml` for `nosched`, via cleanroom-isa; or the microkernel emits the
+barriers for the SGX530 build). The SGX545 image is unchanged. Then re-run the real image:
+with the hazard handled, `limm`, the stores and init should work. This also fits why *every*
+write looked dropped: the microkernel is dense with write-then-use pairs.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:
