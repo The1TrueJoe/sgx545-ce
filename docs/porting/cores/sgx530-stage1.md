@@ -1254,10 +1254,19 @@ naming rN. r5 and r17 are known (0x0c004000, 0x0fd79000); these fill in the rest
 
 Build each `python3 ukernel/build.py sgx530_ldreg_r<n> …` then mkukfw; all same through
 asm.py and `sgx-asm`. `EVENT_TIMER` 0xa5a = the derived address was mapped (no fault); else
-the fault page is that address. Map reg number → address: a clean linear or bit-placed
-relation reveals how the SGX530 reads the source-operand field (a shifted/narrower register
-field, or the field used as an immediate/address). Then document it C in ISA.md and hand the
-`ld.a.d` operand decode to cleanroom-isa.
+the fault page is that address.
+
+**And the which-register probes** (`cores/sgx530_ldpre_r{0,1,2,4,5,17}.py`, the kernel
+session's refinement): each preloads r0..r22 = (N+1)<<16 (distinct, unmapped, all below
+2 MiB) then `ld.a.d r3, rK, #0`. A fault at (M+1)<<16 names the register M the SGX530 read
+for operand rK. Run these first:
+- fault at (K+1)<<16 → it reads the named register (contents), so the base is right and the
+  fault comes from elsewhere;
+- fault at (M+1)<<16, M a fixed offset from K → a register-field shift;
+- fault at none of the preloaded values → the operand field is used as an address, and the
+  `sgx530_ldreg_r*` sweep maps the register number to that address.
+
+Then document the `ld.a.d` operand decode C in ISA.md and hand it to cleanroom-isa.
 
 ## Abort conditions
 
