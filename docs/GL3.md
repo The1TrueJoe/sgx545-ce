@@ -447,8 +447,44 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     still wrong.
   - `fbo-depth-sample-compare`: shadow compares against a depth texture a
     render wrote; it prints no detail, not diagnosed.
-- `clipping@fixed-clip-enables` failed once on run 4's cap build and passed
-  on run 5 with the cap and without: not reproduced.
+- **Known intermittent: `clipping@fixed-clip-enables`** fails in about 6 to
+  14 of 20 runs with the cap and passes 20 of 20 without it (runs 7-15,
+  2026-11-12). Every failure is the same probe, (200,175) in the third
+  enable set (planes 0-3), white where plane 2 should clip. What is known:
+  - It is the render, not the read: the frame is flushed and waited for
+    before the probes, the probes read the buffer the frame rendered into,
+    and a 10 ms sleep after the wait changes nothing (`SGX_DEBUG=rbsleep`).
+  - The driver's `SGX_DEBUG=frame,sync,draw` logs of a failing and a passing
+    run are identical apart from the result, so the same command stream
+    renders differently run to run.
+  - Without the cap piglit renders into the pbuffer; with it, into an FBO.
+    `mesa/tests/sgx_clipfbo` repeats the test in an FBO (the planes, the
+    four enable sets, a depth/stencil attachment, client vertex arrays,
+    piglit's twelve 1x1 float probes, then every pixel) and never fails.
+  - Fixed on the way: a vertex program storing only `CLIP_DIST1` enabled
+    planes 0-3 without writing them (`fill_clip_dist0`), and a frame that
+    goes on for the same memory now takes the new target's buffer
+    (`sgxws_begin`). Neither changed this test.
+  Not diagnosed further: GPU-side state the driver doesn't log (constants,
+  programs, output registers) would need a dump of the job stream.
+- **Integer textures and render targets** (`SGX_DEBUG=glsl130` only, with
+  `MESA_GL_VERSION_OVERRIDE=3.0 MESA_GLSL_VERSION_OVERRIDE=130`;
+  `mesa/tests/sgx_inttex`, every case passing, run 14):
+  - sampled: RGBA8UI, RGBA8I, RG8UI, R8UI (RGBA8 storage, T1 0x0d, the
+    compiler's byte unpack), R32UI, R32I (T1 0x12, the raw word), and RG32UI,
+    RGBA32UI, RGBA32I stored **planar**, an R32 plane a channel at
+    `sgx_tex_plane_stride`, a dependent read a plane (the compiler's
+    `tex_r32x2` / `tex_r32x4`; the read's plane is added to its state's
+    address);
+  - rendered: RGBA8UI, RG8UI, R8UI (the word's B, G, R, A bytes, PBE format
+    1), R32UI (format 0), RG32UI and RGBA32UI a pass a channel into their
+    planes (a later pass tests depth EQUAL, writes no depth or stencil, stencil
+    off: an approximation), no dither, no blending, integer clears;
+  - piglit `EXT_texture_integer`: 7 of 24 pass under the overrides (run 9).
+  - Not exposed: Mesa takes GLSL 1.30 only with GL 3.0, and st exposes
+    `EXT_texture_integer` only with RGBA32UI/I render targets, which the
+    plane passes now give; the switch stays off until the GL 3.0 set is
+    there.
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
