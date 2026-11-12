@@ -1761,6 +1761,27 @@ cache-flush problem for any source. This matters for the restructure: the microk
 its output-scratch to the control block. Analysis:
 [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
 
+## After the forty-sixth attempt (8abc9c05): store visibility, not st-from-output (C); pds3 flat
+
+With EDM_PROTECT off by default, three results:
+- **`stout_r5` (store a temp) and `stout_o0` (store an output): both no fault, USE busy, t[0x18] = 0.**
+  So the failure is **not st-reading-an-output** — a temp store doesn't reach visible memory
+  either. The store completes without faulting but does not show in the control block (C).
+- **pds3-mirror variant 1 flat:** DOUTU 0x07003885 (w1=2, w0 from ds1[3]) + 13 × `tst` spacers
+  still launched at code base 0 (b2 0x0f400000). So w1=2, the DS1 w0, and spacing are **not** the
+  DOUTA-then-DOUTU cause. The in0-source DOUTA (variant 2) and the order-swap remain.
+
+**Store-visibility reading (G).** `st; idf; wdf` is exactly what the open microkernel's own
+heartbeat/status stores use, and those land on the SGX545 — so the 530 difference is not a missing
+flush instruction. `ld.a.d` computes addresses correctly on the 530 (loads fault at their expected
+pages), and the stout store uses offset `#0`, so address-unit scaling is unlikely to be it. That
+points to either the store not committing, or the host read not being coherent with the GPU write
+(the arena is read through a write-combined CPU mapping). Per the coordinator, check the simpler
+cases first, with **no new instructions**: scan the whole control block and its neighbouring page
+for `stout_o0`'s distinctive 0x0fd7d000 — found off t[0x18] = a misplaced store (an addressing
+difference); absent = not committed or a non-coherent read. Only then weigh a documented flush.
+Analysis: [sgx530-attr-restructure.md](sgx530-attr-restructure.md) §5.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

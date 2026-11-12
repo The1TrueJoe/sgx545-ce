@@ -130,13 +130,16 @@ likely to fit.
   the client's PD and needs its code/control block/CCB mapped there, UAPI P2). Isolation must come
   from an instruction checker (E3), `READONLY` mappings where the microkernel only reads (E1,
   enforced), and/or per-kick list switching — M2/M3 work the per-context-PD design does not cover.
-- **Does the store reach memory? — still open (attempt 45).** With EDM_PROTECT off the store no
-  longer faults, but the target word still read 0. Either `st` cannot read an **output** as its
-  data source, or `idf`/`wdf` does not flush the USE data cache to memory (the DDK uses op0x100).
-  The control `sgx530_stout_r5` (store a temp through the same path) tells which. **This is
-  load-bearing for the restructure:** scratch lives in outputs, and the microkernel must *store*
-  that scratch to the control block. If `st` cannot read outputs, the restructure needs another
-  path from an output to memory (e.g. the emit mechanism), which would enlarge it.
+- **Does the store reach memory? — still open (attempts 45-46).** With EDM_PROTECT off the store
+  no longer faults, but the target word read 0. Attempt 46 narrowed it: the control
+  `sgx530_stout_r5` (store a **temp**) also read 0, so it is **not st-from-output** — a general
+  store-visibility problem. Good for the restructure: scratch in outputs can be stored once this is
+  fixed. The cause isn't a missing flush instruction (the open microkernel's own stores use
+  `st; idf; wdf` and land on the 545), and `ld.a.d` addresses correctly with offset `#0`, so it is
+  either the store not committing or a non-coherent host read. Next, with no new image: scan the
+  control block and neighbour page for stout_o0's distinctive 0x0fd7d000 (misplaced vs not
+  committed). **Load-bearing:** the microkernel must store its scratch to the control block, so a
+  task store must become host-visible before any of the restructure runs.
 - **Emit-at-end semantics.** Outputs are normally emitted to the output buffer when a task
   ends. Every output probe self-loops, so emit is untested. If the microkernel's EDM-style task
   emits outputs on completion, using them as scratch could write scratch to memory. Confirm the
