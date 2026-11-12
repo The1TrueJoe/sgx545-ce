@@ -1917,3 +1917,31 @@ commit to DRAM without faulting on an `EDM_PROTECT` page (gates 3/4)?
 re-run one DOUTA-then-DOUTU under the 8-word interleave to close gate 2. If the store still does not
 commit with `EDM_PROTECT` on, vary word 1 bit 26 alone. Same board rules and lock turn-taking as
 H-A/H-B; batch into one slot if those have not run yet.
+
+## H-A resolved; the vendor-launch test, H-B and T2 batched in one slot
+
+The kernel session answered H-A from the existing attempts, so no new run was needed, and
+reports the state of the rest.
+
+- **H-A — resolved. The store is not blocked by `EDM_PROTECT`.** The page the 46/47 and the T1
+  control stores targeted is `0x0f003000` (`PA0` = `TA3DCTL` + 0x60, inside the kernel data arena).
+  That arena was mapped `CACHECONSISTENT | valid` with `EDMPROTECT` (b4) **clear** — the SGX530
+  default (`data_no_edmprotect`) since d8160ba2 — so the stores were not landing on a protected page.
+  The control run T1 mapped that same page `READONLY`, and the store then **faulted** (fault code
+  0x4 at `0x0f003000`). So the store reaches the MMU **with the correct address**, and the gate that
+  stops it from committing is **downstream of address translation**, not `EDM_PROTECT` and not a
+  misplaced target. This is consistent with gate 3 (46-47): the store commits to neither arena even
+  though it is addressed and routed correctly. The write-retire blocker is therefore a property of
+  the launch/write context (H-C), not of the memory map.
+- **H-B — queued with T2 in one board slot.** The kernel session adds a **host** BIF flush
+  (`BIF_CTRL` FLUSH b2) and directory-cache invalidate (INVALDC b3), both named in the SGX530 GPL
+  header, plus an `EVENT_STATUS` readout, before the DRAM scan. If the stored value then appears,
+  stores do commit and the gate is a flush, not a missing write context. It shares the slot with the
+  gap-19 **T2** probe `sgx530_ldloop_pa0` (`phas.i; L: ld.a.d r3, pa0, #0; wdf; ba L`). The kernel
+  session holds the board lock for this slot.
+- **The vendor-launch test (§9) is cleared and batches with T2 and H-B.** Its launch values come
+  from the analysis side's static read of the vendor's closed user space; the coordinator confirmed
+  this falls under [CLEANROOM.md](../../CLEANROOM.md) — a static fact must be confirmed on hardware
+  before shipping code depends on it, and the board run **is** that confirmation. §9 therefore stays
+  a probe variant, off by default, until its result is recorded as `C`. So T2, H-B and §9 run in one
+  board slot. H-C stays designed as the black-box fallback in case §9 does not make writes retire.
