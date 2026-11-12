@@ -509,6 +509,23 @@ def build(a):
             a.i("ba usse_loop")
             a.end()
             return a
+        if USSE_STOR_SA is not None:
+            # coordinator lead (a): the vendor's stores use addresses held in SECONDARY
+            # ATTRIBUTES (filled by the control-block DOUTD), not temps — vendor-setup
+            # §5/§6. stor5 used a temp base (r17) and dropped; stage-1 stout used pa0 and
+            # dropped. Here the base is sa{N}, which the DRIVER fills via DOUTD (the
+            # vendor's secondary-update route) with a mapped EDMPROTECT scratch address.
+            # Store r5 (reads give 0x0fa93000) to [sa{N}]; the host reads that address:
+            # 0x0fa93000 => a SA-held store commits (the store path needs an SA base, as
+            # the vendor uses); 0/unchanged => SA isn't the key either; BIF 0x4004 =>
+            # EDMPROTECT rejected it. The driver fills sa{N} and names the scratch addr.
+            a.i(f"st.a.d sa{USSE_STOR_SA}, #0, r5")
+            a.i("idf")
+            a.i("wdf")
+            a.label("usse_loop")
+            a.i("ba usse_loop")
+            a.end()
+            return a
         if USSE_STOR_OFF is not None:
             # §9-valid store test (coordinator priority 1): does a task store COMMIT to
             # EDMPROTECT memory under the vendor launch? stout stored to [pa0], but §9

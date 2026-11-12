@@ -2182,3 +2182,24 @@ completion from the host IRQ, not from the microkernel's own memory writes. So `
 the hinge — if the task can program registers (BIF/DPM/kicks), the EDM drives the TA/3D
 and the host owns memory; if `str` also drops, it is full host-kick. pa-via-ALU and
 st.a.d are not on the critical path either way.
+
+## The store-path hypothesis: a committing store needs a SA-held address
+
+The silent store-drop (stor5, temp base r17; stage-1 stout, pa base pa0) has a lead
+(coordinator, from vendor-setup §5/§6): **the vendor microkernel's stores use
+addresses held in SECONDARY ATTRIBUTES**, filled by the control-block DOUTD in the
+init task's second PDS program — not temps, not primary attributes. Both bases we
+tried (temp, pa) dropped; the one the vendor uses (sa) is untested. The ISA allows a
+sa base (ISA.md: store src banks are r/o/pa/sa).
+
+`sgx530_stor_sa` (`st.a.d sa16, #0, r5`) tests it: the driver fills sa16 via DOUTD
+with a mapped EDMPROTECT scratch address (the vendor's route), under the full §9
+launch (word1 bit26 on). Read it back: **0x0fa93000** = the SA-held store COMMITTED
+(the store path needs a SA base); **0/unchanged** = SA isn't the key; **BIF 0x4004** =
+EDMPROTECT rejected it. img
+`ea723b6163d121edc1b97cfdad418737e73c5fdfefba3ab2c0ccd8065a09f536`, pkg
+`8dc329788a9502952f69c783b3a34bab20a2d8e3984d9ea6fa4fdb3714f9e8a0` (crc 0xe97816cc).
+
+**Order:** `limmwr_r5` (str/limm) FIRST — it decides the architecture (host-owned
+memory needs str); then `stor_sa` (does a SA store commit, for the fuller path).
+`sgx530_andr5` is dropped — xorr5 already nailed the temp-retire value.

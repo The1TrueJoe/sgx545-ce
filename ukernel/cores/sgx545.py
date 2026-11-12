@@ -360,6 +360,10 @@ USSE_STOUT = None           # 'o0': or it then st it to [pa0] (a driver-DOUTA-se
 USSE_STOR_OFF = None        # §9-valid store test: st r5 to [ctlblk + 4*(off+1)], r17 patched to ctlblk (a
                             # mapped EDMPROTECT addr §9 does NOT seed, unlike pa0). Does a store commit to
                             # EDMPROTECT memory under §9's launch? (cores/sgx530_stor5.py)
+USSE_STOR_SA = None         # store with a SECONDARY-ATTRIBUTE base: st r5 to [sa{N}], the driver fills sa{N}
+                            # via DOUTD (the vendor's route, vendor-setup §5/§6) with a mapped EDMPROTECT
+                            # scratch addr. stor5 (temp base) and stout (pa base) dropped; does the SA-held
+                            # address commit? (cores/sgx530_stor_sa.py)
 USSE_ODIST = None           # read o{N} after writing o0..o9 distinct values: are the outputs distinct regs or aliases? (cores/sgx530_odist0.py)
 USSE_ODIST_N = 10           # how many outputs the odist sweep writes (11 includes o10 for the margin-1 check)
 
