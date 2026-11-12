@@ -566,7 +566,8 @@ static void pads_set(struct pvrsgx_device *sdev)
 /*
  * The stage-1 sweep's SGX545 init-script writes in the PDS and event block,
  * which the SGX530's part 2 leaves out: unnamed in the SGX530 header (G).
- * @sweep_vendor 1-4 writes one; 5 writes them all, with 0xa7c and 0xa80 = 0.
+ * @sweep_vendor 1-4 writes one of the first four, 5 those four together, and
+ * 6 and 7 write 0xa7c and 0xa80 alone.
  */
 static const struct pvrsgx_core_init_reg sweep_vendor_regs[] = {
 	{ 0xa00, 0x7c000 }, { 0xa74, 0x208200 }, { 0xa78, 0x2c }, { 0xaac, 0x45 },
@@ -575,11 +576,20 @@ static const struct pvrsgx_core_init_reg sweep_vendor_regs[] = {
 
 #define SWEEP_VENDOR_ALL	5
 
-/* Write reg = val, logging what it held before and after. */
+/* The register a single-write @sweep_vendor (1-4, 6, 7) writes. */
+static const struct pvrsgx_core_init_reg *sweep_vendor_reg(unsigned int v)
+{
+	return &sweep_vendor_regs[v < SWEEP_VENDOR_ALL ? v - 1 : v - 2];
+}
+
+/* Write reg = val, logging what it held before and after; saved to put back. */
 static void sweep_write(struct pvrsgx_device *sdev, u32 reg, u32 val)
 {
 	u32 before = sgx_rd(sdev, reg);
 
+	if (sdev->sweep_nsaved < ARRAY_SIZE(sdev->sweep_saved))
+		sdev->sweep_saved[sdev->sweep_nsaved++] =
+			(struct pvrsgx_core_init_reg){ .reg = reg, .val = before };
 	sgx_wr(sdev, reg, val);
 	drm_info(&sdev->base, "sweep write 0x%04x: read 0x%08x, wrote 0x%08x, read 0x%08x\n",
 		 reg, before, val, sgx_rd(sdev, reg));
@@ -592,10 +602,22 @@ static void sweep_setup_writes(struct pvrsgx_device *sdev)
 	if ((sdev->sweep_flags & PVRSGX_SWEEP_PDS_CTRL) && sdev->cr->pds_ctrl)
 		sweep_write(sdev, sdev->cr->pds_ctrl, 0xe);
 	if (v == SWEEP_VENDOR_ALL) {
-		for (unsigned int i = 0; i < ARRAY_SIZE(sweep_vendor_regs); i++)
+		for (unsigned int i = 0; i < 4; i++)
 			sweep_write(sdev, sweep_vendor_regs[i].reg, sweep_vendor_regs[i].val);
 	} else if (v) {
-		sweep_write(sdev, sweep_vendor_regs[v - 1].reg, sweep_vendor_regs[v - 1].val);
+		const struct pvrsgx_core_init_reg *r = sweep_vendor_reg(v);
+
+		sweep_write(sdev, r->reg, r->val);
+	}
+}
+
+/* After a variant: each register the sweep wrote back to its value before. */
+static void sweep_restore(struct pvrsgx_device *sdev)
+{
+	while (sdev->sweep_nsaved) {
+		const struct pvrsgx_core_init_reg *r = &sdev->sweep_saved[--sdev->sweep_nsaved];
+
+		sgx_wr(sdev, r->reg, r->val);
 	}
 }
 
@@ -852,9 +874,10 @@ struct sweep_variant {
 
 /*
  * What does the PDS need before it fetches? The baseline; PDS (0xabc) = 0xe,
- * alone and with F1; then, with stage1_vendor, each SGX545 init write in the
- * PDS block alone and all together, each alone and with F1. F1 faulting at
- * the hole means the PDS now fetches.
+ * alone and with F1; then, with stage1_vendor, 0xa00, 0xa74, 0xa78 and 0xaac
+ * one at a time and together, and only if none of those faulted, 0xa7c and
+ * 0xa80 alone; each alone and with F1. F1 faulting at the hole means the PDS
+ * now fetches. Every write is put back after its variant.
  */
 #define F1	PVRSGX_SWEEP_PROG_F1
 
@@ -866,6 +889,8 @@ static const struct sweep_variant sweep[] = {
 	{ .vendor = 3 }, { .vendor = 3, .prog = F1 },
 	{ .vendor = 4 }, { .vendor = 4, .prog = F1 },
 	{ .vendor = SWEEP_VENDOR_ALL }, { .vendor = SWEEP_VENDOR_ALL, .prog = F1 },
+	{ .vendor = 6 }, { .vendor = 6, .prog = F1 },
+	{ .vendor = 7 }, { .vendor = 7, .prog = F1 },
 };
 
 #undef F1
@@ -905,8 +930,7 @@ static void sweep_name(const struct sweep_variant *sv, char *buf, size_t len)
 	if (sv->vendor == SWEEP_VENDOR_ALL)
 		n += scnprintf(buf + n, len - n, " SGX545 writes");
 	else if (sv->vendor)
-		n += scnprintf(buf + n, len - n, " 0x%x write",
-			       sweep_vendor_regs[sv->vendor - 1].reg);
+		n += scnprintf(buf + n, len - n, " 0x%x write", sweep_vendor_reg(sv->vendor)->reg);
 	if (sv->flags & ~SWEEP_NAMED)
 		scnprintf(buf + n, len - n, " flags 0x%x", sv->flags & ~SWEEP_NAMED);
 }
@@ -1088,6 +1112,7 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	char when[64];
 	u32 clk, st, held = 0;
+	bool vendor_fault = false;
 	int err, ran;
 
 	for (unsigned int v = 0; v < ARRAY_SIZE(sweep); v++) {
@@ -1097,6 +1122,9 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 		if ((sv->flags & PVRSGX_SWEEP_PADS_DM3) && !pads_wanted(sdev))
 			continue;
 		if (sv->vendor && !stage1_vendor)
+			continue;
+		/* 0xa7c and 0xa80 only if the other writes changed nothing. */
+		if (sv->vendor > SWEEP_VENDOR_ALL && vendor_fault)
 			continue;
 		sweep_name(sv, name, sizeof(name));
 		if (v) {
@@ -1153,9 +1181,14 @@ static int start_sweep(struct pvrsgx_device *sdev, u32 *hc, u32 clk_idle)
 				 when, st, sgx_rd(sdev, SGX_CR_BIF_FAULT), pvrsgx_pds_f1_addr(sdev),
 				 sdev->fw.addr[PVRSGX_FW_PDS0] + 0x10000);
 			sgx_wr(sdev, cr->event_pds_enable, 0);
+			vendor_fault |= sv->vendor != 0;
 			err = bif_recover(sdev, when);
 			if (err)
 				return err;
+		}
+		if (sdev->sweep_nsaved) {
+			sgx_wr(sdev, cr->event_pds_enable, 0);
+			sweep_restore(sdev);
 		}
 	}
 	drm_info(&sdev->base, "sweep: no variant runs the diagnostic ladder\n");

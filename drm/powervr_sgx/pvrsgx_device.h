@@ -217,6 +217,10 @@ struct pvrsgx_device {
 	u8 sweep_a68_low;
 	/** @sweep_vendor: The sweep's SGX545 init write (pvrsgx_fw.c), + 1; 0 none. */
 	u8 sweep_vendor;
+	/** @sweep_saved: Registers the sweep wrote, with their values before. */
+	struct pvrsgx_core_init_reg sweep_saved[8];
+	/** @sweep_nsaved: Entries in @sweep_saved. */
+	unsigned int sweep_nsaved;
 
 	/** @ccb_lock: Serialises kernel CCB writers. */
 	struct mutex ccb_lock;
