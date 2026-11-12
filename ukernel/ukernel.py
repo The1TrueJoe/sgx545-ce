@@ -473,7 +473,8 @@ def build(a):
         a.i(f"st.a.d r17, #{HEARTBEAT}, r2 [moe]")
         a.i("idf")
         a.i("wdf")
-    a.phas()
+    if DIAG_ENTRY is None or DIAG_PHAS:
+        a.phas()
     # (A `lock #1`/`release #1` task mutex was tried here + in a.end() to serialise
     # concurrent event tasks. It is offline-perfect (race_interleave 358/358) but
     # HW-neutral — the lockup_TA is unchanged with it, so the two-task

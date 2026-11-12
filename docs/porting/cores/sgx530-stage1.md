@@ -154,6 +154,30 @@ Without it, step 1 goes unread, and an all-zero result can't tell row 1 from row
 Other values: record them. An `EVENT_TIMER` other than 0, 0xa5a or init's value means a
 field is narrower than assumed, which is still evidence that step 1 ran.
 
+**What the addresses depend on.** hwt_window showed on the SGX545 that `ba` and `phas.i`
+targets count from the code base the task runs from, not from the heap.
+- The entry runs from `USE_CODE_BASE_15`. The DOUTU uses segment 0 and offset 0, and
+  `USE_CODE_BASE_15` points at the kernel code heap's start, where the image is loaded at
+  offset 0. So the image's indices are the base's indices, and build.py adds no load
+  offset.
+- `phas.i #0, #0` names no next phase, so it has no target.
+- Steps 1-4 have no branch. The normal entry's first `ba` comes after the markers.
+- The image is 17 KiB: one window.
+- The markers go to the control block at 0x02403000 (words 0x18, 0x28 and 0x2a, at 0x02403060,
+  0x024030a0 and 0x024030a8). That is page 3 of the kernel data arena, mapped
+  read-write and EDM-protected in the firmware directory (PDE 9, valid only).
+- What these don't cover is the unit of `USE_CODE_BASE`'s 24-bit address field on the
+  SGX530 (gap 9). The 32-bit SGX535 and SGX545 have 25-bit fields in units of 128 B. A
+  28-bit core with a 24-bit field would fit a 16 B unit, and then base 15 would point at
+  0x00400000. Nothing is mapped there at start, so I'd expect a USSE fetch there to fault.
+  The second attempt saw no fault, but row 1 can't rule it out.
+
+**`sgx530_diag_nophas`** is the same build without `phas.i`: after step 4 the normal
+entry falls through. It is the follow-up if the diagnostic entry stops at heartbeat 1.
+- Expected: image 0x4330 (17200 B, sha256 c42a740e…) and crc 0x5bd6b2f7.
+- The same patches, and the packaged file is 8d1a634f….
+- A pass gives the same results as the last row above.
+
 ## Abort conditions
 
 Stop, unload the module if the board still answers, and hand back to the board owner if:

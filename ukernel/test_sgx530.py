@@ -142,11 +142,12 @@ def test_stage1_named(code, man):
           "EVENT_HOST_ENABLE/ENABLE2  OK")
 
 
-def test_diag_entry():
-    """stage 1's diagnostic build (cores/sgx530_diag.py): its markers land in
-    order before phas.i, then the normal entry and init run as in sgx530"""
-    from cores import sgx530_diag as D
-    code, man = load("sgx530_diag")
+def test_diag_entry(core="sgx530_diag"):
+    """stage 1's diagnostic builds (cores/sgx530_diag*.py): the markers land in
+    order before phas.i (or with none), then the normal entry and init run"""
+    import importlib
+    D = importlib.import_module("cores." + core)
+    code, man = load(core)
     assert man["entries"]["event"] == 0 and set(man["patches"]) == {"ctlblk", "pdtable"}
     u, mem, regs = machine(code, initialised=False)
     regs.v[C.CR_CORE_ID] = 0x01120000
@@ -161,21 +162,26 @@ def test_diag_entry():
     assert mem.rd(wait) == m, "init must leave the marker word alone"
     assert seen[-1] == (ver, C.UK_VERSION)
     assert mem.rd(HOSTCTL + 4 * C.HC_INIT) == 1, "init must complete after the markers"
-    phas = next(pc for pc, t in enumerate(man_text(man)) if t.startswith("phas"))
+    texts = man_text(core)
+    phas = [pc for pc, t in enumerate(texts) if t.startswith("phas")]
     first_st = next(pc for (op, a, v, pc) in mem.log if op == "st")
-    assert first_st < phas, "the first marker must come before phas.i"
+    if D.DIAG_PHAS:
+        assert phas and first_st < phas[0], "the first marker must come before phas.i"
+    else:
+        assert not phas, "the no-phas build must have no phas.i"
     event(u, man, regs, status=C.EVENT_TIMER)
     assert mem.rd(hb) == 4, "a timer event must add 2 more"
     bad = sorted({a for (op, a, v, pc) in regs.log if a not in STAGE1_NAMED})
     assert not bad, "the diagnostic entry touches unnamed registers: " + \
         ", ".join(f"{a:#x}" for a in bad)
-    print(f"  diagnostic entry: EVENT_TIMER {D.DIAG_TIMER:#x}, wait {m:#x}, CORE_ID in 0x18, "
-          "heartbeat 1, 2 before init, 4 after a tick  OK")
+    print(f"  {core}: EVENT_TIMER {D.DIAG_TIMER:#x}, wait {m:#x}, CORE_ID in 0x18, "
+          f"heartbeat 1, 2 before init, 4 after a tick, phas.i {'after' if D.DIAG_PHAS else 'none'}"
+          "  OK")
 
 
-def man_text(man):
-    """the diagnostic image's instruction texts, by index"""
-    os.environ["SGX_CORE"] = "sgx530_diag"
+def man_text(core):
+    """a diagnostic image's instruction texts, by index"""
+    os.environ["SGX_CORE"] = core
     import importlib
     import ukernel
     importlib.reload(ukernel)
@@ -343,6 +349,7 @@ def main():
     test_init(code, man)
     test_stage1_named(code, man)
     test_diag_entry()
+    test_diag_entry("sgx530_diag_nophas")
     test_getmiscinfo(code, man)
     test_restore_pd(code, man)
     test_bounded_wait(code, man)
