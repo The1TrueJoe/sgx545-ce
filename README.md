@@ -19,9 +19,8 @@ the kernel, the firmware or userspace.
 | Tools | [`tools/`](tools/) | The ISA assembler and disassembler, the offline microkernel emulator, decoders, frame and blit generators, and hardware tests. |
 | Documentation | [`docs/`](docs/) | The hardware as we understand it ([ISA](docs/ISA.md), [state](docs/STATE.md), [microkernel](docs/UKERNEL.md), [uAPI](docs/UAPI.md)), and the [build log](docs/log/BUILDLOG.md). |
 
-`kernel/`, `srvinit/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver
-(`pvrsrvkm`) ported to modern Linux, with our own bring-up and client library. They stay for
-comparisons against the DDK; the new stack does not use them.
+`kernel/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver (`pvrsrvkm`)
+ported to modern Linux, and our own client library. The new stack does not use them.
 
 ## Status
 
