@@ -7,7 +7,8 @@
 # at build time). Each architecture brings its own ld.so.conf.d entry and glvnd
 # EGL vendor file (mesa/debian/etc.<arch>), so the two packages share only
 # /opt/sgx/share, which is the same in both: Multi-Arch: same, co-installable.
-# Writes mesa-sgx_<version>_<arch>.deb in the current directory.
+# MESA_SGX_BREAKS, when set, is the control file's Breaks (a release's: the kernel
+# packages too old for its uAPI). Writes mesa-sgx_<version>_<arch>.deb here.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 INSTALL=$1 ARCH=$2 VER=$3
@@ -30,7 +31,8 @@ Architecture: $ARCH
 Multi-Arch: same
 Maintainer: Joseph Telaak <joseph@telaak.dev>
 Depends: libc6, libllvm19, libelf1t64, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
-Section: libs
+${MESA_SGX_BREAKS:+Breaks: $MESA_SGX_BREAKS
+}Section: libs
 Priority: optional
 Description: Mesa with the sgx driver for the PowerVR SGX545
  OpenGL, OpenGL ES, EGL and GBM for the PowerVR SGX545 of Intel's

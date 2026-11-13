@@ -106,10 +106,14 @@ jobs:
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
           d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
           mv=$(. mesa/VERSION; echo "$MESA_VERSION")
-          # A release names its packages by the release; a snapshot by date and commit.
-          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE fver=$RELEASE; else mver=$mv+sgx$d.$v fver=0~git$d.$v; fi
+          # A release names its packages by the release; a snapshot by date and commit,
+          # below every release (0~git sorts first), so apt moves on to the next release.
+          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE fver=$RELEASE; else mver=$mv+sgx0~git$d.$v fver=0~git$d.$v; fi
+          # A release's Mesa and firmware break the release kernels before their uAPI
+          # (mesa/debian/BREAKS), so apt moves the kernel with them
+          brk=; [ -z "$RELEASE" ] || brk=$(cat mesa/debian/BREAKS)
           # mesa-sgx: /opt/sgx and the two files that put it ahead of Debian's Mesa
-          sh mesa/debian/package.sh build/mesa/debian/install amd64 "$mver"
+          MESA_SGX_BREAKS="$brk" sh mesa/debian/package.sh build/mesa/debian/install amd64 "$mver"
 
           # sgx545-firmware: the open microkernel
           F=$PWD/deb/fw
@@ -127,6 +131,7 @@ jobs:
            (MIT). No Intel or Imagination code.
           CTL
           sed -i 's/^          //' $F/DEBIAN/control
+          [ -z "$brk" ] || sed -i "/^Priority:/a Breaks: $brk" $F/DEBIAN/control
           printf '#!/bin/sh\nset -e\nif command -v update-initramfs >/dev/null; then update-initramfs -u; fi\n' > $F/DEBIAN/postinst
           cp $F/DEBIAN/postinst $F/DEBIAN/postrm
           chmod 755 $F/DEBIAN/postinst $F/DEBIAN/postrm
@@ -214,8 +219,9 @@ jobs:
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
           d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
           mv=$(. mesa/VERSION; echo "$MESA_VERSION")
-          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE; else mver=$mv+sgx$d.$v; fi
-          sh mesa/debian/package.sh build/mesa/debian/install i386 "$mver"
+          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE; else mver=$mv+sgx0~git$d.$v; fi
+          brk=; [ -z "$RELEASE" ] || brk=$(cat mesa/debian/BREAKS)
+          MESA_SGX_BREAKS="$brk" sh mesa/debian/package.sh build/mesa/debian/install i386 "$mver"
           dpkg-deb -I mesa-sgx_*_i386.deb | head -12
           dpkg-deb -c mesa-sgx_*_i386.deb | head -12
 

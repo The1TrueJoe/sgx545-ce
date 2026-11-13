@@ -18,7 +18,7 @@ on:
         type: string
         default: ''
       pkg_version:
-        description: Debian package version (KDEB_PKGVERSION); empty for <linux>-sgx1 or -sgxkit1
+        description: Debian package version (KDEB_PKGVERSION); empty for a snapshot, <linux>-sgx0~git<date>.<commit>
         type: string
         default: ''
       suite:
@@ -35,7 +35,7 @@ on:
         description: release, kit, or empty for both
         default: ''
       pkg_version:
-        description: Debian package version (KDEB_PKGVERSION); empty for <linux>-sgx1 or -sgxkit1
+        description: Debian package version (KDEB_PKGVERSION); empty for a snapshot, <linux>-sgx0~git<date>.<commit>
         default: ''
       suite:
         description: Debian suite whose kernel config to start from
@@ -108,8 +108,12 @@ jobs:
           DEBFULLNAME: Joseph Telaak
         run: |
           set -eux
+          # A snapshot sorts below every release (sgx0~git... < sgx0.1.0), so apt
+          # moves from a CI build to the next release without --allow-downgrades.
+          v=$(git rev-parse --short HEAD)
+          d=$(git log -1 --format=%cd --date=format:%Y%m%d)
           make -C linux-$LINUX_VERSION ARCH=x86_64 -j"$(nproc)" LOCALVERSION=-sgx$FLAVOR \
-            KDEB_PKGVERSION=${PKG_VERSION:-$LINUX_VERSION-${PKGTAG}1} bindeb-pkg
+            KDEB_PKGVERSION=${PKG_VERSION:-$LINUX_VERSION-${PKGTAG}0~git$d.$v} bindeb-pkg
           mkdir -p out
           mv linux-image-*.deb linux-headers-*.deb out/
           ls -l out
