@@ -11,10 +11,8 @@ and a manifest of its entry offsets.
 `SGX_CORE` does the same and, if set, wins.
 
 Lines are assembled by the `sgx-asm` host tool built from mesa/src/sgx/isa's
-`sgx.xml` (point `SGX_ASM` at it; docs/UKERNEL-TOOLING.md §2). Without `SGX_ASM`
-the build falls back to tools/isa/asm.py as a spec-side oracle; the sgx-asm CI
-gate proves the two agree bit-for-bit. Labels resolve to byte offsets of
-branch/entry targets, and the result is written little-endian, 8 bytes per
+`sgx.xml`: point `SGX_ASM` at it (`ukernel/sgx-asm.sh` builds one). Labels
+resolve to byte offsets of branch/entry targets, and the result is written little-endian, 8 bytes per
 instruction. The manifest gives srvinit the entry offsets it must point its
 PDS programs and host-kick table at — the open equivalent of the DDK build's
 fixed constants (docs/SRVINIT.md, "What still comes from Imagination").
@@ -25,8 +23,7 @@ import os
 import struct
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "isa"))
-import asm  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _select_core():
@@ -130,20 +127,6 @@ def _encode_sgxasm(items, tool):
     return words
 
 
-def _encode_asm(items):
-    """Oracle fallback (no SGX_ASM): assemble each line with tools/isa/asm.py.
-    Not the shipping path; the sgx-asm CI gate proves it agrees with sgx-asm
-    bit-for-bit (docs/UKERNEL-TOOLING.md §6)."""
-    words = []
-    for kind, v in items:
-        if kind == "raw":
-            words.append(v)
-        else:
-            hi, lo = asm.assemble(v)
-            words.append((lo, hi))
-    return words
-
-
 def temps(items):
     """the temporaries the image needs: its highest rN, plus 1 (i0-i3 are r124+)"""
     n = [int(m.group(1)) for kind, v in items if kind == "text"
@@ -155,11 +138,9 @@ def assemble():
     items, offset, patches = resolve()
     assemble.items = items
     tool = os.environ.get("SGX_ASM")
-    if tool:
-        words, used = _encode_sgxasm(items, tool), "sgx-asm"
-    else:
-        words, used = _encode_asm(items), "asm.py"
-    return words, offset, patches, used
+    if not tool:
+        sys.exit("build.py: set SGX_ASM to an sgx-asm (sh ukernel/sgx-asm.sh DIR builds DIR/sgx-asm)")
+    return _encode_sgxasm(items, tool), offset, patches, "sgx-asm"
 
 
 def main():
@@ -188,8 +169,7 @@ def main():
         "instructions": len(words),
         "features": features,
         "build_id": build_id,
-        "assembler": used,                  # which assembler emitted the bytes: "sgx-asm"
-                                            # (from sgx.xml, the shipped path) or "asm.py" (oracle)
+        "assembler": used,                  # "sgx-asm" (from sgx.xml)
         "entries": {k: v * 8 for k, v in offset.items()},    # byte offsets
         "patches": {k: v * 8 for k, v in patches.items()},   # limm sites the loader fills
     }

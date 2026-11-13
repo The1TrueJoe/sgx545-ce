@@ -1,5 +1,6 @@
-# The microkernel's ISA coverage gate (docs/UKERNEL-TOOLING.md §6, step 5): every
-# instruction ukernel/ assembles must be covered by mesa/src/sgx/isa's sgx.xml.
+# The microkernel's ISA gate: sgx.xml's own tests, and every build variant of
+# ukernel/ assembled through sgx-asm (built from sgx.xml), which refuses any
+# instruction sgx.xml doesn't cover.
 name: ukernel-isa-gate
 
 on:
@@ -49,15 +50,18 @@ jobs:
         run: |
           mesa/tests/isa-standalone/standalone.sh "$PWD/mesa-tree" "$PWD/isa-build"
           isa-build/sgx_isa_test mesa/src/sgx/isa/tests/*.txt
-      - name: Coverage gate
-        run: python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test -v
-      # the SGX530 image, against the SGX545's description: it uses only the
-      # SGX545 microkernel's forms (docs/porting/cores/sgx530.md)
-      - name: Coverage gate, SGX530 image
-        run: python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test --core sgx530 -v
-      - name: Coverage gate, every build variant on
+      - name: Every build variant assembles through sgx-asm
         run: |
+          set -eu
+          export SGX_ASM=$PWD/isa-build/sgx-asm
+          mkdir -p fw
+          python3 -I ukernel/build.py fw/uk.bin fw/uk.json
+          # the SGX530 image, with the SGX545's description (docs/porting/cores/sgx530.md)
+          python3 -I ukernel/build.py sgx530 fw/sgx530.bin fw/sgx530.json
           for v in $(grep -oE 'environ.get\("UK_[A-Z0-9_]+"\) == "1"' ukernel/*.py | grep -oE 'UK_[A-Z0-9_]+' | sort -u); do
-            export "$v=1"
+            echo "== $v"
+            env "$v=1" python3 -I ukernel/build.py "fw/$v.bin" "fw/$v.json"
           done
-          python3 -I ukernel/isa_coverage.py isa-build/sgx_isa_test -v
+          echo "== every variant on"
+          env $(grep -oE 'environ.get\("UK_[A-Z0-9_]+"\) == "1"' ukernel/*.py | grep -oE 'UK_[A-Z0-9_]+' | sort -u | sed 's/$/=1/') \
+            python3 -I ukernel/build.py fw/all.bin fw/all.json
