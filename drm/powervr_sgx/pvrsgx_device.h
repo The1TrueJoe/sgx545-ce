@@ -14,6 +14,7 @@
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
@@ -276,6 +277,8 @@ struct pvrsgx_device {
 	atomic_t irq_count;
 	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
 	bool pm_pinned;
+	/** @cpu_latency: The core's CPU latency limit while awake (pvrsgx_pm.c). */
+	struct pm_qos_request cpu_latency;
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
 	/** @test_wr: KUnit only: sees every register write before it lands. */
 	void (*test_wr)(struct pvrsgx_device *sdev, u32 reg, u32 val);
