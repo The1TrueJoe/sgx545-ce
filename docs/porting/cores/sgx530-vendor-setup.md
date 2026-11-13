@@ -9,9 +9,11 @@ This page answers the three questions in [sgx530-state.md](sgx530-state.md):
 The short answer: the vendor stack differs from ours in **every word of the EDM task's
 launch (DOUTU)** and in the **PDS program data layout**. The data-layout difference by itself
 explains gate 2 (the DOUTA-then-DOUTU failure, C). The three DOUTU words are the leading
-candidates for gates 1, 3 and 4 (temporaries, stores, a retiring load destination). None of it
-is run on our board yet, so every claim below is **U**: it is what the vendor configures, read
-statically from its user space and the GPL kernel side, not a hardware result.
+candidates for gates 1, 3 and 4 (temporaries, stores, a retiring load destination). Most claims
+below are **U** — what the vendor configures, read statically from its user space and the GPL
+kernel side. A later hardware capture ran the whole vendor stack on an OMAP3630 board and
+confirmed that its init reaches `INIT_COMPLETE`; the task-setup values it uses are now
+hardware-read and marked **C** (§8 and §10).
 
 | Mark | Meaning |
 |---|---|
@@ -177,12 +179,14 @@ Where ours differs, the stage-1 value is shown.
 
 Part 1 writes `0xa58` = 0 and `EVENT_TIMER` (`0xacc`) = 0 before the reset.
 
-**Watchdog / clock values** passed in `SGX_BRIDGE_INIT_INFO`:
+**Watchdog / clock values** passed in `SGX_BRIDGE_INIT_INFO` (hardware-read on an OMAP3630
+board, **C**):
 
-- EDM-task progress registers 0xb10 and 0xb1c (the host reads and XORs them to tell a making-
-  progress EDM from a stuck one). The SGX545's pair is 0xb14/0xb20.
-- Clock-gate control value 0x00222220, which leaves the 2D unit's field off (0x00111110 when
-  clock gating is disabled).
+- EDM-task progress registers **0xb10** and **0xb1c** (the host reads and XORs them to tell a
+  making-progress EDM from a stuck one). The SGX545's pair is 0xb14/0xb20.
+- Clock-gate control **0x00222220** (the 2D unit's field off); clock-gate control 2 **0**.
+- Clock-gate status register / mask **0x4 / 0xffffffff**.
+- Cache control **0x2**.
 
 ## 8. What the host side does *not* set up (GPL kernel-side facts, U)
 
@@ -233,11 +237,23 @@ next thing to vary on its own.
 Board rules for the run: coordinate the slot (the board lock), RAM boot only, never write NAND,
 named registers and the already-approved offsets only.
 
-## 10. What a vendor-stack capture would still add
+## 10. Hardware confirmation: the vendor init reaches INIT_COMPLETE (C)
 
-The static analysis gives the vendor's configuration but not a running trace. A capture on the
-board (a 5.4/6.0-class kernel with the vendor user space, RAM-booted) would confirm, rather than
-infer: that the task's temporaries and `pa` writes retire under these launch words; that its
-stores reach `EDM_PROTECT` memory; the register writes in init-script order with their read-back
-values; and `0xa70`'s meaning. It is worth doing only if the board test in §9 leaves one of
-these open — the test should settle the write-retire and store questions directly.
+The vendor stack was run on an OMAP3630 board (a 6.0-class kernel with the GPL module and the
+vendor user space, RAM-booted from a cold power-up so the GPU's power domain comes up). Result:
+
+- **The microkernel init completes.** The host control block's init status reads `0x00000001`
+  (`PVRSRV_USSE_EDM_INIT_COMPLETE`) after the kick, so the vendor EDM task's microkernel runs,
+  writes its control block and reports completion — its temporaries, `pa` writes and stores all
+  commit on this core. This **agrees** with the open microkernel's own init reaching steady
+  state under `EDM_PROTECT` (the `st.a.d` reconciliation in
+  [sgx530-stage1.md](sgx530-stage1.md)): both paths reach the same place; neither is a
+  counter-example to the other.
+- **The task-setup fields are hardware-read** (now **C**, listed in §7): the EDM-task progress
+  registers 0xb10/0xb1c, clock-gate control 0x00222220 and control-2 0, clock-gate status
+  register/mask 0x4/0xffffffff, and cache control 0x2. They match the values decoded statically.
+
+Not captured: the per-register-write **order** of the init. On this core the GPL kernel programs
+the registers in C (its reset path), not through the init scripts, so a script-write trace comes
+back empty. A register-order trace would need different instrumentation and is only worth doing
+if a later open-init kick regresses and an order comparison would explain it.
