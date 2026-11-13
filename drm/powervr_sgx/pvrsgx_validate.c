@@ -95,10 +95,9 @@ int pvrsgx_validate_vm_link(struct pvrsgx_bo *bo, u64 addr, u64 offset)
 static bool code_mapped(struct drm_gem_object *obj)
 {
 	struct drm_gpuvm_bo *vm_bo;
-	struct drm_gpuva *va;
 
 	drm_gem_for_each_gpuvm_bo(vm_bo, obj) {
-		drm_gpuvm_bo_for_each_va(va, vm_bo)
+		if (!list_empty(&vm_bo->list.gpuva))
 			return true;
 	}
 	return false;
