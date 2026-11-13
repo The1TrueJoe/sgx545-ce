@@ -80,6 +80,10 @@ jobs:
         run: |
           python3 drm/tools/gen_usse_table.py mesa/src/sgx/isa/sgx.xml | diff -u drm/powervr_sgx/pvrsgx_usse_table.h -
 
+      - name: mkukfw's manifest path packs every patch (incl. the single-context pdtable)
+        run: |
+          python3 drm/tools/mkukfw.py --selftest
+
       - name: Lay out the kernel
         run: |
           set -eux

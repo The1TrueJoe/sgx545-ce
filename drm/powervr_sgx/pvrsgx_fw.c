@@ -113,6 +113,20 @@ static_assert(0x3000 + sizeof(struct pvrsgx_fw_ta3d_ctl) <= 0x3100);
 #define DATA_ARENA_SIZE	0xe000
 #define CODE_ARENA_SIZE	0xe000
 
+/*
+ * Real EDM init (docs/porting/cores/sgx530-edm-path.md): start the open
+ * microkernel on a single-context core (the SGX530) through the §9 bare-DOUTU
+ * launch folded into the real init. The §9 launch writes the task's code base
+ * 15 with data-master 3, which makes it the EDM requestor, so EDMPROTECT admits
+ * its stores (confirmed on hardware: the control block commits under EDMPROTECT).
+ * The microkernel owns its own state; the host owns ui32InitStatus and does not
+ * wait on it. Off by default; only a single-context core acts on it, so the
+ * SGX545 path is unaffected.
+ */
+bool pvrsgx_edm_init;
+module_param_named(edm_init, pvrsgx_edm_init, bool, 0444);
+MODULE_PARM_DESC(edm_init, "Start the open microkernel via the §9 launch folded into real init (single-context cores)");
+
 static u32 *fw_words(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b)
 {
 	return sdev->fw.cpu[b];
@@ -419,7 +433,8 @@ static int fw_arenas(struct pvrsgx_device *sdev)
 	 */
 	err = pvrsgx_kmem_alloc(sdev, &f->data, h->kernel_data.base, DATA_ARENA_SIZE,
 				SGX_MMU_PTE_CACHECONSISTENT |
-				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT), 0);
+				(pvrsgx_data_edmprotect(sdev->family) ?
+				 SGX_MMU_PTE_EDMPROTECT : 0), 0);
 	if (err)
 		return err;
 	err = pvrsgx_kmem_alloc(sdev, &f->code, h->kernel_code.base, CODE_ARENA_SIZE,
@@ -560,8 +575,14 @@ static int init_script_part2(struct pvrsgx_device *sdev)
 	sgx_wr_opt(sdev, cr->cr_b30, 0x100);	/* unnamed; its start value */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
 	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
-	sgx_wr(sdev, cr->event_pds_data0, 1);
-	sgx_wr(sdev, cr->event_pds_data1, 6);
+	if (pvrsgx_edm_init && pvrsgx_core_single_context(sdev->family)) {
+		/* §9 event-control words for the EDM launch (edm-path.md §2). */
+		sgx_wr(sdev, cr->event_pds_data0, 3);
+		sgx_wr(sdev, cr->event_pds_data1, 0x00013d01);
+	} else {
+		sgx_wr(sdev, cr->event_pds_data0, 1);
+		sgx_wr(sdev, cr->event_pds_data1, 6);
+	}
 	/* Before the events are enabled, so a wrong guess starts nothing. */
 	err = check_event_pds(sdev);
 	if (err)
@@ -670,15 +691,41 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	else
 		sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 
-	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
-			  HOSTCTL_INIT_COMPLETE, 500000);
-	if (err) {
-		drm_err(&sdev->base,
-			"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",
-			hc[HOSTCTL_INIT_STATUS], sgx_rd(sdev, SGX_CR_EVENT_STATUS),
-			sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
-			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
-		return err;
+	if (pvrsgx_edm_init && pvrsgx_core_single_context(sdev->family)) {
+		/*
+		 * EDM real init (edm-path.md §2/§6): the init task runs under the §9
+		 * launch, does its init, and ends. The one event entry dispatches on
+		 * ui32InitStatus (0 = run init, non-zero = handlers); the microkernel
+		 * normally sets it, but the host owns it here, so give the init task
+		 * time to run, then the host writes INIT_COMPLETE and does NOT wait
+		 * (the wait could never complete under the open model).
+		 */
+		msleep(20);
+		if (sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & cr->bif_int_stat_fault_req) {
+			drm_err(&sdev->base,
+				"microkernel did not start (EDM launch faulted: BIF int 0x%x fault 0x%x, event status 0x%x)\n",
+				sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
+				sgx_rd(sdev, SGX_CR_EVENT_STATUS));
+			return -EIO;
+		}
+		WRITE_ONCE(hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE);
+		/* The flag is in memory before the next event dispatches on it. */
+		wmb();
+		drm_info(&sdev->base,
+			 "EDM init: event status 0x%08x, BIF int 0x%x, timer 0x%08x\n",
+			 sgx_rd(sdev, SGX_CR_EVENT_STATUS), sgx_rd(sdev, SGX_CR_BIF_INT_STAT),
+			 sgx_rd(sdev, SGX_CR_EVENT_TIMER));
+	} else {
+		err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
+				  HOSTCTL_INIT_COMPLETE, 500000);
+		if (err) {
+			drm_err(&sdev->base,
+				"microkernel did not start (init status 0x%x, event status 0x%x; BIF int 0x%x fault 0x%x req 0x%x)\n",
+				hc[HOSTCTL_INIT_STATUS], sgx_rd(sdev, SGX_CR_EVENT_STATUS),
+				sgx_rd(sdev, SGX_CR_BIF_INT_STAT), sgx_rd(sdev, SGX_CR_BIF_FAULT),
+				sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
+			return err;
+		}
 	}
 	WRITE_ONCE(sdev->uk_lockups, 0);
 	WRITE_ONCE(sdev->fw_running, true);
@@ -713,6 +760,26 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 	u32 data[6] = { 0, POWER_OFF };
 
 	if (sdev->fw_running) {
+		if (pvrsgx_edm_init && pvrsgx_core_single_context(sdev->family)) {
+			/*
+			 * EDM bring-up stop. The DDK power-off (KCMD_POWER + the
+			 * POWER_STATUS poll) completes on the 530 — the microkernel is the
+			 * EDM requestor, so k_power's store commits — but it then gates the
+			 * clocks, and deinit_script's register writes on the gated OMAP3
+			 * ti-sysc target-module bus-error (the same idle-SGX fault that
+			 * blocks a cold probe), wedging the unload. So stop host-side with
+			 * the clocks still up: drop power, drain the IRQ, run deinit_script,
+			 * then soft-reset. (A clean power-off that re-enables the clocks
+			 * before deinit_script can replace this once validated.)
+			 */
+			WRITE_ONCE(sdev->powered, false);
+			pvrsgx_irq_sync(sdev);
+			deinit_script(sdev);
+			WRITE_ONCE(sdev->fw_running, false);
+			sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
+			sgx_rd(sdev, SGX_CR_SOFT_RESET);
+			return;
+		}
 		if (pvrsgx_ccb_send(sdev, PVRSGX_KCMD_POWER, data, NULL) ||
 		    pvrsgx_poll(sdev, &hc[HOSTCTL_POWER_STATUS], HOSTCTL_POWMAN_POWEROFF_COMPLETE,
 				HOSTCTL_POWMAN_POWEROFF_COMPLETE, 500000))

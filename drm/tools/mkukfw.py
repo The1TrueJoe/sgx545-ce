@@ -9,7 +9,7 @@
               entries.event, patches.ctlblk and, if present, "features" and "build_id"
     mkukfw.py --check FILE      print and check a file as the driver does
 
-VALUE is a number or one of ta3dctl, hostctl, ccbctl, ccb, misc.
+VALUE is a number or one of ta3dctl, hostctl, ccbctl, ccb, misc, pdtable.
 """
 import argparse
 import struct
@@ -18,8 +18,9 @@ import zlib
 
 MAGIC = (0x35584753, 0x4E524B55)
 HEADER = struct.Struct("<2I10I4I32s")
-VALUES = {"ta3dctl": 1, "hostctl": 2, "ccbctl": 3, "ccb": 4, "misc": 5}
-FEATURES = 0x3
+VALUES = {"ta3dctl": 1, "hostctl": 2, "ccbctl": 3, "ccb": 4, "misc": 5, "pdtable": 6}
+FEATURES = 0xf  # CLEANUP_V2 | SECURE | DONE_SEQ | SINGLE_CONTEXT, the driver's UKFW_FEATURES
+SINGLE_CONTEXT = 0x8  # feature bit 3; such an image must carry a pdtable patch
 PRIVATE = 0xffff0000  # the microkernel's own build variants, as the driver's UKFW_FEATURES_PRIVATE
 MAX_IMAGE = 0xE000 - 0x200 - 0x10
 
@@ -96,9 +97,30 @@ def check(data):
     return errs
 
 
+def selftest():
+    """Regression guard: the manifest auto-path must emit EVERY patch. Dropping
+    the single-context core's pdtable leaves the microkernel with no PD-table
+    base (a broken image). Pack a 530-style manifest and verify both the control
+    block (ta3dctl) and the PD table (pdtable) come through."""
+    img = bytearray(0x20)
+    for off in (8, 16):
+        struct.pack_into("<2I", img, off, 0xDBEEF, 0)	# a limm placeholder
+    patches = {"ctlblk": 8, "pdtable": 16}
+    bufs = {"ctlblk": "ta3dctl", "pdtable": "pdtable"}
+    data = build(bytes(img), [pair("0:0")],
+                 [pair(f"{o}:{bufs[n]}", VALUES) for n, o in patches.items()],
+                 SINGLE_CONTEXT, 1 << 16, 0, "")
+    f = HEADER.unpack_from(data)	# ...hsize,iface,feat,isize,crc,ne,eoff,np,poff,rev
+    vals = {struct.unpack_from("<2I", data, f[10] + 8 * i)[1] for i in range(f[9])}
+    ok = not check(data) and {VALUES["ta3dctl"], VALUES["pdtable"]} <= vals
+    print("mkukfw selftest:",
+          "OK" if ok else f"FAILED (patch values {sorted(vals)})")
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("file")
+    ap.add_argument("file", nargs="?")
     ap.add_argument("-o", "--out")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--entry", action="append", default=[])
@@ -108,7 +130,13 @@ def main():
     ap.add_argument("--core-rev", type=num, default=0)
     ap.add_argument("--build-id", default="")
     ap.add_argument("--manifest")
+    ap.add_argument("--selftest", action="store_true",
+                    help="pack a single-context manifest and verify both patches, then exit")
     a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    if not a.file:
+        ap.error("file is required")
     if a.check:
         errs = check(open(a.file, "rb").read())
         for e in errs:
@@ -120,13 +148,18 @@ def main():
         import json
         m = json.load(open(a.manifest))
         a.entry = a.entry or [f"0:{m['entries']['event']}"]
-        a.patch = a.patch or [f"{m['patches']['ctlblk']}:ta3dctl"]
+        # Every manifest patch, not just ctlblk: a single-context core also
+        # patches its PD table (pdtable). Map each manifest name to its value.
+        bufs = {"ctlblk": "ta3dctl", "pdtable": "pdtable"}
+        a.patch = a.patch or [f"{o}:{bufs[n]}" for n, o in m["patches"].items()]
         a.features = m.get("features", a.features)
         a.build_id = a.build_id or m.get("build_id", "")
     major, minor = (int(x) for x in a.interface.split("."))
+    patches = [pair(p, VALUES) for p in a.patch]
+    if a.features & SINGLE_CONTEXT and VALUES["pdtable"] not in [v for _, v in patches]:
+        ap.error("a single-context image (features bit 3) needs a pdtable patch; none given")
     data = build(open(a.file, "rb").read(), [pair(e) for e in a.entry or ["0:0"]],
-                 [pair(p, VALUES) for p in a.patch], a.features, major << 16 | minor,
-                 a.core_rev, a.build_id)
+                 patches, a.features, major << 16 | minor, a.core_rev, a.build_id)
     errs = check(data)
     for e in errs:
         print("error:", e)
