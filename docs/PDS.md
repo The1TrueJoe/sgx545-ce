@@ -54,6 +54,19 @@ Hardware (the open stack lays out every program this way) and capture. A program
     order (capture).
 - **The data segment is rounded up to 16 bytes,** and the code follows it
   directly: `code = data + (ndwords*4 + 15 & ~15)`.
+  - **Row size per core.** 16 bytes (one row = four memory words) is the unit
+    the data-row count uses (the referencing info word's "data rows" field; the
+    microkernel's code-start register 0xa6c). This holds on the **SGX530 too**,
+    hardware-confirmed: `PDS_PC_BASE`/0xa6c increments 16 bytes per unit on the
+    530 (`docs/porting/cores/sgx530-stage1.md`, "Correction: 0xa6c counts
+    16-byte rows", C). So a `rows × 16` byte-extent range check is correct on
+    both cores. What differs on the 530 is the interleave *within* the segment,
+    not the row size: the 530 lacks `PDS_DATA_INTERLEAVE_2DWORDS` and lays DS0/DS1
+    out in 8-word blocks, so DS1 words sit at memory word 8+ of each 64-byte block
+    (`docs/porting/cores/sgx530-vendor-setup.md` §2). A DS1-using program therefore
+    fills more 16-byte rows than on the 545 (the event DOUTU takes 3 rows on the
+    530 vs 1 on the 545), and the data-rows field carries that larger count — so
+    `rows × 16` stays the exact segment extent, never an undersize.
 - **Temporaries.** Words 0x30 and up of each bank are temporaries: they are
   never in the data segment, and the programs write them. The disassembler
   prints them as `ds0[0x30]` and so on.
