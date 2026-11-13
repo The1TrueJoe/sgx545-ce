@@ -8,8 +8,8 @@
 #   build.sh DEBS TESTS OUTDIR VERSION [XFERBANK_FW]
 #
 # DEBS holds the packages a user installs (docs/INSTALL.md): the kernel
-# (linux-image-*-sgx), sgx545-firmware and mesa-sgx; they go in with apt, as the
-# guide says. TESTS holds powervr_sgx_test/_frame/_blit/_hang (static).
+# (linux-image-*-sgx), sgx545-firmware and mesa-sgx; the amd64 and all ones go in
+# with apt, as the guide says (an i386 mesa-sgx stays out: the root is amd64 only). TESTS holds powervr_sgx_test/_frame/_blit/_hang (static).
 # XFERBANK_FW is the open microkernel's blit variant B. Open code only.
 # Needs mmdebstrap, squashfs-tools, dosfstools, grub-pc-bin, grub-efi-amd64-bin,
 # grub-efi-ia32-bin, and Debian's keyring in KEYRING (a keyring file with trixie's keys).
@@ -28,7 +28,7 @@ mmdebstrap --variant=apt --architectures=amd64 --keyring="$KEYRING" \
 	--dpkgopt='path-exclude=/usr/share/doc/*' --dpkgopt='path-exclude=/usr/share/man/*' \
 	--dpkgopt='path-exclude=/usr/share/info/*' \
 	--customize-hook='chroot "$1" useradd -m -u 1000 -s /bin/bash -G video,input,render,audio desk' \
-	--customize-hook="mkdir -p \"\$1/tmp/kitdebs\" && cp $DEBS/*.deb \"\$1/tmp/kitdebs/\"" \
+	--customize-hook="mkdir -p \"\$1/tmp/kitdebs\" && cp $DEBS/*_amd64.deb $DEBS/*_all.deb \"\$1/tmp/kitdebs/\"" \
 	--customize-hook='chroot "$1" sh -c "apt-get install -y /tmp/kitdebs/*.deb && rm -rf /tmp/kitdebs"' \
 	--customize-hook='rm -rf "$1"/var/cache/apt/* "$1"/var/lib/apt/lists/*' \
 	trixie "$ROOT" http://deb.debian.org/debian
