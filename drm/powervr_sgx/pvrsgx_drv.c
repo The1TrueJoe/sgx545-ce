@@ -12,8 +12,10 @@
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 #include <uapi/drm/powervr_sgx_drm.h>
 
@@ -111,8 +113,8 @@ static int pvrsgx_ioctl_dev_query(struct drm_device *drm, void *data, struct drm
 			.rt_max_height = 2048,
 			.rt_max_samples = sdev->family->cmds->max_samples,
 			.pb_min_pages = 0x100,
-			.pb_default_pages = PVRSGX_PB_DEFAULT_PAGES,
-			.pb_max_pages = 0x8000,
+			.pb_default_pages = pvrsgx_pb_default_pages(sdev),
+			.pb_max_pages = pvrsgx_heaps(sdev)->pb_max_pages,
 			.max_ta_kicks = PVRSGX_MAX_TA_KICKS,
 			.va_bits = sdev->family->va_bits,
 			.caps = DRM_POWERVR_SGX_CAP_BACKWARD_BLITS,
@@ -168,10 +170,16 @@ static int pvrsgx_open(struct drm_device *drm, struct drm_file *file)
 
 	if (!sfile)
 		return -ENOMEM;
+	sfile->usage = pvrsgx_usage_new();
+	if (!sfile->usage) {
+		kfree(sfile);
+		return -ENOMEM;
+	}
 	sfile->sdev = to_pvrsgx_device(drm);
 	xa_init_flags(&sfile->vms, XA_FLAGS_ALLOC1);
 	xa_init_flags(&sfile->contexts, XA_FLAGS_ALLOC1);
 	xa_init_flags(&sfile->rtds, XA_FLAGS_ALLOC1);
+	init_rwsem(&sfile->submit_lock);
 	file->driver_priv = sfile;
 	return 0;
 }
@@ -186,6 +194,7 @@ static void pvrsgx_postclose(struct drm_device *drm, struct drm_file *file)
 	xa_destroy(&sfile->rtds);
 	xa_destroy(&sfile->contexts);
 	xa_destroy(&sfile->vms);
+	pvrsgx_usage_put(sfile->usage);
 	kfree(sfile);
 	file->driver_priv = NULL;
 }
@@ -208,7 +217,25 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 	IOCTL(UPLOAD_CODE, pvrsgx_ioctl_upload_code),
 };
 
-DEFINE_DRM_GEM_FOPS(pvrsgx_fops);
+/*
+ * drm-usage-stats.rst: the file's GPU time on its one engine and its objects'
+ * memory; the core adds drm-driver and drm-client-id. No drm-cycles or
+ * drm-maxfreq: the driver doesn't set the clock.
+ */
+static void pvrsgx_show_fdinfo(struct drm_printer *p, struct drm_file *file)
+{
+	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
+
+	drm_printf(p, "drm-engine-render:\t%llu ns\n",
+		   (u64)atomic64_read(&sfile->usage->busy_ns));
+	drm_show_memory_stats(p, file);
+}
+
+static const struct file_operations pvrsgx_fops = {
+	.owner = THIS_MODULE,
+	DRM_GEM_FOPS,
+	.show_fdinfo = drm_show_fdinfo,
+};
 
 static const struct drm_driver pvrsgx_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_RENDER | DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
@@ -217,6 +244,7 @@ static const struct drm_driver pvrsgx_drm_driver = {
 	.ioctls = pvrsgx_ioctls,
 	.num_ioctls = ARRAY_SIZE(pvrsgx_ioctls),
 	.fops = &pvrsgx_fops,
+	.show_fdinfo = pvrsgx_show_fdinfo,
 #if defined(CONFIG_DEBUG_FS)
 	.debugfs_init = pvrsgx_debugfs_init,
 #endif
@@ -234,6 +262,22 @@ struct pvrsgx_device *pvrsgx_alloc(struct device *dev)
 	return devm_drm_dev_alloc(dev, &pvrsgx_drm_driver, struct pvrsgx_device, base);
 }
 
+/*
+ * Stop the GPU as it is powered, then undo runtime PM: a suspended GPU is
+ * stopped already, and undoing runtime PM first could let a parent (ti-sysc)
+ * gate its clocks while the stop still writes registers.
+ */
+static void hw_stop(struct pvrsgx_device *sdev)
+{
+	struct device *dev = sdev->base.dev;
+	int active = pm_runtime_get_if_active(dev);
+
+	pvrsgx_device_unplug(sdev);
+	if (active > 0)
+		pm_runtime_put_noidle(dev);
+	pvrsgx_power_fini(sdev);
+}
+
 /* What both buses do once the registers are mapped and the interrupt source known. */
 int pvrsgx_probe_common(struct pvrsgx_device *sdev)
 {
@@ -246,10 +290,8 @@ int pvrsgx_probe_common(struct pvrsgx_device *sdev)
 	/* Runtime PM is set up before userspace can reach the device. */
 	pvrsgx_power_init(sdev);
 	err = drm_dev_register(&sdev->base, 0);
-	if (err) {
-		pvrsgx_power_fini(sdev);
-		pvrsgx_device_unplug(sdev);
-	}
+	if (err)
+		hw_stop(sdev);
 	return err;
 }
 
@@ -257,8 +299,23 @@ void pvrsgx_remove_common(struct pvrsgx_device *sdev)
 {
 	/* No new ioctl, and the running ones done, before the hardware goes. */
 	drm_dev_unplug(&sdev->base);
-	pvrsgx_power_fini(sdev);
-	pvrsgx_device_unplug(sdev);
+	hw_stop(sdev);
+}
+
+/*
+ * Reboot or kexec: leave the GPU stopped, with no reset to start it again, for
+ * whatever runs next. A suspended GPU is stopped already.
+ */
+void pvrsgx_shutdown_common(struct pvrsgx_device *sdev)
+{
+	int active;
+
+	if (!sdev)
+		return;
+	active = pm_runtime_get_if_active(sdev->base.dev);
+	pvrsgx_job_unplug(sdev);
+	if (active > 0)
+		pm_runtime_put_noidle(sdev->base.dev);
 }
 
 static int pvrsgx_probe(struct pci_dev *pdev, const struct pci_device_id *id)
@@ -300,10 +357,7 @@ static void pvrsgx_remove(struct pci_dev *pdev)
 
 static void pvrsgx_shutdown(struct pci_dev *pdev)
 {
-	struct pvrsgx_device *sdev = pci_get_drvdata(pdev);
-
-	/* Leave the GPU quiet for whatever runs next. */
-	pvrsgx_fw_stop(sdev);
+	pvrsgx_shutdown_common(pci_get_drvdata(pdev));
 }
 
 static const struct pci_device_id pvrsgx_pci_ids[] = {
@@ -321,23 +375,43 @@ static struct pci_driver pvrsgx_pci_driver = {
 	.driver.pm = pm_ptr(&pvrsgx_pm_ops),
 };
 
+struct workqueue_struct *pvrsgx_put_wq;
+
 static int __init pvrsgx_init(void)
 {
-	int err = pci_register_driver(&pvrsgx_pci_driver);
+	int err;
 
+	pvrsgx_put_wq = alloc_workqueue("powervr_sgx_put", WQ_UNBOUND, 0);
+	if (!pvrsgx_put_wq)
+		return -ENOMEM;
+	err = pci_register_driver(&pvrsgx_pci_driver);
 	if (err)
-		return err;
+		goto err_wq;
 	err = pvrsgx_aux_register();
 	if (err)
-		pci_unregister_driver(&pvrsgx_pci_driver);
+		goto err_pci;
+	err = pvrsgx_of_register();
+	if (err)
+		goto err_aux;
+	return 0;
+
+err_aux:
+	pvrsgx_aux_unregister();
+err_pci:
+	pci_unregister_driver(&pvrsgx_pci_driver);
+err_wq:
+	destroy_workqueue(pvrsgx_put_wq);
 	return err;
 }
 module_init(pvrsgx_init);
 
 static void __exit pvrsgx_exit(void)
 {
+	pvrsgx_of_unregister();
 	pvrsgx_aux_unregister();
 	pci_unregister_driver(&pvrsgx_pci_driver);
+	/* After every device: drains the puts that release them. */
+	destroy_workqueue(pvrsgx_put_wq);
 }
 module_exit(pvrsgx_exit);
 

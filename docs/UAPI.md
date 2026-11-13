@@ -209,8 +209,11 @@ The GPU must not run code that changes after the scan. Code objects are mapped w
 PTE `READONLY` bit, which stops a client task's `st` (E1, DRM-DRIVER.md section 6).
 While a VM maps the object, an upload may only write past the end of every earlier
 upload (`-EBUSY` otherwise): new code lands only in bytes the GPU sees as zeros, which
-is a harmless instruction. Once no VM maps it, the object can be uploaded anywhere
-again.
+is a harmless instruction. Once no VM maps it and the GPU has finished every job that
+could use those mappings, the object can be uploaded anywhere again; until then a lower
+write fails with `-EBUSY`. An unmap lets go of the object only after those jobs and, if
+the VM ran one since the GPU started, after the BIF invalidate, which goes out with the
+next command.
 
 PDS programs are not scanned. A PDS program reaches USSE code only through DOUTU, which
 picks a code base: 0-13 cover exactly the two USSE heaps, and 14 and 15 point at nothing

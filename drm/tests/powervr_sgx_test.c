@@ -52,7 +52,7 @@ static const char *cur;
 
 static int xioctl(int fd, unsigned long req, void *arg)
 {
-	int r;
+	int r = 0;
 
 	do
 		r = ioctl(fd, req, arg);
@@ -244,7 +244,7 @@ static void t_query_gpu_info(int fd)
 	/* The cores in the driver's table: 1.0.14 (CE5300) or 1.0.13 (Cedarview). */
 	assert_true((i.core_revision & 0xffffff) == 0x1000e ||
 		    (i.core_revision & 0xffffff) == 0x1000d);
-	assert_eq(i.fw_interface_version, DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7);
+	assert_eq(i.fw_interface_version, DRM_POWERVR_SGX_FW_IF_V1);
 	assert_eq(i._padding_c, 0);
 }
 
@@ -441,7 +441,7 @@ static void t_vm_unmap_split(int fd)
 	assert_eq(vm_map(fd, vm, bo, 0x3e200000, 0, 4 * PAGE), 0);
 }
 
-/* The ops of one call apply all or none; their syncs wait first and signal after. */
+/* The ops of one call apply all or none. A synchronous bind takes no fences. */
 static void t_vm_bind_ops(int fd)
 {
 	uint32_t vm = create_vm(fd), bo = create_bo(fd, 4 * PAGE, 0), done = syncobj(fd);
@@ -457,18 +457,16 @@ static void t_vm_bind_ops(int fd)
 	assert_eq(vm_bind(fd, vm, sync, ops, 3, NULL, 0), -EEXIST);	/* the third */
 	assert_eq(vm_map(fd, vm, bo, 0x3e300000, 0, PAGE), 0);	/* the first didn't apply */
 	assert_eq(vm_unmap(fd, vm, 0x3e300000, PAGE), 0);
-	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), 0);
-	assert_eq(syncobj_wait(fd, done, 0), 0);
+	/* a signal or a wait: refused, nothing applied */
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), -EINVAL);
+	sig.flags = 0;
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, &sig, 1), -EINVAL);
+	assert_eq(vm_bind(fd, vm, sync, ops, 2, NULL, 0), 0);
 	ops[2] = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e300000, 2 * PAGE);
 	assert_eq(vm_bind(fd, vm, sync, &ops[2], 1, NULL, 0), 0);
 	/* overlapping ops in one call */
 	ops[1] = (struct drm_powervr_sgx_vm_bind_op)UNMAP_OP(0x3e300000, PAGE);
 	assert_eq(vm_bind(fd, vm, sync, ops, 2, NULL, 0), -EINVAL);
-	/* a wait on a syncobj with no fence */
-	sig.flags = 0;
-	assert_eq(vm_bind(fd, vm, sync, ops, 1, &sig, 1), 0);
-	sig.handle = syncobj(fd);
-	assert_eq(vm_bind(fd, vm, sync, &ops[1], 1, &sig, 1), -EINVAL);
 }
 
 static void t_vm_map_overlap(int fd)
@@ -628,6 +626,52 @@ static void t_context_invalid(int fd)
 	do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
 }
 
+/* A file holds at most 64 contexts; the next one is -ENOSPC until one goes. */
+static void t_context_file_limit(int fd)
+{
+	uint32_t vm = create_vm(fd), h[64];
+	struct drm_powervr_sgx_ioctl_create_context_args a = {
+		.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = vm,
+	};
+	struct drm_powervr_sgx_ioctl_destroy_context_args d = {};
+	uint32_t n = 0;
+	int r = 0;
+
+	while (n < 64 && !(r = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a)))
+		h[n++] = a.handle;
+	assert_eq(xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a), -ENOSPC);
+	for (uint32_t i = 0; i < n; i++) {
+		d.handle = h[i];
+		do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
+	}
+	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
+	d.handle = a.handle;
+	do_ioctl(fd, DRM_IOCTL_POWERVR_SGX_DESTROY_CONTEXT, &d);
+}
+
+/* One PB for the device: a request for another size than the live one is refused. */
+static void t_context_pb_size(int fd)
+{
+	struct drm_powervr_sgx_dev_query_limits l = {};
+	uint32_t size = sizeof(l), vm = create_vm(fd);
+	struct drm_powervr_sgx_ioctl_create_context_args a = {
+		.type = DRM_POWERVR_SGX_CTX_TYPE_RENDER, .vm_context_handle = vm,
+	};
+	int r = 0;
+
+	assert_eq(query(fd, DRM_POWERVR_SGX_DEV_QUERY_LIMITS_GET, &l, &size), 0);
+	create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER);	/* the PB exists now */
+	a.param_buffer_pages = l.pb_min_pages;
+	r = xioctl(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a);
+	if (r == 0) {
+		/* The live PB has the minimum size: any other is refused. */
+		a.param_buffer_pages = l.pb_min_pages + 0x100;
+		do_ioctl_err(fd, DRM_IOCTL_POWERVR_SGX_CREATE_CONTEXT, &a, EINVAL);
+	} else {
+		assert_eq(r, -EINVAL);
+	}
+}
+
 /* SUBMIT_JOBS */
 
 static void t_null_job(int fd)
@@ -641,6 +685,24 @@ static void t_null_job(int fd)
 	assert_eq(submit(fd, &j, 1, NULL), 0);
 	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
 	printf("  null job signalled in %lld us\n", (long long)(now_ns() - t0) / 1000);
+}
+
+/* All or nothing: a bad second job leaves the first one unsubmitted, its signal unset. */
+static void t_submit_all_or_nothing(int fd)
+{
+	uint32_t ctx = create_ctx(fd, create_vm(fd), DRM_POWERVR_SGX_CTX_TYPE_RENDER);
+	uint32_t s = syncobj(fd), failed = 0;
+	struct drm_powervr_sgx_sync_op op = SIGNAL(s);
+	struct drm_powervr_sgx_job j[2] = { null_job(ctx, &op, 1), null_job(ctx, NULL, 0) };
+
+	j[1].flags = 1u << 31;
+	assert_eq(submit(fd, j, 2, &failed), -EINVAL);
+	assert_eq(failed, 1);
+	/* No fence was published: a wait on the syncobj finds none. */
+	assert_eq(syncobj_wait(fd, s, 0), -EINVAL);
+	j[1].flags = 0;
+	assert_eq(submit(fd, j, 2, &failed), 0);
+	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
 }
 
 static void t_null_job_timeline(int fd)
@@ -1112,6 +1174,39 @@ static void t_upload_code_mapped(int fd)
 }
 
 /*
+ * An unmap holds the code until the jobs before it are done and the BIF
+ * invalidate has run; that goes out with a later command, so send some.
+ */
+static void t_upload_code_unmap_busy(int fd)
+{
+	uint32_t vm = create_vm(fd), bo = create_bo(fd, PAGE, DRM_POWERVR_SGX_BO_CODE);
+	uint32_t ctx = create_ctx(fd, vm, DRM_POWERVR_SGX_CTX_TYPE_RENDER), s = syncobj(fd);
+	struct drm_powervr_sgx_sync_op op = SIGNAL(s);
+	struct drm_powervr_sgx_job j = null_job(ctx, &op, 1);
+	uint64_t w[32] = { 0 };
+	int r;
+
+	assert_eq(vm_map(fd, vm, bo, 0x37000000, 0, PAGE), 0);
+	assert_eq(upload(fd, bo, 0, w, sizeof(w), NULL), 0);
+	assert_eq(submit(fd, &j, 1, NULL), 0);
+	assert_eq(vm_unmap(fd, vm, 0x37000000, PAGE), 0);
+	r = upload(fd, bo, 0, w, sizeof(w), NULL);
+	if (r != -EBUSY && r != 0)
+		fail("upload right after the unmap: %d", r);
+	assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
+	for (int i = 0; i < 100 && r; i++) {
+		j = null_job(ctx, &op, 1);
+		assert_eq(submit(fd, &j, 1, NULL), 0);
+		assert_eq(syncobj_wait(fd, s, 2000000000ll), 0);
+		usleep(10000);
+		r = upload(fd, bo, 0, w, sizeof(w), NULL);
+		if (r != -EBUSY && r != 0)
+			fail("upload after the jobs: %d", r);
+	}
+	assert_eq(r, 0);
+}
+
+/*
  * phas.i's target counts from the USSE heap's base: it must land in the
  * object where it is mapped, and the object then stays there.
  */
@@ -1394,16 +1489,13 @@ static void t_submit_transfer_invalid(int fd)
 #undef REJECT
 }
 
-/* Retired numbers stay empty: revision 2's SUBMIT_JOBS and revision 1's UPLOAD_CODE. */
-static void t_submit_old_number(int fd)
+/* The ioctl numbers are dense: the one past SUBMIT_JOBS doesn't exist. */
+static void t_ioctl_past_last(int fd)
 {
 	struct drm_powervr_sgx_ioctl_submit_jobs_args a = {};
-	struct drm_powervr_sgx_ioctl_upload_code_args u = {};
 
-	assert_eq(xioctl(fd, DRM_IOWR(DRM_COMMAND_BASE + 0x0b,
-				       struct drm_powervr_sgx_ioctl_submit_jobs_args), &a), -EINVAL);
 	assert_eq(xioctl(fd, DRM_IOWR(DRM_COMMAND_BASE + 0x0d,
-				       struct drm_powervr_sgx_ioctl_upload_code_args), &u), -EINVAL);
+				       struct drm_powervr_sgx_ioctl_submit_jobs_args), &a), -EINVAL);
 }
 
 /*
@@ -1592,8 +1684,11 @@ static const struct {
 	{ "context-create-destroy", t_context_create_destroy },
 	{ "vm-release-frees", t_vm_release_frees },
 	{ "context-invalid", t_context_invalid },
+	{ "context-pb-size", t_context_pb_size },
+	{ "context-file-limit", t_context_file_limit },
 	{ "submit-null-job", t_null_job },
 	{ "submit-null-job-timeline", t_null_job_timeline },
+	{ "submit-all-or-nothing", t_submit_all_or_nothing },
 	{ "submit-null-job-chain", t_null_job_chain },
 	{ "submit-null-job-many", t_null_job_many },
 	{ "submit-null-job-cache-ranges", t_null_job_cache_ranges },
@@ -1604,7 +1699,7 @@ static const struct {
 	{ "submit-wait-unsignalled", t_submit_wait_unsignalled },
 	{ "rt-dataset-create-destroy", t_rtds_create_destroy },
 	{ "rt-dataset-invalid", t_rtds_invalid },
-	{ "submit-old-number", t_submit_old_number },
+	{ "ioctl-past-last", t_ioctl_past_last },
 	{ "submit-render-invalid", t_submit_render_invalid },
 	{ "submit-transfer-invalid", t_submit_transfer_invalid },
 	{ "reserved-bits", t_reserved_bits },
@@ -1616,6 +1711,7 @@ static const struct {
 	{ "upload-code-phas-window", t_upload_code_phas_window },
 	{ "upload-code-invalid", t_upload_code_invalid },
 	{ "upload-code-mapped", t_upload_code_mapped },
+	{ "upload-code-unmap-busy", t_upload_code_unmap_busy },
 	{ "submit-other-vm", t_submit_other_vm },
 };
 

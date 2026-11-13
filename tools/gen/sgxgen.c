@@ -16,6 +16,7 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef SGXGEN_DRM
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 int ioctl(int fd, unsigned long req, ...);	/* musl's sys/ioctl.h clashes with the kernel's _IOC */
@@ -428,6 +429,34 @@ static uint32_t dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secon
 /* ------------------------------------------------------------------ device */
 
 #ifdef SGXGEN_DRM
+/* The powervr_sgx render node, found by driver name: a rebind can give it a new minor. */
+static int open_render_node(void)
+{
+	DIR *dir = opendir("/dev/dri");
+	struct dirent *e;
+	int fd = -1;
+
+	if (!dir)
+		return -1;
+	while (fd < 0 && (e = readdir(dir))) {
+		char path[300], name[16] = "";
+		struct drm_version v = { .name_len = sizeof(name) - 1, .name = name };
+
+		if (strncmp(e->d_name, "renderD", 7))
+			continue;
+		snprintf(path, sizeof(path), "/dev/dri/%s", e->d_name);
+		fd = open(path, O_RDWR | O_CLOEXEC);
+		if (fd >= 0 && (ioctl(fd, DRM_IOCTL_VERSION, &v) || strcmp(name, "powervr_sgx"))) {
+			close(fd);
+			fd = -1;
+		}
+	}
+	closedir(dir);
+	if (fd < 0)
+		errno = ENOENT;
+	return fd;
+}
+
 int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
 {
 	struct drm_powervr_sgx_heap h[DRM_POWERVR_SGX_HEAP_COUNT];
@@ -442,7 +471,7 @@ int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
 
 	(void)trace;
 	memset(d, 0, sizeof *d);
-	d->fd = open(node ? node : "/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+	d->fd = node ? open(node, O_RDWR | O_CLOEXEC) : open_render_node();
 	if (d->fd < 0)
 		return -errno;
 	if ((e = xioctl(d->fd, DRM_IOCTL_POWERVR_SGX_DEV_QUERY, &q)) ||

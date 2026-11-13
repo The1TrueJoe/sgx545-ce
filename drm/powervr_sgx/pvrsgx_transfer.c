@@ -49,11 +49,16 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 				     sizeof(struct pvrsgx_fw_hw_transfer_ctx), 0, NULL);
 	if (err)
 		goto fail;
+	/* Freed after a transfer, not a render, has finished. */
+	x->ccb->transfer = true;
+	x->ccbctl->transfer = true;
+	x->done->transfer = true;
+	x->hwctx->transfer = true;
 
 	/* The words a transfer context needs; the rest stays zero. */
 	hw = (void *)kobj_cpu(x->hwctx);
 	hw->flags = 1;
-	hw->page_dir = pvrsgx_mmu_pd_addr(ctx->vm->mmu);
+	hw->page_dir = pvrsgx_vm_pd_word(ctx->vm);
 	hw->ccb = kobj_va(x->ccb);
 	hw->ccb_ctl = kobj_va(x->ccbctl);
 	hw->pid = task_tgid_nr(current);
@@ -67,13 +72,15 @@ fail:
 void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
 {
 	struct pvrsgx_transfer_ctx *x = ctx->transfer;
+	bool sent;
 
 	if (!x)
 		return;
-	pvrsgx_kobj_drop(sdev, &x->hwctx);
-	pvrsgx_kobj_drop(sdev, &x->done);
-	pvrsgx_kobj_drop(sdev, &x->ccbctl);
-	pvrsgx_kobj_drop(sdev, &x->ccb);
+	sent = READ_ONCE(x->sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->hwctx, sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->done, sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->ccbctl, sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->ccb, sent);
 	kfree(x);
 	ctx->transfer = NULL;
 }
@@ -97,9 +104,9 @@ int pvrsgx_transfer_job_init(struct drm_file *file, struct pvrsgx_job *job,
 
 	if (!def)
 		return -EOPNOTSUPP;
-	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].base = PVRSGX_HEAP_PDS_PIXEL;
+	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].base = pvrsgx_heaps(sdev)->pds_pixel.base;
 	cctx.heaps[PVRSGX_CMD_HEAP_PDS_PIXEL].size =
-		PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL;
+		pvrsgx_heaps(sdev)->pds_pixel.end - pvrsgx_heaps(sdev)->pds_pixel.base;
 	cctx.limits[PVRSGX_CMD_LIMIT_TILES_X] = XFER_TILES_X_MAX;
 	cctx.limits[PVRSGX_CMD_LIMIT_TILES_Y] = XFER_TILES_Y_MAX;
 	cctx.mapped = pvrsgx_cmd_mapped;
@@ -119,6 +126,7 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	struct pvrsgx_fw_transfer_cmd *cmd = (void *)((u8 *)kobj_cpu(x->ccb) + woff);
 	u32 *done = kobj_cpu(x->done);
 
+	WRITE_ONCE(x->sent, true);
 	job->transfer.cmd_off = woff;
 	memset(cmd, 0, sizeof(*cmd));
 	cmd->bg_object = 0x2000000 | ((u32)in->bg_block_addr - base) >> 4;
@@ -135,7 +143,8 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	cmd->first_tile = in->first_tile_x << 16 | in->first_tile_y;
 	cmd->last_tile = in->last_tile_x << 16 | in->last_tile_y;
 	cmd->unk_38 = 0x80;
-	cmd->pds_exec_base = PVRSGX_HEAP_PDS_PIXEL;	/* never the client's */
+	/* Never the client's. */
+	cmd->pds_exec_base = pvrsgx_heaps(job->ctx->sdev)->pds_pixel.base;
 	cmd->size = sizeof(*cmd);
 	cmd->flags = job->transfer.dst_twiddled ? PVRSGX_TRANSFER_DST_TWIDDLED : 0;
 	cmd->unk_194 = 0x07c00000;

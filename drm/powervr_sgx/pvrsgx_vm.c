@@ -18,6 +18,7 @@
 #include <linux/dma-resv.h>
 #include <linux/module.h>
 #include <linux/overflow.h>
+#include <linux/pm_runtime.h>
 #include <linux/scatterlist.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
@@ -37,51 +38,48 @@
 #include "pvrsgx_prime.h"
 #include "pvrsgx_vm.h"
 
-/* The client heaps, the same in every VM. */
-static const struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT] = {
-	[DRM_POWERVR_SGX_HEAP_GENERAL] = {
-		.base = PVRSGX_HEAP_GENERAL,
-		.size = PVRSGX_HEAP_TEXTURE - PVRSGX_HEAP_GENERAL,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-	[DRM_POWERVR_SGX_HEAP_PDS_PIXEL] = {
-		.base = PVRSGX_HEAP_PDS_PIXEL,
-		.size = PVRSGX_HEAP_KERNEL_CODE - PVRSGX_HEAP_PDS_PIXEL,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-	[DRM_POWERVR_SGX_HEAP_PDS_VERTEX] = {
-		.base = PVRSGX_HEAP_PDS_VERTEX,
-		.size = PVRSGX_HEAP_KERNEL_DATA - PVRSGX_HEAP_PDS_VERTEX,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-	[DRM_POWERVR_SGX_HEAP_USSE_PIXEL] = {
-		.base = PVRSGX_HEAP_USSE_PIXEL,
-		.size = PVRSGX_HEAP_USSE_PIXEL_SIZE,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-		.usse_base_index = PVRSGX_USSE_PIXEL_BASE_INDEX,
-		.usse_window_log2 = PVRSGX_USSE_WINDOW_LOG2,
-	},
-	[DRM_POWERVR_SGX_HEAP_USSE_VERTEX] = {
-		.base = PVRSGX_HEAP_USSE_VERTEX,
-		.size = PVRSGX_HEAP_USSE_VERTEX_SIZE,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-		.usse_base_index = PVRSGX_USSE_VERTEX_BASE_INDEX,
-		.usse_window_log2 = PVRSGX_USSE_WINDOW_LOG2,
-	},
-	[DRM_POWERVR_SGX_HEAP_TEXTURE] = {
-		.base = PVRSGX_HEAP_TEXTURE,
-		.size = SZ_4G - PVRSGX_HEAP_TEXTURE,
-		.page_size_log2 = SGX_MMU_PAGE_SHIFT,
-	},
-};
+/* The client heaps, the same in every VM, from the core's layout. */
+static void client_heaps(const struct pvrsgx_device *sdev,
+			 struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT])
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	const struct {
+		const struct pvrsgx_va_range *r;
+		u32 usse_base_index;
+	} from[DRM_POWERVR_SGX_HEAP_COUNT] = {
+		[DRM_POWERVR_SGX_HEAP_GENERAL] = { &h->general },
+		[DRM_POWERVR_SGX_HEAP_PDS_PIXEL] = { &h->pds_pixel },
+		[DRM_POWERVR_SGX_HEAP_PDS_VERTEX] = { &h->pds_vertex },
+		[DRM_POWERVR_SGX_HEAP_USSE_PIXEL] = { &h->usse_pixel,
+						      PVRSGX_USSE_PIXEL_BASE_INDEX },
+		[DRM_POWERVR_SGX_HEAP_USSE_VERTEX] = { &h->usse_vertex,
+						       PVRSGX_USSE_VERTEX_BASE_INDEX },
+		[DRM_POWERVR_SGX_HEAP_TEXTURE] = { &h->texture },
+	};
+
+	for (int i = 0; i < DRM_POWERVR_SGX_HEAP_COUNT; i++) {
+		bool usse = i == DRM_POWERVR_SGX_HEAP_USSE_PIXEL ||
+			    i == DRM_POWERVR_SGX_HEAP_USSE_VERTEX;
+
+		heaps[i] = (struct drm_powervr_sgx_heap){
+			.base = from[i].r->base,
+			.size = from[i].r->end - from[i].r->base,
+			.page_size_log2 = SGX_MMU_PAGE_SHIFT,
+			.usse_base_index = from[i].usse_base_index,
+			.usse_window_log2 = usse ? PVRSGX_USSE_WINDOW_LOG2 : 0,
+		};
+	}
+}
 
 /* The heap holding all of [addr, addr + size), or -1. */
-int pvrsgx_heap_find(u64 addr, u64 size)
+int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size)
 {
+	struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT];
 	u64 end;
 
 	if (check_add_overflow(addr, size, &end))
 		return -1;
+	client_heaps(sdev, heaps);
 	for (int i = 0; i < ARRAY_SIZE(heaps); i++) {
 		if (addr >= heaps[i].base && end <= heaps[i].base + heaps[i].size)
 			return i;
@@ -91,6 +89,7 @@ int pvrsgx_heap_find(u64 addr, u64 size)
 
 int pvrsgx_query_heap_info(struct pvrsgx_device *sdev, void __user *ptr, u32 *size)
 {
+	struct drm_powervr_sgx_heap heaps[DRM_POWERVR_SGX_HEAP_COUNT];
 	struct drm_powervr_sgx_dev_query_heap_info info = {};
 	int err;
 
@@ -102,6 +101,7 @@ int pvrsgx_query_heap_info(struct pvrsgx_device *sdev, void __user *ptr, u32 *si
 	if (err)
 		return err;
 
+	client_heaps(sdev, heaps);
 	if (info.heaps.array) {
 		err = pvrsgx_obj_array_put(&info.heaps, heaps, sizeof(heaps[0]), ARRAY_SIZE(heaps));
 		if (err)
@@ -141,7 +141,7 @@ static struct pvrsgx_va *to_pvrsgx_va(struct drm_gpuva *va)
 
 /*
  * What an unmap or a teardown lets go of once every job on the VM so far is
- * done. A teardown (vm set) also takes the mappings down then.
+ * done. A teardown also takes the mappings down then.
  */
 struct pvrsgx_vm_free {
 	struct dma_fence_cb cb;
@@ -151,6 +151,7 @@ struct pvrsgx_vm_free {
 	struct dma_fence *fence;
 	struct list_head vas;
 	struct pvrsgx_vm *vm;
+	bool teardown;
 };
 
 /* The BIF may hold walks of what changed: the next command drops them. */
@@ -162,6 +163,12 @@ static void vm_invalidate(struct pvrsgx_device *sdev, bool data)
 	mutex_unlock(&sdev->ccb_lock);
 }
 
+/* A code object counts its unmapped mappings until vas_free() (pvrsgx_bo.code_unmapping). */
+static bool va_obj_is_code(struct pvrsgx_va *v)
+{
+	return to_pvrsgx_bo(v->obj)->flags & DRM_POWERVR_SGX_BO_CODE;
+}
+
 /* Unlink a removed mapping from its object, keeping a reference on freed. */
 static void va_unlink_locked(struct drm_gpuva *va, struct list_head *freed)
 {
@@ -169,6 +176,8 @@ static void va_unlink_locked(struct drm_gpuva *va, struct list_head *freed)
 
 	v->obj = va->gem.obj;
 	drm_gem_object_get(v->obj);
+	if (va_obj_is_code(v))
+		atomic_inc(&to_pvrsgx_bo(v->obj)->code_unmapping);
 	drm_gpuva_unlink(va);
 	list_add_tail(&v->free_link, freed);
 }
@@ -179,6 +188,8 @@ static void vas_free(struct list_head *list)
 
 	list_for_each_entry_safe(v, tmp, list, free_link) {
 		list_del(&v->free_link);
+		if (va_obj_is_code(v))
+			atomic_dec(&to_pvrsgx_bo(v->obj)->code_unmapping);
 		drm_gem_object_put(v->obj);
 		kfree(v);
 	}
@@ -218,19 +229,19 @@ static void vm_free_work(struct work_struct *work)
 	struct pvrsgx_device *sdev = to_pvrsgx_device(f->drm);
 
 	f->inval.done = vm_free_done;
-	if (f->vm) {
+	if (f->teardown) {
 		mutex_lock(&f->vm->lock);
 		vm_unmap_all(f->vm, &f->vas);
 		mutex_unlock(&f->vm->lock);
-		/*
-		 * The BIF caches walks only of a directory a job ran on, and a
-		 * restart or power-off drops them: then there is nothing to wait for.
-		 */
-		if (!READ_ONCE(sdev->powered) ||
-		    READ_ONCE(f->vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1) {
-			vm_free_done(&f->inval);
-			return;
-		}
+	}
+	/*
+	 * The BIF caches walks only of a directory a job ran on, and a restart or
+	 * power-off drops them: then there is nothing to wait for.
+	 */
+	if (!READ_ONCE(sdev->powered) ||
+	    READ_ONCE(f->vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1) {
+		vm_free_done(&f->inval);
+		return;
 	}
 	pvrsgx_ccb_after_invalidate(sdev, &f->inval, PVRSGX_CC_INVAL_BIF_PT |
 				    PVRSGX_CC_INVAL_BIF_PD | PVRSGX_CC_INVAL_DATA);
@@ -243,13 +254,17 @@ static void vm_free_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
 	queue_work(system_dfl_wq, &f->work);
 }
 
-/* Run f once every job submitted to vm so far is done, without waiting for them. */
-static void vm_free_after_jobs(struct pvrsgx_vm *vm, struct pvrsgx_vm_free *f)
+/*
+ * Run f once every job submitted to vm so far is done, without waiting for
+ * them. With none left, at once if now is set (the caller holds no VM lock).
+ */
+static void vm_free_after_jobs(struct pvrsgx_vm *vm, struct pvrsgx_vm_free *f, bool now)
 {
 	struct dma_fence *fence = NULL;
 
 	f->drm = &vm->sdev->base;
 	drm_dev_get(f->drm);
+	f->vm = pvrsgx_vm_get(vm);
 	INIT_WORK(&f->work, vm_free_work);
 	if (dma_resv_get_singleton(pvrsgx_vm_resv(vm), DMA_RESV_USAGE_BOOKKEEP, &fence)) {
 		/* No memory for a fence array: wait here instead. */
@@ -258,7 +273,11 @@ static void vm_free_after_jobs(struct pvrsgx_vm *vm, struct pvrsgx_vm_free *f)
 		fence = NULL;
 	}
 	f->fence = fence;
-	if (!fence || dma_fence_add_callback(fence, &f->cb, vm_free_cb))
+	if (fence && !dma_fence_add_callback(fence, &f->cb, vm_free_cb))
+		return;
+	if (now)
+		vm_free_work(&f->work);
+	else
 		queue_work(system_dfl_wq, &f->work);
 }
 
@@ -269,6 +288,34 @@ static struct pvrsgx_vm_free *vm_free_alloc(void)
 	if (f)
 		INIT_LIST_HEAD(&f->vas);
 	return f;
+}
+
+/*
+ * On a single-context core the microkernel puts list 0 back on the firmware's
+ * directory when it raises its interrupt, which can come after a job's
+ * completion shows. Before a VM's directory is freed, list 0 must not hold it.
+ * A suspended core holds nothing: the next start's reset sets list 0.
+ */
+static void vm_pd_unload(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
+{
+	struct device *dev = sdev->base.dev;
+	u32 pd = pvrsgx_mmu_pd_addr(mmu);
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return;
+	if (IS_ENABLED(CONFIG_PM) && pm_runtime_get_if_active(dev) <= 0)
+		return;
+	if (READ_ONCE(sdev->powered) && sgx_rd(sdev, SGX_CR_BIF_DIR_LIST_BASE0) == pd) {
+		drm_dbg_driver(&sdev->base, "list 0 still on a released VM's directory\n");
+		sgx_wr(sdev, SGX_CR_BIF_DIR_LIST_BASE0, pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	}
+	if (IS_ENABLED(CONFIG_PM))
+		pm_runtime_put(dev);
+}
+
+static void vm_put_work(struct work_struct *work)
+{
+	drm_gpuvm_put(&container_of(work, struct pvrsgx_vm, put_work)->gpuvm);
 }
 
 static void vm_release(struct kref *ref)
@@ -282,6 +329,9 @@ static void vm_release(struct kref *ref)
 	if (vm->pb)
 		pvrsgx_pb_unmap(vm);
 	drm_mm_takedown(&vm->params);
+	if (vm->pd_slot)
+		pvrsgx_fw_pd_slot_put(vm->sdev, vm->pd_slot);
+	vm_pd_unload(vm->sdev, vm->mmu);
 	pvrsgx_mmu_destroy(vm->mmu);
 	/* The directory and its pages may come back as another VM's. */
 	mutex_lock(&vm->sdev->ccb_lock);
@@ -289,6 +339,15 @@ static void vm_release(struct kref *ref)
 				      PVRSGX_CC_INVAL_DATA;
 	mutex_unlock(&vm->sdev->ccb_lock);
 	mutex_destroy(&vm->lock);
+	/*
+	 * Its reference to the DRM device may be the last, and the device's
+	 * release can't run on the driver's own workqueues, which it destroys.
+	 */
+	if (current_work()) {
+		INIT_WORK(&vm->put_work, vm_put_work);
+		queue_work(pvrsgx_put_wq, &vm->put_work);
+		return;
+	}
 	drm_gpuvm_put(&vm->gpuvm);
 }
 
@@ -296,11 +355,6 @@ void pvrsgx_vm_put(struct pvrsgx_vm *vm)
 {
 	if (vm)
 		kref_put(&vm->ref, vm_release);
-}
-
-void pvrsgx_vm_user_get(struct pvrsgx_vm *vm)
-{
-	atomic_inc(&vm->users);
 }
 
 /*
@@ -319,8 +373,8 @@ void pvrsgx_vm_user_put(struct pvrsgx_vm *vm)
 
 	f = vm_free_alloc();
 	if (f) {
-		f->vm = pvrsgx_vm_get(vm);
-		vm_free_after_jobs(vm, f);
+		f->teardown = true;
+		vm_free_after_jobs(vm, f, false);
 		return;
 	}
 	/*
@@ -358,26 +412,54 @@ struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev)
 		kfree(vm);
 		return ERR_PTR(-ENOMEM);
 	}
+	if (pvrsgx_core_single_context(sdev->family)) {
+		pvrsgx_share_fw_heaps(sdev, vm->mmu);
+		vm->pd_slot = pvrsgx_fw_pd_slot_get(sdev, pvrsgx_mmu_pd_addr(vm->mmu));
+		if (vm->pd_slot < 0) {
+			int err = vm->pd_slot;
+
+			drm_gem_object_put(r_obj);
+			pvrsgx_mmu_destroy(vm->mmu);
+			kfree(vm);
+			return ERR_PTR(err);
+		}
+	}
 	drm_gpuvm_init(&vm->gpuvm, "powervr_sgx", 0, &sdev->base, r_obj,
-		       0, SZ_4G, 0, 0, &pvrsgx_gpuvm_ops);
+		       0, BIT_ULL(sdev->family->va_bits), 0, 0, &pvrsgx_gpuvm_ops);
 	drm_gem_object_put(r_obj);
 	vm->sdev = sdev;
-	drm_mm_init(&vm->params, PVRSGX_HEAP_3D_PARAMS,
-		    PVRSGX_HEAP_TA_DATA - PVRSGX_HEAP_3D_PARAMS);
+	drm_mm_init(&vm->params, pvrsgx_heaps(sdev)->params_3d.base,
+		    pvrsgx_heaps(sdev)->params_3d.end - pvrsgx_heaps(sdev)->params_3d.base);
 	mutex_init(&vm->lock);
 	kref_init(&vm->ref);
 	atomic_set(&vm->users, 1);
 	return vm;
 }
 
-struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle)
+/*
+ * What a HW context's directory word holds: the directory's address, or on a
+ * single-context core its slot in the microkernel's PD table.
+ */
+u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm)
+{
+	return vm->pd_slot ?: pvrsgx_mmu_pd_addr(vm->mmu);
+}
+
+/*
+ * A VM by handle, with a reference and a user (pvrsgx_vm_user_put()). Taken
+ * under the lock DESTROY_VM_CONTEXT erases under, while the handle's own user
+ * still holds the VM, so a VM torn down is never taken up again.
+ */
+struct pvrsgx_vm *pvrsgx_vm_lookup_user(struct pvrsgx_file *sfile, u32 handle)
 {
 	struct pvrsgx_vm *vm;
 
 	xa_lock(&sfile->vms);
 	vm = xa_load(&sfile->vms, handle);
-	if (vm)
+	if (vm) {
 		pvrsgx_vm_get(vm);
+		atomic_inc(&vm->users);
+	}
 	xa_unlock(&sfile->vms);
 	return vm;
 }
@@ -431,7 +513,6 @@ int pvrsgx_ioctl_destroy_vm_context(struct drm_device *drm, void *data, struct d
 }
 
 #define PVRSGX_MAX_BIND_OPS	256
-#define PVRSGX_MAX_BIND_SYNCS	64
 
 /* One op of a VM_BIND and what it needs, all gathered before anything changes. */
 struct bind_op {
@@ -533,13 +614,13 @@ static int bind_op_check(struct drm_file *file, struct pvrsgx_vm *vm, struct bin
 
 	if (in->flags || in->_padding_24 || !in->size || !PAGE_ALIGNED(in->size) ||
 	    !PAGE_ALIGNED(in->device_addr) || check_add_overflow(in->device_addr, in->size, &end) ||
-	    end > SZ_4G)
+	    end > BIT_ULL(vm->sdev->family->va_bits))
 		return -EINVAL;
 	if (in->op == DRM_POWERVR_SGX_VM_BIND_OP_UNMAP)
 		return in->handle || in->bo_offset ? -EINVAL : 0;
 	if (in->op != DRM_POWERVR_SGX_VM_BIND_OP_MAP || !PAGE_ALIGNED(in->bo_offset))
 		return -EINVAL;
-	heap = pvrsgx_heap_find(in->device_addr, in->size);
+	heap = pvrsgx_heap_find(vm->sdev, in->device_addr, in->size);
 	if (heap < 0)
 		return -EINVAL;
 
@@ -628,99 +709,24 @@ static void bind_apply(struct pvrsgx_vm *vm, struct bind_op *ops, u32 n, struct 
 	}
 }
 
-/* Wait, interruptibly, for every wait op; find every signal op's syncobj. */
-static int bind_syncs(struct drm_file *file, const struct drm_powervr_sgx_obj_array *arr,
-		      struct pvrsgx_signal **signals, u32 *nsignals)
-{
-	struct drm_powervr_sgx_sync_op *ops;
-	int err = 0;
-
-	ops = pvrsgx_obj_array_get(arr, sizeof(*ops), PVRSGX_MAX_BIND_SYNCS);
-	if (IS_ERR_OR_NULL(ops))
-		return PTR_ERR_OR_ZERO(ops);
-	*signals = kvcalloc(arr->count, sizeof(**signals), GFP_KERNEL);
-	if (!*signals) {
-		err = -ENOMEM;
-		goto out;
-	}
-	for (u32 i = 0; i < arr->count && !err; i++) {
-		u32 type = ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_MASK;
-		bool timeline = type == DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_TIMELINE_SYNCOBJ;
-		struct pvrsgx_signal *sig = &(*signals)[*nsignals];
-		struct dma_fence *fence;
-
-		if ((ops[i].flags & ~PVRSGX_SYNC_OP_FLAGS_MASK) ||
-		    (type != DRM_POWERVR_SGX_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ && !timeline) ||
-		    (!timeline && ops[i].value)) {
-			err = -EINVAL;
-			break;
-		}
-		if (!(ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL)) {
-			err = drm_syncobj_find_fence(file, ops[i].handle, ops[i].value, 0, &fence);
-			if (!err) {
-				long ret = dma_fence_wait(fence, true);
-
-				err = ret < 0 ? ret : 0;
-				dma_fence_put(fence);
-			}
-			continue;
-		}
-		sig->syncobj = drm_syncobj_find(file, ops[i].handle);
-		if (!sig->syncobj) {
-			err = -ENOENT;
-			break;
-		}
-		sig->point = ops[i].value;
-		if (timeline) {
-			sig->chain = dma_fence_chain_alloc();
-			if (!sig->chain)
-				err = -ENOMEM;
-		}
-		(*nsignals)++;
-	}
-out:
-	kvfree(ops);
-	return err;
-}
-
-static void bind_signals_fini(struct pvrsgx_signal *signals, u32 n, bool fire)
-{
-	for (u32 i = 0; i < n; i++) {
-		struct pvrsgx_signal *sig = &signals[i];
-
-		if (fire) {
-			struct dma_fence *stub = dma_fence_get_stub();
-
-			if (sig->chain) {
-				drm_syncobj_add_point(sig->syncobj, sig->chain, stub, sig->point);
-				sig->chain = NULL;
-			} else {
-				drm_syncobj_replace_fence(sig->syncobj, stub);
-			}
-			dma_fence_put(stub);
-		}
-		dma_fence_chain_free(sig->chain);
-		drm_syncobj_put(sig->syncobj);
-	}
-	kvfree(signals);
-}
-
+/* A synchronous bind: the ops are applied before it returns, with no fences. */
 int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_bind_args *args = data;
-	struct pvrsgx_signal *signals = NULL;
 	struct pvrsgx_vm_free *f = NULL;
 	struct bind_op *ops = NULL;
 	struct drm_powervr_sgx_vm_bind_op *in;
 	struct pvrsgx_vm *vm;
 	struct drm_exec exec;
-	u32 n = args->ops.count, nsignals = 0;
+	u32 n = args->ops.count;
 	int err;
 
-	if (args->flags != DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC || !n)
+	/* A synchronous bind takes no fences (drm-vm-bind-async.rst). */
+	if (args->flags != DRM_POWERVR_SGX_VM_BIND_FLAG_SYNC || !n || args->sync_ops.count)
 		return -EINVAL;
 
-	vm = pvrsgx_vm_lookup(to_pvrsgx_file(file), args->vm_context_handle);
+	/* A user for the call: a concurrent destroy tears the VM down after it. */
+	vm = pvrsgx_vm_lookup_user(to_pvrsgx_file(file), args->vm_context_handle);
 	if (!vm)
 		return -ENOENT;
 	in = pvrsgx_obj_array_get(&args->ops, sizeof(*in), PVRSGX_MAX_BIND_OPS);
@@ -747,9 +753,6 @@ int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *fi
 			}
 		}
 	}
-	err = bind_syncs(file, &args->sync_ops, &signals, &nsignals);
-	if (err)
-		goto out;
 
 	mutex_lock(&vm->lock);
 	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES, 0);
@@ -781,14 +784,16 @@ int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *fi
 		goto out;
 
 	vm_invalidate(vm->sdev, false);
-	/* The objects unmapped stay until every job submitted before now is done. */
+	/*
+	 * The objects unmapped stay until every job submitted before now is done
+	 * and, if the VM ran one since the GPU started, the BIF invalidate has run.
+	 */
 	if (!list_empty(&f->vas)) {
-		vm_free_after_jobs(vm, f);
+		vm_free_after_jobs(vm, f, true);
 		f = NULL;
 	}
 
 out:
-	bind_signals_fini(signals, nsignals, !err);
 	if (ops) {
 		for (u32 i = 0; i < n; i++) {
 			kfree(ops[i].va[0]);
@@ -806,6 +811,7 @@ out:
 	kfree(f);
 	kvfree(in);
 out_vm:
+	pvrsgx_vm_user_put(vm);
 	pvrsgx_vm_put(vm);
 	return err;
 }

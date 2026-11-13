@@ -126,14 +126,20 @@ static u64 range_flush(const struct pvrsgx_cache_range *r)
 	/* I/O memory isn't cached. */
 	if (!r->import || map->is_iomem)
 		return 0;
-	if (r->rows == 1 || r->stride == r->size) {
-		drm_clflush_virt_range(map->vaddr + r->offset, r->size * r->rows);
-	} else {
-		for (u32 y = 0; y < r->rows; y++)
-			drm_clflush_virt_range(map->vaddr + r->offset + (u64)y * r->stride,
-					       r->size);
+	/*
+	 * Rows less than a page apart: one flush of their span, which the range
+	 * check keeps inside the object. Rows further apart are at most one per
+	 * page of it, so the loop is bounded by the object's size.
+	 */
+	if (r->rows == 1 || r->stride - r->size < PAGE_SIZE) {
+		u64 span = (u64)(r->rows - 1) * r->stride + r->size;
+
+		drm_clflush_virt_range(map->vaddr + r->offset, span);
+		return span;
 	}
-	return r->size * r->rows;
+	for (u32 y = 0; y < r->rows; y++)
+		drm_clflush_virt_range(map->vaddr + r->offset + (u64)y * r->stride, r->size);
+	return (u64)r->size * r->rows;
 }
 
 /* The whole of an import, at import. */
@@ -167,6 +173,16 @@ struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
 	struct iosys_map map;
 	int err;
 
+	/* An import's flushes are CPU cache flushes of its vmap, which only x86 has here. */
+	if (!IS_ENABLED(CONFIG_X86))
+		return ERR_PTR(-EOPNOTSUPP);
+	/*
+	 * The exporter's mapping is taken once here and kept for the import's
+	 * life. A job's cache ranges are flushed through it in run_job and at
+	 * completion, inside the fence-signaling path, where a vmap can't be
+	 * taken: it may sleep and allocate. The importer never touches the
+	 * attachment's pages.
+	 */
 	err = dma_buf_vmap_unlocked(attach->dmabuf, &map);
 	if (err)
 		return ERR_PTR(err);

@@ -194,8 +194,33 @@ debugfs, under ``/sys/kernel/debug/dri/<minor>/``, has:
 ``ctlblk``
     the microkernel's TA/3D and host control blocks.
 
+Client usage stats
+==================
+
+Each open file's ``fdinfo`` carries the keys of
+:ref:`drm-client-usage-stats`:
+
+``drm-engine-render``
+    nanoseconds the file's render and transfer jobs spent on the GPU, from
+    when the driver sent each to the microkernel to when it saw the job end
+    or a reset end it. The GPU runs one job at a time, both kinds on its 3D
+    pipeline, so this is the one engine; the microkernel reports no separate
+    TA and 3D times to split it by.
+``drm-total-memory``, ``drm-shared-memory``, ``drm-resident-memory``
+    from drm_show_memory_stats(); an object is resident once it has pages.
+    Nothing is purgeable, the uAPI having no madvise, and jobs' fences are
+    bookkeeping only, so no memory is reported active.
+
+The core adds ``drm-driver`` and ``drm-client-id``. There is no
+``drm-cycles`` or ``drm-maxfreq``: the driver doesn't set the GPU clock.
+
 Module parameters
 =================
 
 ``job_timeout_ms``
     how long a job may run before the GPU is reset (default 2000).
+
+``allow_unisolated``
+    run a single-context core (the OMAP3630's SGX530), whose clients can
+    reach the firmware and each other's commands. For bring-up only, default
+    off.

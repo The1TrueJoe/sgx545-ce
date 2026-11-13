@@ -3,11 +3,11 @@
 
 /*
  * Loading and starting the microkernel: the buffers, constants, PDS programs
- * and init scripts it needs, which the vendor's user-space init and services
- * driver set up between them.
+ * and init scripts it needs.
  *
- * The host interface is the vendor's SGXMKIF as of DDK 1.7. The microkernel
- * file's header lists its entry points and patch sites.
+ * The host interface is version 1 of the microkernel's own
+ * (DRM_POWERVR_SGX_FW_IF_V1). The microkernel file's header lists its entry
+ * points and patch sites.
  */
 
 #include <drm/drm_print.h>
@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/seq_buf.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -40,7 +41,8 @@
 #define UKFW_MAGIC1		0x4e524b55	/* "UKRN" */
 #define UKFW_HEADER_MIN		0x60
 #define UKFW_IF_MAJOR		1
-#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | PVRSGX_UKFW_DONE_SEQ)
+#define UKFW_FEATURES		(PVRSGX_UKFW_CLEANUP_V2 | PVRSGX_UKFW_SECURE | \
+				 PVRSGX_UKFW_DONE_SEQ | PVRSGX_UKFW_SINGLE_CONTEXT)
 /* Bits 16-31: the microkernel's own build variants, nothing the host must know. */
 #define UKFW_FEATURES_PRIVATE	GENMASK(31, 16)
 #define UKFW_MAX_IMAGE		(CODE_ARENA_SIZE - PDS_BYTES - 0x10)
@@ -71,6 +73,7 @@ enum ukfw_patch_value {
 	UKFW_CCBCTL,
 	UKFW_CCB,
 	UKFW_MISC,
+	UKFW_PDTABLE,	/* single-context cores only */
 };
 
 /* The POWER command: data word 1. */
@@ -80,8 +83,8 @@ enum ukfw_patch_value {
 #define UKERNEL_TIMER_HZ	1000
 
 /*
- * Where each buffer lives: the addresses the vendor driver's allocator gives,
- * kept so traces compare one for one with a vendor driver's.
+ * Where each buffer lives: its offset in the kernel data or code arena, and
+ * its size.
  */
 static const struct {
 	bool code;
@@ -94,7 +97,7 @@ static const struct {
 	/* Right after the control block, which fills 0x3000-0x30ff. */
 	[PVRSGX_FW_HOSTCTL] = { false, 0x3100, 0x44 },
 	[PVRSGX_FW_MISC] = { false, 0x3160, 0x54 },
-	/* The image at 0, then the PDS programs from its end (0xcf70 for the vendor's). */
+	/* The image at 0, then the PDS programs from its end. */
 	[PVRSGX_FW_UKERNEL] = { true, 0x0000, 0 },
 	[PVRSGX_FW_PDS0] = { true, 0x000, 0x18 },
 	[PVRSGX_FW_PDS1] = { true, 0x020, 0x38 },
@@ -171,8 +174,9 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
 	t->ccb = f->addr[PVRSGX_FW_CCB];
 	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
-	/* A fresh microkernel counts finished jobs from 0. */
+	/* A fresh microkernel counts finished jobs from 0, and no earlier no-op. */
 	WRITE_ONCE(sdev->done_seq, 0);
+	WRITE_ONCE(sdev->noops_seen, READ_ONCE(sdev->noops_sent));
 }
 
 /*
@@ -202,8 +206,17 @@ static int fw_build_open(struct pvrsgx_device *sdev)
 	for (u32 p = 0; p < ARRAY_SIZE(entry); p++)
 		pvrsgx_pds_entry(sdev, PVRSGX_FW_PDS0 + p, entry[p]);
 
-	for (u32 i = 0; i < f->n_patches && !err; i++)
-		err = fw_limm(sdev, f->patches[i][0], f->addr[value_buf[f->patches[i][1]]]);
+	for (u32 i = 0; i < f->n_patches && !err; i++) {
+		u32 v = f->patches[i][1];
+
+		if (v == UKFW_PDTABLE && !f->pdtable.pages) {
+			drm_err(&sdev->base, "%s: a PD table patch on a multi-context core\n",
+				f->name);
+			return -EINVAL;
+		}
+		err = fw_limm(sdev, f->patches[i][0],
+			      v == UKFW_PDTABLE ? f->pdtable.dev_addr : f->addr[value_buf[v]]);
+	}
 	if (err)
 		return err;
 	return 0;
@@ -283,7 +296,7 @@ static int ukfw_parse(const u8 *data, size_t size, struct pvrsgx_fw *f, const ch
 	}
 	for (u32 i = 0; i < f->n_patches; i++) {
 		if (f->patches[i][0] > isize - 8 || !IS_ALIGNED(f->patches[i][0], 8) ||
-		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_MISC)
+		    f->patches[i][1] < UKFW_TA3DCTL || f->patches[i][1] > UKFW_PDTABLE)
 			return -EINVAL;
 	}
 	if (!entry0)
@@ -307,7 +320,21 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 		drm_err(&sdev->base, "%s: %s\n", f->name, why);
 	if (err)
 		return err;
-	if (!(f->features & PVRSGX_UKFW_SECURE)) {
+	/*
+	 * Secure mode keeps the firmware out of every client directory, which a
+	 * single-context core can't do: there the image must not claim it.
+	 */
+	if (pvrsgx_core_single_context(sdev->family)) {
+		if ((f->features & (PVRSGX_UKFW_SECURE | PVRSGX_UKFW_SINGLE_CONTEXT)) !=
+		    PVRSGX_UKFW_SINGLE_CONTEXT) {
+			drm_err(&sdev->base, "%s: not an image for a single-context core\n",
+				f->name);
+			return -EINVAL;
+		}
+	} else if (f->features & PVRSGX_UKFW_SINGLE_CONTEXT) {
+		drm_err(&sdev->base, "%s: an image for a single-context core\n", f->name);
+		return -EINVAL;
+	} else if (!(f->features & PVRSGX_UKFW_SECURE)) {
 		drm_err(&sdev->base, "%s: not a secure-mode image; clients would reach the firmware\n",
 			f->name);
 		return -EINVAL;
@@ -321,38 +348,85 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
 	return 0;
 }
 
-int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+/*
+ * Single-context cores: the microkernel loads list 0 from this table, by the
+ * slot a HW context names, so no directory address it loads is GPU-writable.
+ * Read-only on the GPU, between the code arena and the kernel code objects.
+ * Every slot no VM holds names the firmware's directory.
+ */
+#define PDTABLE_OFFSET	0xf000
+#define PDTABLE_SLOTS	(SGX_MMU_PAGE_SIZE / sizeof(u32))
+
+/* The PD table sits past the code arena, inside the kernel code heap's first 64 KiB. */
+static_assert(PDTABLE_OFFSET >= CODE_ARENA_SIZE);
+static_assert(SZ_64K - SGX_MMU_PAGE_SIZE >= PDTABLE_OFFSET);
+
+static int pdtable_init(struct pvrsgx_device *sdev)
 {
 	struct pvrsgx_fw *f = &sdev->fw;
-	const struct firmware *fw;
+	int err;
+
+	if (!pvrsgx_core_single_context(sdev->family))
+		return 0;
+	err = pvrsgx_kmem_alloc(sdev, &f->pdtable,
+				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET,
+				SGX_MMU_PAGE_SIZE, SGX_MMU_PTE_READONLY, 0);
+	if (err)
+		return err;
+	memset32(f->pdtable.cpu, pvrsgx_mmu_pd_addr(sdev->kernel_mmu), PDTABLE_SLOTS);
+	return 0;
+}
+
+/* A slot naming directory pd, for a new VM; its HW contexts carry the slot. */
+int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd)
+{
+	int slot = ida_alloc_range(&sdev->fw.pd_slots, 1, PDTABLE_SLOTS - 1, GFP_KERNEL);
+
+	if (slot < 0)
+		return slot;
+	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pd);
+	/* In memory before any command names the slot. */
+	wmb();
+	/* And not a stale line in the GPU's data cache, should the table be read through it. */
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
+	mutex_unlock(&sdev->ccb_lock);
+	return slot;
+}
+
+/* The VM is gone: its slot names the firmware's directory again. */
+void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot)
+{
+	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pvrsgx_mmu_pd_addr(sdev->kernel_mmu));
+	/* The slot names the firmware's directory before another VM can take it. */
+	wmb();
+	ida_free(&sdev->fw.pd_slots, slot);
+}
+
+/* The arenas and the built image, once the file is loaded. */
+static int fw_arenas(struct pvrsgx_device *sdev)
+{
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
+	struct pvrsgx_fw *f = &sdev->fw;
 	u32 pds_base;
 	int err;
 
-	f->name = sdev->core->fw_name;
-	err = request_firmware(&fw, f->name, sdev->base.dev);
-	if (err) {
-		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
-		return err;
-	}
-	err = ukfw_load(sdev, fw);
-	if (err == -ENOENT)
-		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
-	release_firmware(fw);
-	if (err)
-		return err;
-	f->interface = DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7;
+	f->interface = DRM_POWERVR_SGX_FW_IF_V1;
 
 	/*
-	 * The PTE flags the vendor's GPL kernel services give the same buffers
-	 * (mmu.c, from EDM_PROTECT and read-only allocations): data read-write,
-	 * code read-only.
+	 * The PTE flags: data read-write and EDM-protected where the core allows
+	 * it, code read-only.
 	 */
-	err = pvrsgx_kmem_alloc(sdev, &f->data, PVRSGX_HEAP_KERNEL_DATA, DATA_ARENA_SIZE,
-				SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT, 0);
+	err = pvrsgx_kmem_alloc(sdev, &f->data, h->kernel_data.base, DATA_ARENA_SIZE,
+				SGX_MMU_PTE_CACHECONSISTENT |
+				(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT), 0);
 	if (err)
 		return err;
-	err = pvrsgx_kmem_alloc(sdev, &f->code, PVRSGX_HEAP_KERNEL_CODE, CODE_ARENA_SIZE,
+	err = pvrsgx_kmem_alloc(sdev, &f->code, h->kernel_code.base, CODE_ARENA_SIZE,
 				SGX_MMU_PTE_READONLY, 0);
+	if (err)
+		return err;
+	err = pdtable_init(sdev);
 	if (err)
 		return err;
 
@@ -369,6 +443,28 @@ int pvrsgx_fw_init(struct pvrsgx_device *sdev)
 	return fw_build(sdev, f->image);
 }
 
+int pvrsgx_fw_init(struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_fw *f = &sdev->fw;
+	const struct firmware *fw;
+	int err;
+
+	ida_init(&f->pd_slots);
+	f->name = sdev->core->fw_name;
+	err = request_firmware(&fw, f->name, sdev->base.dev);
+	if (err) {
+		drm_err(&sdev->base, "no microkernel: %s (%d)\n", f->name, err);
+		return err;
+	}
+	err = ukfw_load(sdev, fw);
+	if (err == -ENOENT)
+		drm_err(&sdev->base, "%s: not a microkernel file\n", f->name);
+	release_firmware(fw);
+	if (err)
+		return err;
+	return fw_arenas(sdev);
+}
+
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 {
 	kfree(sdev->fw.entries);
@@ -377,26 +473,69 @@ void pvrsgx_fw_fini(struct pvrsgx_device *sdev)
 	sdev->fw.patches = NULL;
 	kfree(sdev->fw.image);
 	sdev->fw.image = NULL;
+	pvrsgx_kmem_free(sdev, &sdev->fw.pdtable);
 	pvrsgx_kmem_free(sdev, &sdev->fw.code);
 	pvrsgx_kmem_free(sdev, &sdev->fw.data);
+	ida_destroy(&sdev->fw.pd_slots);
 }
 
-/* USE_CODE_BASE: device address >> 7, and the window's mode bits. */
-#define USE_CODE_BASE_ADDR_SHIFT	7
-#define USE_CODE_BASE_PIXEL		0x2000000
-#define USE_CODE_BASE_UKERNEL		0x6000000
+/* USE_CODE_BASE's data master for the pixel windows and for the microkernel's. */
+#define USE_CODE_BASE_DM_PIXEL		1
+#define USE_CODE_BASE_DM_UKERNEL	3
 
 static u32 use_code_base(struct pvrsgx_device *sdev, u32 n)
 {
 	return sdev->cr->use_code_base0 + 4 * n;
 }
 
+/* A code base's value: the address in the core's unit, and the data master. */
+static u32 use_code_base_val(struct pvrsgx_device *sdev, u64 addr, u32 dm)
+{
+	const struct pvrsgx_core_regs *cr = sdev->cr;
+
+	return (u32)(addr >> cr->use_code_base_addr_shift) | dm << cr->use_code_base_dm_shift;
+}
+
+/*
+ * The event program's address as the event PDS base register takes it. A core
+ * without EDM_VERTEX_PDSADDR_FULL_RANGE holds 26 bits there, the 64 MiB above
+ * PDS_EXEC_BASE that PDS code may lie in: taken as an offset from that base,
+ * which is an assumption.
+ */
+static u32 event_pds_addr(struct pvrsgx_device *sdev)
+{
+	u32 a = sdev->fw.addr[PVRSGX_FW_PDS0] & ~0xfu;
+
+	if (!(sdev->family->features & PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE))
+		a -= pvrsgx_heaps(sdev)->pds_pixel.base;
+	return a;
+}
+
+/* Where the event PDS registers are a guess, the address must read back before any kick. */
+static int check_event_pds(struct pvrsgx_device *sdev)
+{
+	u32 want = event_pds_addr(sdev), got;
+
+	if (!sdev->family->event_pds_guessed)
+		return 0;
+	got = sgx_rd(sdev, sdev->cr->event_pds_base);
+	if (got != want) {
+		drm_err(&sdev->base,
+			"event PDS base 0x%04x reads 0x%08x, not 0x%08x; not starting the microkernel\n",
+			sdev->cr->event_pds_base, got, want);
+		return -EIO;
+	}
+	return 0;
+}
+
 /* Init script part 2: the core's script, then the bases. */
-static void init_script_part2(struct pvrsgx_device *sdev)
+static int init_script_part2(struct pvrsgx_device *sdev)
 {
 	const struct pvrsgx_core_family *fam = sdev->family;
+	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(sdev);
 	const struct pvrsgx_core_regs *cr = sdev->cr;
 	struct pvrsgx_fw *f = &sdev->fw;
+	int err;
 
 	for (u32 i = 0; i < fam->num_init_regs; i++)
 		sgx_wr(sdev, fam->init_regs[i].reg, fam->init_regs[i].val);
@@ -407,23 +546,28 @@ static void init_script_part2(struct pvrsgx_device *sdev)
 	 */
 	for (u32 i = 0; i < 10; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_PIXEL_BASE_INDEX + i),
-		       ((PVRSGX_HEAP_USSE_PIXEL + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-			USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+		       use_code_base_val(sdev, h->usse_pixel.base + (i << PVRSGX_USSE_WINDOW_LOG2),
+					 USE_CODE_BASE_DM_PIXEL));
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_SPARE_BASE_INDEX),
-	       (PVRSGX_HEAP_USSE_PIXEL >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_PIXEL);
+	       use_code_base_val(sdev, h->usse_pixel.base, USE_CODE_BASE_DM_PIXEL));
 	for (u32 i = 0; i < 4; i++)
 		sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_VERTEX_BASE_INDEX + i),
-		       (PVRSGX_HEAP_USSE_VERTEX + (i << PVRSGX_USSE_WINDOW_LOG2)) >>
-		       USE_CODE_BASE_ADDR_SHIFT);
+		       use_code_base_val(sdev, h->usse_vertex.base + (i << PVRSGX_USSE_WINDOW_LOG2),
+					 0));
 	sgx_wr(sdev, use_code_base(sdev, PVRSGX_USSE_UKERNEL_BASE_INDEX),
-	       (PVRSGX_HEAP_KERNEL_CODE >> USE_CODE_BASE_ADDR_SHIFT) | USE_CODE_BASE_UKERNEL);
-	sgx_wr(sdev, cr->pds_exec_base, PVRSGX_HEAP_PDS_PIXEL);
-	sgx_wr(sdev, 0xb30, 0x100);	/* unnamed, as the vendor script */
+	       use_code_base_val(sdev, h->kernel_code.base, USE_CODE_BASE_DM_UKERNEL));
+	sgx_wr(sdev, cr->pds_exec_base, h->pds_pixel.base);
+	sgx_wr_opt(sdev, cr->cr_b30, 0x100);	/* unnamed; its start value */
 	sgx_wr(sdev, SGX_CR_EVENT_KICKER, f->addr[PVRSGX_FW_KICKER]);
-	sgx_wr(sdev, cr->event_pds_base, f->addr[PVRSGX_FW_PDS0] & ~0xfu);
+	sgx_wr(sdev, cr->event_pds_base, event_pds_addr(sdev));
 	sgx_wr(sdev, cr->event_pds_data0, 1);
 	sgx_wr(sdev, cr->event_pds_data1, 6);
+	/* Before the events are enabled, so a wrong guess starts nothing. */
+	err = check_event_pds(sdev);
+	if (err)
+		return err;
 	sgx_wr(sdev, cr->event_pds_enable, cr->event_pds_enable_all);
+	return 0;
 }
 
 static void deinit_script(struct pvrsgx_device *sdev)
@@ -438,7 +582,7 @@ static void deinit_script(struct pvrsgx_device *sdev)
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_ENABLE2, 0);
 	sgx_wr(sdev, SGX_CR_CLKGATECTL, 0);
-	sgx_wr(sdev, cr->clkgatectl2, 0);
+	sgx_wr_opt(sdev, cr->clkgatectl2, 0);
 }
 
 /*
@@ -488,7 +632,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		 * locks a fence waiter holds, so the reap work does it, not a reset.
 		 */
 		WRITE_ONCE(sdev->restarts, sdev->restarts + 1);
-		queue_work(system_dfl_wq, &sdev->reap_work);
+		queue_work(sdev->free_wq, &sdev->reap_work);
 	}
 	memset(hc, 0, layout[PVRSGX_FW_HOSTCTL].size);
 	hc[HOSTCTL_UK_TIMER_CLOCK] = sdev->core->clock_hz / UKERNEL_TIMER_HZ;
@@ -498,25 +642,33 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	pvrsgx_ccb_reset(sdev);
 	ta3dctl_fill(sdev);
 	/* The first command invalidates the directory cache, keeping what a reap queued. */
+	mutex_lock(&sdev->ccb_lock);
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PD;
+	mutex_unlock(&sdev->ccb_lock);
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
 	       (SGX_CLKG_ALL(cr->clkgatectl_units, SGX_CLKG_AUTO) & ~cr->clkgatectl_dpm) |
 	       field_prep(cr->clkgatectl_dpm, SGX_CLKG_ON));
-	sgx_wr(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
+	sgx_wr_opt(sdev, cr->clkgatectl2, SGX_CLKG_ALL(cr->clkgatectl2_units, SGX_CLKG_AUTO));
 	sgx_wr(sdev, cr->event_pds_enable, 0);
 	sgx_wr(sdev, SGX_CR_EVENT_TIMER, 0);
 
 	pvrsgx_reset(sdev, true);
 
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
-	init_script_part2(sdev);
+	err = init_script_part2(sdev);
+	if (err)
+		return err;
 
 	hc[HOSTCTL_INIT_STATUS] = 0;
 	/* The image and the host control block are in memory before the kick. */
 	wmb();
-	sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
+	/* The init kick; a core with one kick register (BRN_22934) takes it there. */
+	if (cr->event_kick2)
+		sgx_wr(sdev, cr->event_kick2, cr->event_kick2_now);
+	else
+		sgx_wr(sdev, SGX_CR_EVENT_KICK, SGX_CR_EVENT_KICK_NOW);
 
 	err = pvrsgx_poll(sdev, &hc[HOSTCTL_INIT_STATUS], HOSTCTL_INIT_COMPLETE,
 			  HOSTCTL_INIT_COMPLETE, 500000);
@@ -528,7 +680,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		return err;
 	}
-	sdev->fw_running = true;
+	WRITE_ONCE(sdev->uk_lockups, 0);
+	WRITE_ONCE(sdev->fw_running, true);
 	sdev->fw_started = true;
 	if (first || sdev->reset_count != sdev->reset_logged) {
 		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
@@ -571,15 +724,16 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			usleep_range(100, 200);
 		}
 		WRITE_ONCE(sdev->powered, false);
-		synchronize_irq(sdev->irq);
+		pvrsgx_irq_sync(sdev);
 		deinit_script(sdev);
-		sdev->fw_running = false;
+		WRITE_ONCE(sdev->fw_running, false);
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	} else if (READ_ONCE(sdev->powered)) {
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
-		synchronize_irq(sdev->irq);
+		pvrsgx_irq_sync(sdev);
+		deinit_script(sdev);
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}
@@ -587,4 +741,5 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
 #include "tests/pvrsgx_fw_test.c"
+#include "tests/pvrsgx_equiv_test.c"
 #endif

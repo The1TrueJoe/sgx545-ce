@@ -51,6 +51,11 @@ struct seq_buf;
 #define PVRSGX_UKFW_SECURE		BIT(1)
 /* It counts finished jobs in pvrsgx_fw_ta3d_ctl.done_seq, then interrupts. */
 #define PVRSGX_UKFW_DONE_SEQ		BIT(2)
+/*
+ * Runs on list 0 with the jobs, directories from the PD table, the firmware
+ * directory back on list 0 before any completion (single-context cores).
+ */
+#define PVRSGX_UKFW_SINGLE_CONTEXT	BIT(3)
 
 #define HOSTCTL_INIT_COMPLETE		BIT(0)
 #define HOSTCTL_POWMAN_POWEROFF_COMPLETE BIT(3)
@@ -58,6 +63,8 @@ struct seq_buf;
 #define HOSTCTL_INTERRUPT_ACTIVE_POWER	BIT(1)
 
 int pvrsgx_fw_init(struct pvrsgx_device *sdev);
+int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd);
+void pvrsgx_fw_pd_slot_put(struct pvrsgx_device *sdev, int slot);
 void pvrsgx_fw_fini(struct pvrsgx_device *sdev);
 int pvrsgx_fw_start(struct pvrsgx_device *sdev);
 void pvrsgx_fw_stop(struct pvrsgx_device *sdev);

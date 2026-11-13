@@ -37,10 +37,16 @@ struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
+	/* A command for it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 /* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
 #define PVRSGX_PB_DEFAULT_PAGES	0x1000
+
+/* The PB a context gets without asking: the default, or the core's largest. */
+#define pvrsgx_pb_default_pages(sdev) \
+	min_t(u32, PVRSGX_PB_DEFAULT_PAGES, pvrsgx_heaps(sdev)->pb_max_pages)
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
@@ -59,9 +65,9 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_rt_numbers n;
 	/*
 	 * Per RT-data entry, which alternates by frame parity, so one frame's TA
-	 * can be built while the other's 3D still reads its own (as the vendor stack keeps
-	 * them): render details, their words, the dependency block and its syncs,
-	 * and the background object, which the 3D fetches per tile.
+	 * can be built while the other's 3D still reads its own: render details,
+	 * their words, the dependency block and its syncs, and the background
+	 * object, which the 3D fetches per tile.
 	 */
 	struct pvrsgx_kobj *rd[2], *rd_w8[2], *rd_w4[2], *hwsync[2];
 	struct pvrsgx_kobj *rd_sync[2], *hwsync_access[2], *bgblock[2];
@@ -69,6 +75,8 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2];
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
+	/** @sent: A kick into it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 /* Each context's command ring. */
@@ -98,6 +106,7 @@ struct pvrsgx_render_job {
 int pvrsgx_render_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx, u32 pb_pages);
 void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx);
 
+struct pvrsgx_rt_dataset *pvrsgx_rtds_create(struct pvrsgx_context *ctx, u32 w, u32 h, u32 samples);
 void pvrsgx_rtds_put(struct pvrsgx_rt_dataset *rtds);
 void pvrsgx_rtds_destroy_all(struct pvrsgx_file *sfile);
 int pvrsgx_ioctl_create_rt_dataset(struct drm_device *drm, void *data, struct drm_file *file);

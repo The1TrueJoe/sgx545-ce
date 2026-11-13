@@ -1,0 +1,145 @@
+# The RFC series, patch by patch: drm/ci/rfc-series.sh cuts it onto
+# drm-misc-next, and every patch is built and checked on its own (gcc and
+# clang W=1, sparse, smatch, checkpatch --strict, kernel-doc), as a reviewer
+# bisecting it would. The commit messages live outside this repository, so
+# the cut here uses placeholder messages: the code is what is checked.
+name: powervr-sgx-rfc-series
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/rfc-**']
+    paths:
+      - drm/**
+      - docs/uapi/**
+      - .github/workflows/powervr-sgx-rfc-series.yml
+
+concurrency:
+  group: powervr-sgx-rfc-series-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KERNEL_GIT: https://gitlab.freedesktop.org/drm/misc/kernel.git
+  KERNEL_BRANCH: drm-misc-next
+  SMATCH_REF: master
+
+jobs:
+  series:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev ccache sparse clang lld llvm \
+            libsqlite3-dev libdbd-sqlite3-perl libtry-tiny-perl
+          git clone -q --depth 1 -b $SMATCH_REF https://repo.or.cz/smatch.git smatch
+          make -C smatch -j"$(nproc)" >/dev/null
+
+      - name: Cut the series onto drm-misc-next
+        run: |
+          set -eux
+          git clone -q --depth 1 -b $KERNEL_BRANCH $KERNEL_GIT linux
+          git -C linux config user.name "Joseph Telaak"
+          git -C linux config user.email joseph@telaak.dev
+          git -C linux log -1 --format='%H %cs %s' | tee base.txt
+          git -C linux rev-parse HEAD > base.sha
+          # Placeholder messages, one per patch the script commits.
+          mkdir msg
+          for m in 03-uapi 12-kunit $(sed -n 's/^\(AREAS="\)\{0,1\}\([0-9][0-9]-[a-z]*\):.*/\2/p' drm/ci/rfc-series.sh); do
+            printf 'rfc series: %s\n\nPlaceholder message for the per-patch check.\n' "$m" > msg/$m.txt
+          done
+          ls msg
+          sh drm/ci/rfc-series.sh "$PWD/linux" "$PWD" "$PWD/msg"
+          git -C linux log --oneline "$(cat base.sha)..HEAD"
+
+      - name: Configuration (at the series tip)
+        run: |
+          set -eux
+          L=linux
+          make -C $L ARCH=x86_64 x86_64_defconfig >/dev/null
+          ./$L/scripts/config --file $L/.config -m DRM -m DRM_GMA500 -m DRM_POWERVR_SGX \
+            -e DRM_POWERVR_SGX_GMA500 -e OF -e DRM_POWERVR_SGX_OF -e KUNIT \
+            -m DRM_POWERVR_SGX_KUNIT_TEST -e DEBUG_FS -e PM
+          make -C $L ARCH=x86_64 olddefconfig >/dev/null
+          for want in CONFIG_DRM_POWERVR_SGX=m CONFIG_DRM_POWERVR_SGX_GMA500=y CONFIG_DRM_POWERVR_SGX_OF=y \
+              CONFIG_DRM_POWERVR_SGX_KUNIT_TEST=m; do
+            grep -qx "$want" $L/.config || { echo "missing $want"; exit 1; }
+          done
+          cp $L/.config tip.config
+          git -C $L worktree add -q ../linux-clang HEAD
+
+      - name: Every patch on its own
+        run: |
+          set +e -u
+          export CCACHE_DIR=~/.cache/ccache
+          L=$PWD/linux C=$PWD/linux-clang
+          fail=0
+          n=0
+          for c in $(git -C $L rev-list --reverse "$(cat base.sha)..HEAD"); do
+            n=$((n + 1))
+            s=$(git -C $L log -1 --format=%s $c)
+            git -C $L checkout -q $c
+            git -C $C checkout -q --detach $c
+            r=""
+            # checkpatch --strict on the patch (the placeholder message and the missing
+            # Signed-off-by are expected here).
+            # The trace header's TRACE_EVENT() layout and the golden's data aren't C style.
+            git -C $L format-patch -1 --stdout $c -- . ':!drivers/gpu/drm/powervr_sgx/pvrsgx_trace.h' \
+              ':!drivers/gpu/drm/powervr_sgx/tests/*.txt' > p.patch
+            perl $L/scripts/checkpatch.pl --strict --terse --no-signoff --ignore FILE_PATH_CHANGES p.patch > cp.log 2>&1
+            grep -E ': (ERROR|WARNING|CHECK):' cp.log > cp.bad || true
+            [ -s cp.bad ] && r="$r checkpatch"
+            # kernel-doc on the files it adds or changes.
+            files=$(git -C $L diff-tree --no-commit-id --name-only -r $c | grep -E '^(drivers/gpu/drm/(powervr_sgx|gma500)/.*\.[ch]|include/uapi/drm/powervr_sgx_drm\.h)$' | grep -v _trace.h || true)
+            # New warnings only: gma500's files have some already. Line numbers dropped.
+            if [ -n "$files" ]; then
+              kd() { (cd $L && python3 scripts/kernel-doc -none -Wall $(for f in $files; do [ -f $f ] && echo $f; done) 2>&1 |
+                      sed -E 's/:[0-9]+ / /' | sort -u); }
+              git -C $L checkout -q $c^
+              kd > kd.before
+              git -C $L checkout -q $c
+              kd > kd.after
+              comm -13 kd.before kd.after | grep -v 'warnings as errors' > kd.log
+              [ -s kd.log ] && r="$r kernel-doc"
+            fi
+            # Build what exists at this patch.
+            T="drivers/gpu/drm/drm_gem_shmem_helper.o drivers/gpu/drm/gma500/"
+            [ -f $L/drivers/gpu/drm/powervr_sgx/Makefile ] && T="$T drivers/gpu/drm/powervr_sgx/"
+            cp tip.config $L/.config
+            make -C $L ARCH=x86_64 olddefconfig >/dev/null 2>&1
+            make -C $L ARCH=x86_64 CC="ccache gcc" -j"$(nproc)" W=1 $T > gcc.log 2>&1 || r="$r gcc-build"
+            grep -E '(powervr_sgx|gma500|drm_gem_shmem_helper)[^ ]*:[0-9]+:[0-9]+: (warning|error):' gcc.log > gcc.bad || true
+            [ -s gcc.bad ] && r="$r gcc-W=1"
+            make -C $L ARCH=x86_64 CC="ccache gcc" -j"$(nproc)" C=2 $T > sparse.log 2>&1 || r="$r sparse-build"
+            grep -E '(powervr_sgx|gma500)/[^ ]*:[0-9]+:[0-9]+: (warning|error):' sparse.log > sparse.bad || true
+            [ -s sparse.bad ] && r="$r sparse"
+            if [ -f $L/drivers/gpu/drm/powervr_sgx/Makefile ]; then
+              make -C $L ARCH=x86_64 -j"$(nproc)" C=2 CHECK="$PWD/smatch/smatch -p=kernel" \
+                drivers/gpu/drm/powervr_sgx/ > smatch.log 2>&1 || r="$r smatch-build"
+              grep -E 'powervr_sgx/[^ ]*:[0-9]+ [^ ]+ (warn|error):' smatch.log > smatch.bad || true
+              [ -s smatch.bad ] && r="$r smatch"
+            fi
+            cp tip.config $C/.config
+            make -C $C ARCH=x86_64 LLVM=1 olddefconfig >/dev/null 2>&1
+            make -C $C ARCH=x86_64 LLVM=1 -j"$(nproc)" W=1 $T > clang.log 2>&1 || r="$r clang-build"
+            grep -E '(powervr_sgx|gma500|drm_gem_shmem_helper)[^ ]*:[0-9]+:[0-9]+: (warning|error):' clang.log > clang.bad || true
+            [ -s clang.bad ] && r="$r clang-W=1"
+            if [ -n "$r" ]; then
+              fail=1
+              echo "FAIL $n $s:$r"
+              for f in cp.bad kd.log gcc.bad sparse.bad smatch.bad clang.bad; do
+                [ -s $f ] && { echo "--- $f"; head -40 $f; }
+              done
+              case "$r" in *build*) tail -40 gcc.log; tail -20 clang.log ;; esac
+            else
+              echo "ok   $n $s"
+            fi
+          done
+          exit $fail

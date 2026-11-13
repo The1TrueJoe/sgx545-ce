@@ -10,31 +10,64 @@
 struct pvrsgx_cmd_core;
 
 /*
- * Core features, as the SGX_FEATURE_* names of the GPL DDK's
- * sgxfeaturedefs.h. Only those the driver's design depends on are listed.
+ * Core features, as the SGX_FEATURE_* names of the GPL sgxfeaturedefs.h.
+ * Only those the driver's design depends on are listed.
  */
 /* One page directory per client: BIF directory lists beyond list 0. */
 #define PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS	BIT(0)
 /* EUR_CR_EVENT_KICK1..3 next to EUR_CR_EVENT_KICK. */
 #define PVRSGX_FEATURE_MULTI_EVENT_KICK		BIT(1)
+/* The PDS data store interleaves DS0 and DS1 two words at a time. */
+#define PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS	BIT(2)
+/*
+ * The EDM reaches PDS code anywhere. Without it, the kernel code and PDS
+ * vertex heaps lie within 64 MiB above the PDS pixel heap (PDS_EXEC_BASE):
+ * the GPL sgxconfig.h refuses any other layout.
+ */
+#define PVRSGX_FEATURE_EDM_VERTEX_PDSADDR_FULL_RANGE	BIT(3)
+
+/* Errata the kernel works around (the GPL headers' FIX_HW_BRN_*). */
+/* A BIF directory or table invalidate and a data invalidate never in one command. */
+#define PVRSGX_QUIRK_BRN_28889			BIT(0)
 
 /* The USSE instruction set, for the shader validator's tables. */
 enum pvrsgx_isa {
 	PVRSGX_ISA_SGX545,
 };
 
-/* What this driver needs: a directory per VM, and the second kick for the microkernel's start. */
-#define PVRSGX_FEATURES_REQUIRED \
-	(PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS | PVRSGX_FEATURE_MULTI_EVENT_KICK)
+/* A device-virtual range, [base, end). */
+struct pvrsgx_va_range {
+	u64 base;
+	u64 end;
+};
 
-/* The device-virtual layout (pvrsgx_fw.h) needs a 32-bit address space. */
-#define PVRSGX_VA_BITS_REQUIRED	32
+/*
+ * struct pvrsgx_heap_layout - Where every heap sits
+ *
+ * Device-wide, the same in every VM. The kernel heaps (kernel code, kernel
+ * data, sync) are whole 4 MiB directory entries.
+ */
+struct pvrsgx_heap_layout {
+	struct pvrsgx_va_range params_3d;
+	struct pvrsgx_va_range ta_data;
+	struct pvrsgx_va_range sync;
+	struct pvrsgx_va_range pds_pixel;
+	struct pvrsgx_va_range kernel_code;
+	struct pvrsgx_va_range pds_vertex;
+	struct pvrsgx_va_range kernel_data;
+	struct pvrsgx_va_range usse_pixel;
+	struct pvrsgx_va_range usse_vertex;
+	struct pvrsgx_va_range general;
+	struct pvrsgx_va_range texture;
+	/* The largest PB, in pages, the 3D parameters heap holds. */
+	u32 pb_max_pages;
+};
 
 /*
  * struct pvrsgx_core_regs - Registers that move or change between SGX5xx cores
  *
  * The other registers in pvrsgx_regs.h sit at the same offsets with the same
- * fields on SGX535, 540, 544 and 545 (the GPL DDK's sgx5xxdefs.h). A register
+ * fields on SGX535, 540, 544 and 545 (the GPL sgx5xxdefs.h). A register
  * a core lacks is 0.
  */
 struct pvrsgx_core_regs {
@@ -54,6 +87,12 @@ struct pvrsgx_core_regs {
 	u32 pds_exec_base;
 	u32 bif_int_stat_fault_req;
 	u32 bif_int_stat_fault_type;
+	u32 bif_fault_addr;		/* BIF_FAULT's address field */
+	u32 bif_bank_set;
+	u32 bif_bank0;
+	u32 use_code_base_dm_shift;	/* USE_CODE_BASE's data-master field */
+	u32 use_code_base_addr_shift;	/* USE_CODE_BASE's address unit, log2 bytes */
+	u32 cr_b30;			/* unnamed, 0x100 at start on the SGX545 */
 	/* Not in the GPL header (pvrsgx_hw.h). */
 	u32 event_pds_enable;
 	u32 event_pds_enable_all;
@@ -64,7 +103,7 @@ struct pvrsgx_core_regs {
 	u32 edm_task_reg1;
 };
 
-/* One write of the vendor init script. */
+/* One write of a core's init script. */
 struct pvrsgx_core_init_reg {
 	u16 reg;
 	u32 val;
@@ -93,6 +132,23 @@ struct pvrsgx_core_family {
 	u32 num_dir_lists;
 	/** @va_bits: Device-virtual address bits (SGX_FEATURE_ADDRESS_SPACE_SIZE). */
 	u32 va_bits;
+	/** @heaps: The device-virtual layout, within @va_bits. */
+	const struct pvrsgx_heap_layout *heaps;
+	/** @quirks: PVRSGX_QUIRK_*. */
+	u32 quirks;
+	/**
+	 * @event_pds_guessed: The event PDS registers are a guess, not yet
+	 * confirmed on this core: refuse to kick if the program address
+	 * doesn't read back.
+	 */
+	bool event_pds_guessed;
+	/**
+	 * @data_no_edmprotect: Map the kernel data arena without EDMPROTECT. A
+	 * bring-up stopgap for the SGX530, whose microkernel task's stores to an
+	 * EDMPROTECT page fault. It runs only with allow_unisolated, which
+	 * already gives up client isolation on such a core.
+	 */
+	bool data_no_edmprotect;
 	/** @cmds: What its client commands are checked against (pvrsgx_cmd_defs.c). */
 	const struct pvrsgx_cmd_core *cmds;
 	/** @init_regs: Init script part 2's register writes, in order. */
@@ -121,7 +177,19 @@ struct pvrsgx_core_info {
 	const char *fw_name;
 };
 
+/*
+ * One memory context: the microkernel, TA, 3D and 2D all translate through
+ * directory list 0, so the firmware heaps are in every VM's directory.
+ */
+static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f)
+{
+	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
+}
+
+extern bool pvrsgx_allow_unisolated;
+
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);
+bool pvrsgx_core_family_usable(const struct pvrsgx_core_family *f);
 const struct pvrsgx_core_info *pvrsgx_core_lookup(const struct pvrsgx_core_family *family,
 						  u32 core_id, u32 core_rev);
 

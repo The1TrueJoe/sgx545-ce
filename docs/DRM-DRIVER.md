@@ -248,8 +248,10 @@ faults.
    in the kernel. While a VM maps the object, an upload may only write past the end of
    every earlier one (`-EBUSY` otherwise), so code the GPU may be running never
    changes; the new bytes were zeros, which decode as a harmless `fmad`. Once no VM
-   maps it, anywhere again. Uploads and `VM_MAP` serialize on the object's reservation
-   lock.
+   maps it and the unmaps have let go of it, anywhere again: an unmap holds the object
+   (`pvrsgx_bo.code_unmapping`) until the jobs before it are done and, if the VM ran
+   one since the GPU started, the BIF invalidate has run. Uploads and `VM_MAP`
+   serialize on the object's reservation lock.
 2. `VM_MAP` into a USSE heap accepts only code objects, and a code object maps only into
    a USSE heap (`pvrsgx_validate_vm_map`).
 3. Validation scans every 8-byte word of the upload, not just the paths a program's

@@ -2,7 +2,7 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * The cross-field rules of the client commands (docs/UAPI.md section 3), run
+ * The cross-field rules of the client commands, run
  * after pvrsgx_cmd_check() has checked each field on its own.
  */
 
@@ -11,11 +11,11 @@
 
 #include "pvrsgx_cmd_checks.h"
 
-/* SGX545 ZLS control bits that use the stencil address (UAPI.md 3.3). */
+/* SGX545 ZLS control bits that use the stencil address. */
 #define ZLS_STENCIL_BITS 0x3U
 /* SGX545 3D flags bit that uses the stencil address. */
 #define FLAGS_3D_STENCIL BIT(8)
-/* ZLS addresses are offsets from a 1 MiB-aligned base; the limit is a guess (G13). */
+/* ZLS addresses are offsets from a 1 MiB-aligned base; the 1 GiB limit is assumed. */
 #define ZLS_BASE_MASK 0xfff00000U
 #define ZLS_OFFSET_LIMIT_LOG2 30
 

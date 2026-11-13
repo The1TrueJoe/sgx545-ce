@@ -2,8 +2,8 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * Client commands: the copy from userspace and the per-field checks
- * (docs/uapi/rev3-commands.md sections 3 and 4). The per-command cross-field
+ * Client commands: the copy from userspace and the per-field checks, from
+ * the per-core tables in pvrsgx_cmd_defs.c. The per-command cross-field
  * rules are in pvrsgx_cmd_checks.c.
  */
 
@@ -99,7 +99,7 @@ int pvrsgx_cmd_take_elem(const struct pvrsgx_cmd_def *def, const void *elem, u32
 	return take_exts(def, head->extensions, all, present);
 }
 
-static u64 field_get(const u8 *all, const struct pvrsgx_cmd_field *f)
+static u64 cmd_field_get(const u8 *all, const struct pvrsgx_cmd_field *f)
 {
 	u64 v = 0;
 
@@ -144,7 +144,7 @@ static int check_fields(const struct pvrsgx_cmd_core *core, const struct pvrsgx_
 			u32 n, const struct pvrsgx_cmd_ctx *ctx, const u8 *all)
 {
 	for (u32 i = 0; i < n; i++) {
-		int err = check_field(core, &fields[i], ctx, field_get(all, &fields[i]));
+		int err = check_field(core, &fields[i], ctx, cmd_field_get(all, &fields[i]));
 
 		if (err)
 			return err;
@@ -181,7 +181,7 @@ static int mapped_fields(const struct pvrsgx_cmd_core *core, const struct pvrsgx
 
 		if (f->check != PVRSGX_CMD_CHECK_ADDR || !f->extent)
 			continue;
-		addr = field_get(all, f);
+		addr = cmd_field_get(all, f);
 		if (!addr)
 			continue;	/* an optional address left out */
 		switch (f->extent) {

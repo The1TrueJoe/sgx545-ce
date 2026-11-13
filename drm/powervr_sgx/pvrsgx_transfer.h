@@ -20,6 +20,8 @@ struct seq_buf;
 struct pvrsgx_transfer_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *done;
 	u32 ccb_woff;
+	/* A command for it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 struct pvrsgx_transfer_job {
