@@ -61,6 +61,11 @@ static void dump_render(unsigned f)
  * tailptr are the "did the TA emit tiles" signal. */
 static void dump_bo(const char *name, const struct sgx_bo *b, uint32_t words)
 {
+	/* Kernel-owned structures (e.g. region headers) are not client-mapped. */
+	if (!b->map) {
+		printf("%s @ 0x%08x: <not client-mapped>\n", name, b->va);
+		return;
+	}
 	printf("%s @ 0x%08x:", name, b->va);
 	for (uint32_t i = 0; i < words; i++)
 		printf("%s%08x", i % 8 ? " " : "\n  ", b->map[i]);
