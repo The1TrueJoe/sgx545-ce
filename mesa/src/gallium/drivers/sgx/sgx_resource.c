@@ -800,6 +800,7 @@ zls_sync_for_map(struct sgx_context *ctx, struct sgx_resource *res)
    simple_mtx_unlock(&screen->lock);
    zls_read(res);
    res->zls_stored = false;
+   res->zls_unsampled = res->texture;
 }
 
 static void *
@@ -1072,16 +1073,18 @@ tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level,
 
 /* A depth texture a render stored into: the depth is in its ZLS buffer
  * only, so before a draw samples it, the ZLS buffer is read into the CPU
- * copy and level 0's sampled copy is rewritten from it (fbo-depthtex). */
+ * copy and level 0's sampled copy is rewritten from it (fbo-depthtex), also
+ * when a map (glReadPixels) already brought the CPU copy up. */
 void
 sgx_resource_zls_for_sampling(struct sgx_context *ctx, struct sgx_resource *res)
 {
-   if (!res->zls_stored || !res->zls.map || !res->data || !res->zls_w ||
-       !sgx_tex_depth(res->base.format) ||
+   if (!(res->zls_stored || res->zls_unsampled) || !res->zls.map ||
+       !res->data || !res->zls_w || !sgx_tex_depth(res->base.format) ||
        res->base.target != PIPE_TEXTURE_2D || res->base.array_size > 1)
       return;
    zls_sync_for_map(ctx, res);
    tex_write(ctx, res, 0, 0, 0, 0, ~0u, ~0u);
+   res->zls_unsampled = false;
 }
 
 bool

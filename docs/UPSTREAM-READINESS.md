@@ -204,7 +204,9 @@ Write it for Mesa's docs tree. It covers:
   advertises EXT_provoking_vertex (GL_FIRST_VERTEX_CONVENTION is ignored
   until a provoking-vertex field is found, or the draw rotates each
   primitive's indices); depth textures are compared on the nearest
-  texel only (the F32 depth isn't filtered) and aren't rendered into;
+  texel only (the F32 depth isn't filtered); a depth texture rendered
+  into keeps its depth in the ZLS buffer, decoded on the CPU into the
+  texture before it is sampled or mapped (level 0 only);
 - how to run the tests.
 
 ### M9. Build inputs from `tools/`
