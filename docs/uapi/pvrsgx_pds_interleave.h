@@ -44,7 +44,8 @@ static inline unsigned int pvrsgx_pds_ds_word(unsigned int reg, int interleave_2
 }
 
 /* 16-byte data rows a program of @n0 DS0 words and @n1 DS1 words occupies. */
-static inline unsigned int pvrsgx_pds_ds_rows(unsigned int n0, unsigned int n1, int interleave_2dwords)
+static inline unsigned int pvrsgx_pds_ds_rows(unsigned int n0, unsigned int n1,
+					      int interleave_2dwords)
 {
 	unsigned int n = n0 > n1 ? n0 : n1;
 

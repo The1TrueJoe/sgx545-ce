@@ -87,10 +87,13 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		 * init/event entry at offset 0.
 		 */
 		p = pvrsgx_pds_prog(sdev, b, 12);
-		/* The 8-word interleave (not a 2-dword core): DS1[0] lands at word 8. */
-		p.w[pvrsgx_pds_ds_word(PDS_D0(0), 0)] = 0x0020000f;	/* DS0[0]: code base 15, bit 21, no temps */
-		p.w[pvrsgx_pds_ds_word(PDS_D0(1), 0)] = 0x04000000;	/* DS0[1] */
-		p.w[pvrsgx_pds_ds_word(PDS_D1(0), 0)] = 0x00000001;	/* DS1[0]: DOUTU word 2 */
+		/*
+		 * 8-word interleave (not a 2-dword core): DS0[0] = code base 15 |
+		 * bit 21, DS0[1], DS1[0] = DOUTU word 2. DS1[0] lands at word 8.
+		 */
+		p.w[pvrsgx_pds_ds_word(PDS_D0(0), 0)] = 0x0020000f;
+		p.w[pvrsgx_pds_ds_word(PDS_D0(1), 0)] = 0x04000000;
+		p.w[pvrsgx_pds_ds_word(PDS_D1(0), 0)] = 0x00000001;
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
 		pvrsgx_pds_halt(&p);
 		return;
