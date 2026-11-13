@@ -27,6 +27,8 @@ on:
       - tools/gen/sgxgen.*
       - tools/tex/sgxtex.*
       - mesa/src/sgx/isa/sgx.xml
+      - tools/isa/asm.py
+      - tools/gen/mkusse.py
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
@@ -60,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse qemu-system-x86
+            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse qemu-system-x86 python3-mako
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -130,6 +132,12 @@ jobs:
           ./tools/testing/kunit/kunit.py run --arch=x86_64 --jobs "$(nproc)" \
             --make_options "CC=ccache gcc" \
             --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig
+
+      - name: sgx-asm, from sgx.xml (tools/gen/mkusse.py assembles with it)
+        run: |
+          set -eux
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
 
       - name: uAPI tests (static, musl)
         run: |
