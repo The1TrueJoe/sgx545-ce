@@ -609,9 +609,7 @@ Still open, in order:
   (`fs->sec`), so the work is the compiler's: the preamble as a second program sharing
   the main one's constant layout. The driver's contract for it (mesa-gallium,
   `fs_uniform_sec` in `tools/gen/mkusse.py`, DOUTU'd from the per-draw secondary task):
-  the DDK's prologue (`phas.i #0, #0 [wait=7]`, `nop [nosched]`,
-  `test.and.ne p0, #0, #0`, `(p0) ld.a.d pa0, pa0, #0 [moe]`, `wdf`, which waits for the
-  constant DMA); the constants are the task's pa registers (the main program's `sa<n>` is
+  a prologue that waits for the constant DMA (ISA.md); the constants are the task's pa registers (the main program's `sa<n>` is
   its `pa<n>`), so results go to `pa<slot>`; the last instruction carries `[end]`;
   temporaries are its own r0.., sized by `sec_temps`. `struct sgx_shader` would carry
   `sec_code`/`n_sec_code`/`sec_temps`, and the slots it writes a const-map format 0x13

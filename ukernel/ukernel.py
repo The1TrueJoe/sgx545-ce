@@ -1916,7 +1916,7 @@ def build(a):
     # mid-scene disturbs the in-flight parameter state (the DDK skips it on the
     # render kick). Done before the TE registers, dpm_load's 0x240 done event
     # never fired and do_ta stalled, so it stays
-    # after them (ddk-ref-frame-registers.txt lines 106-131).
+    # after them (ddk-ref-frame-registers.txt lines 102-127).
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
     a.i("test.and.eq p0, r13, r13")             # render kick? skip DPM state load
     a.i("(p0) ba skip_dpm_load")

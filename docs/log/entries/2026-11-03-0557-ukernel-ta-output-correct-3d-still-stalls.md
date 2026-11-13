@@ -29,8 +29,8 @@ Repeat it from a clean cold boot.
 ## Next: the do_ta cmd->rd copy block (ta3d-state item 1)
 
 ta3d-state's kdiff (every microkernel memory store, ours vs the DDK on base4.bin,
-scratchpad kdiff.py) found the DDK runs a routine at pc 0x07b1-0x07fb on EVERY TA
-kick (in do_ta, called from 0x0851/0x0aae) that copies TA-command words into the
+scratchpad kdiff.py) found the DDK runs a routine on EVERY TA
+kick that copies TA-command words into the
 render details, which OURS skips entirely:
   rd+0xd4 = cmd+0x1c; rd+0xe4/0xe8/0xec/0xf0 = cmd+0x74/0x78/0x7c/0x80; rd+0xe0 =
   cmd+0x3c; rd+0x130/0x134/0x138 = cmd+0x08/0x0c/0x10; rd+0x140 = cmd+0x20 (and

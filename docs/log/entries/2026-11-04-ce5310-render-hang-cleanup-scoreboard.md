@@ -9,8 +9,8 @@ the one open sub-problem, so the fix can start from facts.
 
 The 10 frame-dumps are separate PROCESSES, each a fresh surface. On exit, RESMAN sends
 cleanup commands (render context, PB, ...). The DDK's cleanup handler DEFERS while that
-context's render is still in flight (ta3d-state, DDK pc 0x039d: defer while
-ctx+0x20|ctx+0x28|ctx+0x14 != 0; PB cleanup pc 0x0475 clears its loaded-PB markers). Ours
+context's render is still in flight (ta3d-state, DDK: defer while
+ctx+0x20|ctx+0x28|ctx+0x14 != 0; its PB cleanup clears its loaded-PB markers). Ours
 set ui32CleanupStatus COMPLETE immediately. So the host freed process N's PB/RT while the
 3D and its DPM page-free were still using them, and process N+1's do_ta free-list reload
 hit the freed pages → BIF fault.
@@ -224,8 +224,8 @@ register transition streams diverge exactly where ta3d-state's parked lead said:
   timer (0x20000000) with render bits layered on; EVENT_STATUS2 = 0x400 persistently on
   the DDK, 0 on ours.
 
-NEXT SINGLE CHANGE: add the DDK's DPM state-load/reset on the kick (0x0a0b) + 3D-start
-(0x1181) path -- write 4 to 0x694/0x698 and wait for load-done -- so the DPM counters
+NEXT SINGLE CHANGE: add the DDK's DPM state-load/reset on the kick and 3D-start
+path -- write 4 to 0x694/0x698 and wait for load-done -- so the DPM counters
 reset between renders instead of accumulating. Awaiting ta3d-state's exact sequence (asked)
 to implement; the A/B has already confirmed the direction. m2 has the box for its first
 powervr_sgx boot meanwhile; I take it back after for this test.
