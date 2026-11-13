@@ -1088,7 +1088,10 @@ and the pbuffers (mode 0); hardware, open driver]:
     [capture]. Its starting value doesn't matter to the microkernel: the DDK
     client writes 1, the open clients and powervr_sgx write 0, and both
     render [hardware]. The DDK's debug output calls it "RT frames";
-  - [2] = padded tiles in X (mx·4 = 0x20);
+  - [2] = padded tiles in X = `mx · (macrotiles across)`, i.e. `mx·2` in
+    macrotile mode 0 and `mx·4` in mode 1 (0x20 at 720×480 mode 1 mx=8; 0x8
+    at 64×64 mode 0 mx=4) [capture (720×480); hardware-free second data point
+    (64×64 frame-fake, `frame64.trace`, 2026-11-13)];
   - [5] = nbuf.
 - **Per entry (0x38 bytes from +0x18):**
 
@@ -1103,7 +1106,7 @@ and the pbuffers (mode 0); hardware, open driver]:
   | 6 | 0x40-byte TA-data block |
   | 7 | 0x50-byte TA-data block |
   | 8 | tail pointer array |
-  | 9 | its size |
+  | 9 | its size = `(padded tiles X)·(padded tiles Y)·4` (one 4-byte pointer per padded tile): 0x1000 at 720×480, 0x100 at 64×64 |
   | 10 | number of RTs |
   | 11 | |
   | 12 | 4-byte kdata word |
@@ -1135,8 +1138,11 @@ and the pbuffers (mode 0); hardware, open driver]:
   0x20003000) of `(32·32 padded tiles) × 12 bytes = 0x3000`.
   - Render details +0x20 is the one this render uses and +0x28 the next.
   - The tail's +0x258 names the TA's.
-- **Tail pointers:** one array of `max(mx,my)² × 4` bytes rounded to a
-  power of two = 0x1000.
+- **Tail pointers:** one 4-byte pointer per padded tile, so
+  `(padded tiles X)·(padded tiles Y)·4` bytes (= RT-data entry word 9):
+  0x1000 at 720×480 (32×32 padded tiles), 0x100 at 64×64 (8×8). The earlier
+  `max(mx,my)²·4` reading held only for the one 720×480 capture and is
+  superseded by the 64×64 frame-fake data point (`frame64.trace`, 2026-11-13).
 - **The TA writes both.** The client allocates them zeroed and never writes
   them. After kick 2 a region header reads `00000000 00001000 00000000`
   (offset of that tile's control stream in the PB, 0x80 apart), and the
