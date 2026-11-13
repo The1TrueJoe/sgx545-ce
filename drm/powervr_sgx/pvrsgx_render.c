@@ -121,6 +121,11 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 	err = pvrsgx_kobj_new(sdev, &pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, NULL);
 	if (err)
 		goto fail;
+	/* The DPM numbers PB pages from the heap's base: anywhere else hangs it. */
+	if (kobj_va(pb->buf) != pvrsgx_heaps(sdev)->params_3d.base) {
+		err = -EBUSY;
+		goto fail;
+	}
 	pb->base = kobj_va(pb->buf) & 0xfff00000;
 	err = pvrsgx_kobj_new(sdev, &pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base,
 			      NULL);
@@ -138,7 +143,12 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 	return pb;
 
 fail:
-	pvrsgx_pb_put(pb);
+	/* Never sent to the GPU: freed now, so a retry gets the heap's base again. */
+	pvrsgx_kobj_free_unused(sdev, &pb->blocks);
+	pvrsgx_kobj_free_unused(sdev, &pb->desc);
+	pvrsgx_kobj_free_unused(sdev, &pb->freelist);
+	pvrsgx_kobj_free_unused(sdev, &pb->buf);
+	kfree(pb);
 	return ERR_PTR(err);
 }
 

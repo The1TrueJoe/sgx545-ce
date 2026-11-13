@@ -151,6 +151,19 @@ static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 	pvrsgx_vm_put(vm);
 }
 
+/*
+ * An object no command has named: the GPU never walked to it, so it goes now,
+ * without the graveyard's wait for a render and an invalidate.
+ */
+void pvrsgx_kobj_free_unused(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
+{
+	if (IS_ERR_OR_NULL(*o))
+		return;
+	kobj_unmap(*o);
+	kobj_free(sdev, *o);
+	*o = NULL;
+}
+
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 {
 	if (IS_ERR_OR_NULL(o))

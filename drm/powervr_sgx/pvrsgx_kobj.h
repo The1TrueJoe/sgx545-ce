@@ -60,6 +60,7 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev);
 struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_krange range,
 				       u32 size, u32 min_addr, struct pvrsgx_vm *vm);
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o);
+void pvrsgx_kobj_free_unused(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
 void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
 
 /* Objects and pages waiting in the graveyard, and unmapped ones waiting for the invalidate. */
