@@ -339,18 +339,6 @@ emit(struct sgx_ctx *c, struct sgx_ins *i)
    return i;
 }
 
-/* a constant read at a lane (pck .l<n>): the value from that byte up, at
- * lane 0, since its register (hw constant, literal, limm) is chosen by value */
-static struct sgx_ref
-k_lane(struct sgx_ref r)
-{
-   if (r.lane) {
-      r.n >>= 8 * r.lane;
-      r.lane = 0;
-   }
-   return r;
-}
-
 /* a copy of src (rpt iterations, stepping if src steps) into a new vreg */
 static struct sgx_ref
 materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src,
@@ -362,7 +350,6 @@ materialize(struct sgx_ctx *c, struct sgx_ins *at, struct sgx_ref src,
    if (src.file == SGX_F_K) {
       /* one limm per component (a stepping constant only has 0.0 / 1.0) */
       assert(n == 1 || !src.step);
-      src = k_lane(src);
       m = ins_alloc(c, SGX_INS_ALU, SGX_OP_LIMM);
       m->nops = 2;
       m->op[0] = vref(v, 0);
@@ -419,7 +406,6 @@ legalize(struct sgx_ctx *c, struct sgx_ins *i)
          continue;
       }
       if (r->file == SGX_F_K) {
-         *r = k_lane(*r);
          const struct sgx_slot *s = slot_of(i->form, k);
          int h = hw_const(r->n);
          bool negok = s && s->neg;
@@ -2064,17 +2050,28 @@ emit_fmad(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a,
    emit_runs(c, SGX_OP_FMAD, 1, dd, 3, ss, &NOF, 0);
 }
 
+/* a 32-bit value's 16-bit half for a pck source: .l2 of a register, a
+ * constant's own top bits (a constant is placed by value, not by lane) */
+static struct sgx_ref
+half16(struct sgx_ref x, bool hi)
+{
+   if (x.file == SGX_F_K)
+      return ref(SGX_F_K, hi ? x.n >> 16 : x.n & 0xffff);
+   if (hi)
+      x.lane = 2;
+   return x;
+}
+
 /* float(i): the high half (signed or not) * 65536 + the low half, each
  * converted exactly, so the one rounding is the fmad's */
 static void
 emit_i2f(struct sgx_ctx *c, struct sgx_ref d, struct sgx_ref a, bool sgn)
 {
    struct sgx_ref h = vref(new_vreg(c, 1), 0), l = vref(new_vreg(c, 1), 0);
-   struct sgx_ref ah = a;
-   ah.lane = 2;
-   emit_pck(c, sgn ? SGX_OP_PCK_F32_S16 : SGX_OP_PCK_F32_U16, h, ah,
-            ref(SGX_F_IMM, 0), &NOF);
-   emit_pck(c, SGX_OP_PCK_F32_U16, l, a, ref(SGX_F_IMM, 0), &NOF);
+   emit_pck(c, sgn ? SGX_OP_PCK_F32_S16 : SGX_OP_PCK_F32_U16, h,
+            half16(a, true), ref(SGX_F_IMM, 0), &NOF);
+   emit_pck(c, SGX_OP_PCK_F32_U16, l, half16(a, false), ref(SGX_F_IMM, 0),
+            &NOF);
    emit_fmad(c, d, h, ref(SGX_F_K, 0x47800000), l);
 }
 
@@ -3533,11 +3530,9 @@ emit_intrinsic(struct sgx_ctx *c, nir_intrinsic_instr *in)
          int h = c->out_hi[slot * 4 + k];
          if (h >= 0) {
             /* an integer varying: its 16-bit halves, as floats */
-            struct sgx_ref xh = x;
-            xh.lane = 2;
-            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, r), x,
+            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, r), half16(x, false),
                      ref(SGX_F_IMM, 0), &NOF);
-            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, h), xh,
+            emit_pck(c, SGX_OP_PCK_F32_U16, ref(SGX_F_O, h), half16(x, true),
                      ref(SGX_F_IMM, 0), &NOF);
             continue;
          }
