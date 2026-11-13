@@ -485,6 +485,46 @@ expanded_vertex(enum mesa_prim mode, unsigned i, unsigned out_count)
    }
 }
 
+/* An indexed draw's n indices as 16-bit offsets from the lowest, and the
+ * lowest and highest with the bias (false when they span 64K or more): one
+ * pass for the range and one to rebase, each for the one index size */
+#define REBASE(T)                                                              \
+   do {                                                                        \
+      const T *s = (const T *)indices + draw->start;                           \
+      for (unsigned i = 0; i < n; i++) {                                       \
+         rmin = MIN2(rmin, s[i]);                                              \
+         rmax = MAX2(rmax, s[i]);                                              \
+      }                                                                        \
+      if (rmax - rmin >= 65536)                                                \
+         return false;                                                         \
+      for (unsigned i = 0; i < n; i++)                                         \
+         ix[i] = (uint16_t)(s[i] - rmin);                                      \
+   } while (0)
+
+static bool
+rebase_indices(const struct pipe_draw_info *info, const void *indices,
+               const struct pipe_draw_start_count_bias *draw, unsigned n,
+               uint16_t *ix, unsigned *lo, unsigned *hi)
+{
+   uint32_t rmin = ~0u, rmax = 0;
+
+   switch (info->index_size) {
+   case 1:
+      REBASE(uint8_t);
+      break;
+   case 2:
+      REBASE(uint16_t);
+      break;
+   default:
+      REBASE(uint32_t);
+      break;
+   }
+   *lo = rmin + draw->index_bias;
+   *hi = rmax + draw->index_bias;
+   return true;
+}
+#undef REBASE
+
 /* where one vertex element comes from */
 struct fetch {
    const uint8_t *base;
@@ -1245,7 +1285,11 @@ zc_draw(struct sgx_context *ctx, const struct pipe_draw_info *info,
    if (out_count > SGXWS_MAX_INDICES)
       return false;
    /* the vertices the draw uses: in order, or through 16-bit indices from lo */
-   if (info->index_size || list) {
+   if (info->index_size && !list) {
+      if (!(ix = index_staging(ctx, out_count)) ||
+          !rebase_indices(info, indices, draw, out_count, ix, &lo, &hi))
+         return false;
+   } else if (list) {
       uint32_t *ix32 = staging(ctx, out_count);
 
       if (!ix32 || !(ix = index_staging(ctx, out_count)))
