@@ -1118,6 +1118,7 @@ mem_consts(struct sgx_context *ctx, mesa_shader_stage stage,
    fill_consts(ctx, stage, so, block, base, *buf);
    m->words = *buf;
    m->dwords = so->mem_dwords;
+   STATIC_ASSERT(ARRAY_SIZE(m->base) >= SGX_MAX_MEM_BASES);
    m->n_bases = so->n_mem_bases;
    for (unsigned j = 0; j < so->n_mem_bases; j++)
       m->base[j] = base + so->mem_base_slot[j];

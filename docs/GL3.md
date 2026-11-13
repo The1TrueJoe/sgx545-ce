@@ -615,18 +615,20 @@ Agreed with the compiler (2026-11-11):
   dependent sample at (i + 0.5) / size with its own texture state from the
   driver (NEAREST, no mips, clamp, the level's address), never the bound
   sampler's filter or wrap; the compiler marks those samples.
-- **Driver constants**, above the user constants and the compiler's other
-  numbers (`SGX_MAX_CONST_K` = 1280): 1024 + 3u the base level's width,
-  height and depth of unit u (0-15); 1072 gl_InstanceID; 1080 + n UBO n's
-  GPU address (`ubo_base_k` = 1080, up to 16); 1096 + u unit u's level
-  count (textureQueryLevels); the rest of 1024-1279 reserved. 960 + 4s are the border colors. `SGX_K_TEXSIZE` (1000) and
-  `SGX_K_INSTANCE` (1016) move into the block when the driver takes the
-  compiler's `native_integers`. GL 3.x's 1024 uniform components (256 vec4,
-  265 in a vertex program with st's 9) need user constants up to 1059, so
-  the compiler takes numbers up to 1535 (`SGX_MAX_CONST_K` = 1536) and the
-  block is to move to 1280-1535, the border colors, `SGX_K_TEXSIZE` and
-  `SGX_K_INSTANCE` with it. Under `native_integers` the sizes and
-  gl_InstanceID are raw integers, otherwise floats. The compiler's
+- **Driver constants**, above the user constants and under the compiler's
+  `SGX_MAX_CONST_K` (1536). GL 3.x's 1024 uniform components (256 vec4,
+  265 in a vertex program with st's 9) take user constants up to 1059, so
+  the driver's start at 1280, in the order they had below it:
+  - 1280 + 2u: `SGX_K_TEXSIZE`, unit u's level-0 width and height, floats;
+  - 1296: `SGX_K_INSTANCE`, gl_InstanceID as a float;
+  - 1304 + 3u: unit u's base-level width, height and depth (0-15);
+  - 1352: gl_InstanceID as an integer;
+  - 1360 + n: uniform block n's GPU address (`ubo_base_k`, up to 16);
+  - 1376 + u: unit u's level count (textureQueryLevels).
+  The border colours, when they come, go after these. The uniform limit is
+  256 vec4 with `SGX_DEBUG=glsl130`, 128 without. Under `native_integers`
+  the sizes and gl_InstanceID are raw integers, otherwise floats. The
+  compiler's
   `sgx_lower_tex` runs first (textureGrad, offsets, rect, 1D, texelFetch); a
   texelFetch sample (`sgx_sample_info.fetch`) gets NEAREST, MIPMAP_NEAREST
   and clamp on the bound texture.

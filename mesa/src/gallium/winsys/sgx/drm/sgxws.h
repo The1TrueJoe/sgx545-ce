@@ -299,7 +299,7 @@ struct sgxws_draw {
    struct sgxws_const_mem {
       const uint32_t *words;
       uint32_t dwords; /* 0: none */
-      uint8_t n_bases, base[8];
+      uint8_t n_bases, base[16]; /* the compiler's SGX_MAX_MEM_BASES */
    } vs_mem, fs_mem;
    /* Uniform blocks (the compiler's ld.a.d from a block's address): each
     * copied to frame memory, the copy's address written into the program's
