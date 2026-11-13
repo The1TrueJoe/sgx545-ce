@@ -186,7 +186,7 @@ The variant bits:
 | c | 1 | AND | hardware (the open pixel-event program); capture: masks with 8, 2, 4, 0x100, 0xff8, 0x3ff000 |
 | c | 0 | OR | hardware (the open pixel-event program assembles the EOT word with it); capture |
 | d | 0 | XOR | hardware (the microkernel event entry `pds3`: after `t = x & m`, `x op t` then a test for zero, i.e. "no bits other than m"); capture. That XOR rather than ANDN computes it is a guess |
-| d | 1 | `op0xd.s1` | only `df820070` = in1 op ds1[0] (= 0), then AND 0x100; XOR-like there, NOR/NOT fit too. The open pixel-event program uses it the same way (hardware), which doesn't tell them apart |
+| d | 1 | `op0xd.s1` | seen only as in1 op 0, then AND 0x100, choosing the end-of-tile path when the result is nonzero. On hardware that path must run when in1 b8 is **clear** (the open pixel-event program tests b8 with a plain AND; the other way round draws nothing), so with a zero operand it acts as NOT or NOR, not XOR |
 | 4, 6 | 1 | `op0x4.s1`, `op0x6.s1` | not seen |
 
 - **dst is 7 bits (0–6).** Capture: bits 7–8 are always 0,
