@@ -1,7 +1,11 @@
 # powervr_sgx
 
-> **Working on this repo?** Read [AGENTS.md](AGENTS.md) first: the end goal (upstream Linux, Mesa and
-> linux-firmware support for Cedarview), the standards the work must meet, and the milestones.
+> **Status:** this is an out-of-tree driver, maintained for the people who use it on Cedarview
+> and CE5300 hardware. It was written with heavy use of an AI coding assistant. An RFC for the
+> kernel driver and a draft merge request for the Mesa driver were posted in November 2026; Mesa
+> declined the driver over its AI-generated code and provenance, so I withdrew both, and the
+> driver is not headed upstream. Material derived from the vendor's closed drivers has been
+> removed from the tree.
 
 An open graphics driver stack for the PowerVR **SGX** GPUs. It supports the **SGX545**: the
 GPU in Intel's Cedarview Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the
