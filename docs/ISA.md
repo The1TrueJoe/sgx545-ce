@@ -296,7 +296,7 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
 
 ## Hardware checks (hwt.py, CE5300, 2026-10-28)
 
-    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, EA3SH set; see hwt.py)
+    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, BOARD_SH set; see hwt.py)
 
 Each test is a main pixel program poked into the probe frame's replay (main
 program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN

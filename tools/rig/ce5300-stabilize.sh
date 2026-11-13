@@ -1,10 +1,10 @@
 #!/bin/zsh
-# Reboot the EA1 from its tangled ramboot state back to a clean normal boot and
+# Reboot the CE5310 board from its tangled ramboot state back to a clean normal boot and
 # verify (new boot_id + no ohc.ramboot). Inline-safe: uses sh_word_split so $OPTS
 # expands correctly (unlike bare zsh inline calls).
 setopt sh_word_split
 OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o PreferredAuthentications=password -o PubkeyAuthentication=no"
-H=root@10.0.0.110
+H=root@board
 : "${BOX_PASS:?set BOX_PASS to the board root password}"
 ssh_() { sshpass -p "$BOX_PASS" ssh $OPTS "$H" "$@" 2>&1 | grep -v "Permanently added"; }
 

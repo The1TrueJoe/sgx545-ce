@@ -85,7 +85,7 @@ enum ukfw_patch_value {
 #define UKERNEL_TIMER_HZ	1000
 
 /*
- * Where each buffer lives: the addresses the DDK's allocator gave on an EA3,
+ * Where each buffer lives: the addresses the DDK's allocator gave on a CE5300 board,
  * kept so traces compare one for one with a DDK boot.
  */
 static const struct {
@@ -1443,7 +1443,7 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 		/*
 		 * After a hang the clocks are on and the cores may be busy. After a
 		 * clean stop (runtime suspend) they are gated and quiet already, and
-		 * a register read there froze the EA3 (log 2026-11-03-0630).
+		 * a register read there froze the CE5300 board (log 2026-11-03-0630).
 		 */
 		if (was_powered) {
 			/* What an unload and reload (which recovers) does in between. */

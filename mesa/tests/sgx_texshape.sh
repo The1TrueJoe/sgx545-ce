@@ -1,5 +1,5 @@
 #!/bin/sh
-# texture shapes against the DDK on the EA1: power-of-two textures that aren't
+# texture shapes against the DDK on the CE5310 board: power-of-two textures that aren't
 # square (Minecraft's 64x32 player skin), twiddled, nearest
 cd /tmp/mesa
 printf '#!/bin/sh\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\n' > ddk-probe.sh; chmod +x ddk-probe.sh

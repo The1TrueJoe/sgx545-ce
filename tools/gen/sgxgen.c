@@ -938,7 +938,7 @@ void sgx_ctx_destroy(struct sgx_ctx *c)
 #else
 void sgx_surface_destroy(struct sgx_ctx *c, struct sgx_surface *s)
 {
-	/* SGX_FLUSH_HW_RENDER_TARGET is what the DDK sends here, but on the EA3
+	/* SGX_FLUSH_HW_RENDER_TARGET is what the DDK sends here, but on the CE5300 board
 	 * (srvinit-started microkernel) the cleanup never completes and the GPU
 	 * locks up after it (docs/GEN.md); only on request */
 	int e = getenv("SGXGEN_FLUSH_RT") ? pvr_flush_rt(&c->dev->pvr, s->rtdata.va) : 0;

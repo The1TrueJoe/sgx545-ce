@@ -5,7 +5,7 @@
 // loop, timestamped with rdtsc, and record every TRANSITION (a row only when some
 // register changed). Delta-compression lets a multi-second, multi-frame window fit
 // in a few thousand rows. Read-only; touches only the named registers below, never
-// a sweep (a BAR sweep hung an EA3 -- ce5300-vdc-mmio-hazard).
+// a sweep (a BAR sweep hung a CE5300 board -- ce5300-vdc-mmio-hazard).
 //
 //   regsample <bar0_base_hex> <duration_ms> <out.csv> [stopfile]
 //

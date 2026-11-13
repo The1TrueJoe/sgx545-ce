@@ -11,7 +11,7 @@ and every perf change is measured against them.
 
 ## The suite
 
-`mesa/tests/perf/run-suite.sh old|new` runs on the EA1, after the host has staged:
+`mesa/tests/perf/run-suite.sh old|new` runs on the CE5310 board, after the host has staged:
 - the Debian root and our Mesa (`mesa/tests/x11/README.md`);
 - `/root/m3` (`mc-oldnew.sh`, `x11-up.sh`, `memdump`);
 - the microbenchmark in `/root/perf/bin`;
@@ -63,12 +63,12 @@ in.
 ### Measurements
 
 - **Minecraft, same JVM** (uapi-stream: i386 gl4es + 32-bit Zulu 8 on both
-  GLES2 drivers, EA1 normal boot, medians of 3): DDK 10.7/13.2 FPS
+  GLES2 drivers, CE5310 board normal boot, medians of 3): DDK 10.7/13.2 FPS
   standing/walking, ours 6.6/6.5. The gap is the driver, not the JVM. Ours
   gives the GPU ~300-335 k indices into 195-225 k vertices a frame. The DDK
   has the same 1.5 indices per vertex, batch 16 and vertices-per-task formula
   (ta3d-state's VDM capture), so it doesn't shade fewer duplicates.
-- **perfmicro** (`mesa/tests/perf/sgx_perfmicro.c`, EA1 normal boot, same
+- **perfmicro** (`mesa/tests/perf/sgx_perfmicro.c`, CE5310 board normal boot, same
   source on both; frames a second):
 
 | 1440x960 | DDK | ours | ours/DDK |
@@ -133,9 +133,9 @@ is higher on ours too.
 usse-compiler's speed pass (9ce70e2: items 1 and 2's interim form, a
 uniform colour as one mov from a 0x12 slot and a texel as colour by two
 `pck.u8.u8`, plus 82f3f5c, 1ead616, 64d06e4, 729718d, 60eea0e). Measured on
-the EA3 under the DDK microkernel, with `-c`, 3 s a test, in frames a second.
+the CE5300 board under the DDK microkernel, with `-c`, 3 s a test, in frames a second.
 The baseline is dev without those commits. Its 1440x960 numbers match the
-EA1 table above (fill 187 against 189), so the boards compare.
+CE5310 board table above (fill 187 against 189), so the boards compare.
 
 | test | baseline | the pass | DDK (table above) | ours/DDK now |
 |---|---|---|---|---|
@@ -157,7 +157,7 @@ EA1 table above (fill 187 against 189), so the boards compare.
 
 **The rest of item 2** (13eefef, 89fab5d, with usse-compiler's tex_bgra and
 pds_samples_alone): perfmicro's tex is now the DDK's shape, one pure-sample
-DOUTI and no instruction before the driver's `mov o0, pa0`. On the EA3 it
+DOUTI and no instruction before the driver's `mov o0, pa0`. On the CE5300 board it
 changed nothing: 1440x960 tex 237 → 239 fps, 720x480 836 → 835. So the
 shader is not what limits the micro tests. Over both sizes ours costs
 2.9 ms a megapixel for fill and tex alike (8 layers, hidden surface removal
@@ -166,7 +166,7 @@ tex is faster than its fill. What is left is per pixel and outside the USSE
 (ISP, the tile loop, PBE), to be compared with the DDK's 3D state for the same
 draws.
 
-### Where a Minecraft frame goes (EA1, 2026-11-09)
+### Where a Minecraft frame goes (CE5310 board, 2026-11-09)
 
 uapi-stream's profile of the bench world (720x480, render distance 4,
 standing, 60 s after joining), raw files in
@@ -241,12 +241,12 @@ bucket, and perfmicro verts is 0.46 of the DDK.
 
 ### The vertex path against the DDK (perfmicro verts, 2026-11-09)
 
-ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
+ta3d-state diffed the DDK's and our state for perfmicro's verts test on the CE5300 board
 (the same binary; captures kept outside the repos).
 - **The point size.** st gives every vertex program a point size and we output
   it on triangles: 5 dwords a vertex into the parameter buffer, which the VDM
   rounds up to an 8-dword output area. The DDK's position-only vertex is 4.
-  Fixed in 31f9341 (only points draws keep it). On the EA1 tex went up 11-13%
+  Fixed in 31f9341 (only points draws keep it). On the CE5310 board tex went up 11-13%
   (1440x960 265 → 300 fps), and verts (120 → 121), fill and Minecraft (10.3/10.8
   → 10.6/10.6) didn't move. Full dEQP-GLES2 unchanged.
 - **Matches:** ISPA, region clip, MTE control, W clamp, viewport, TE/tiling
@@ -255,15 +255,15 @@ ta3d-state diffed the DDK's and our state for perfmicro's verts test on the EA3
   65,535: negligible).
 - **The vertex DMA** is 2 dwords on the DDK (the VBO as it is) and 4 on ours
   (gathered and widened to f32 x 4). `SGX_DEBUG=zerocopy` (2 dwords) changes
-  nothing: 110.6 → 108.7 fps on the EA3.
-- **Our frame** on the EA3 (`SGX_DEBUG=stats`, 110 fps, 9 ms): ~2.6 ms of CPU
+  nothing: 110.6 → 108.7 fps on the CE5300 board.
+- **Our frame** on the CE5300 board (`SGX_DEBUG=stats`, 110 fps, 9 ms): ~2.6 ms of CPU
   in the draw (every index read, rebased to 16 bits and copied; the vertices
   gathered), then ~6 ms kick to done. The DDK's whole frame is 4.1 ms. So the
   GPU's vertex work is ~2x the DDK's, with the TA state matching; next are the
   two vertex programs and their DOUTU words (the DDK sets 0x10000 on every
   DOUTU, we never do).
 
-### TA kicks within a frame, and the vertex gap on the EA3 (2026-11-09)
+### TA kicks within a frame, and the vertex gap on the CE5300 board (2026-11-09)
 
 `SGX_TA_SPLIT=n` (0bf22f3, services backend, off by default) kicks the TA
 every n objects. The DDK does the same (ta3d-state: TA flags 0x71/0x60/0x62;
@@ -308,7 +308,7 @@ open: ta3d-state's captures show its 3D renders once every 44 to 566
 ends each frame with a 1-pixel glReadPixels (7884888), which renders on
 both.
 
-EA3, normal boot, the same binary (frames a second; ours/DDK):
+CE5300 board, normal boot, the same binary (frames a second; ours/DDK):
 
 | test | DDK 720x480 | ours | ours, zerocopy | DDK 1440x960 | ours | ours, zerocopy |
 |---|---|---|---|---|---|---|
@@ -336,25 +336,25 @@ EA3, normal boot, the same binary (frames a second; ours/DDK):
   indices as they are, from the index buffer's device copy, with no CPU work
   a draw. Zero-copy is the default on powervr_sgx since dEQP-GLES2 mustpass
   (16,637 pass, 0 new fails, 0 timeouts) and piglit (no new fails) ran clean on
-  the EA1 (7bca567); services keeps it opt-in, `SGX_DEBUG=nozerocopy` turns it
+  the CE5310 board (7bca567); services keeps it opt-in, `SGX_DEBUG=nozerocopy` turns it
   off. Its 79 (214 in a long run) dEQP fails
   depended on test order: a stream uploader writes more into its mapped
   buffer, and the device copy was refreshed only at the unmap, so later
   tests' draws read zeros (fixed 7543399, 0d2b9ec: the copy is refreshed
   for the bytes a draw reads while a write map is open). Under zerocopy all
   214 pass and a 3,898-test subset matches the default path. Left: one
-  chunk (clipping.triangle_vertex.clip_three) made 18 recoveries on the EA3
-  (services); 264/264 and 0 recoveries on the EA1 (powervr_sgx). Minecraft
+  chunk (clipping.triangle_vertex.clip_three) made 18 recoveries on the CE5300 board
+  (services); 264/264 and 0 recoveries on the CE5310 board (powervr_sgx). Minecraft
   gains nothing from zerocopy (10.8 vs 11.0 fps): its geometry is display
   lists, drawn from the vertex cache.
 - Minecraft swaps every frame, so the DDK renders there too: its profile (TA
   ~42 ms, 3D ~26 ms) stays the honest target.
 
-### perfmicro on the open stack (EA1, 2026-11-10)
+### perfmicro on the open stack (CE5310 board, 2026-11-10)
 
-What users run: powervr_sgx and the open microkernel (EA1 normal boot, kernel
+What users run: powervr_sgx and the open microkernel (CE5310 board normal boot, kernel
 7.1.8-m2drm, dev 3329021, default settings: zero-copy off), against the DDK
-on the same EA1 (its own boot). Every frame rendered (a 1-pixel readback);
+on the same CE5310 board (its own boot). Every frame rendered (a 1-pixel readback);
 two rounds each, averaged; frames a second:
 
 | test | DDK 1440x960 | ours | ours/DDK | DDK 720x480 | ours | ours/DDK |
@@ -369,7 +369,7 @@ two rounds each, averaged; frames a second:
   on its fd). tex 0.79-0.87 is what is left to find on the pixel side,
   higher at the small size: a per-frame cost.
 - verts is the CPU index path (every index read and rebased each draw);
-  zero-copy's resident indices take it to ~0.9 on the EA3. Zero-copy
+  zero-copy's resident indices take it to ~0.9 on the CE5300 board. Zero-copy
   becomes the default on powervr_sgx once its full dEQP + piglit run is clean.
 
 ## Shader code against libusc
@@ -587,9 +587,9 @@ c3 2277 / 219.
 Each step has its own `SGX_COMPILER_DEBUG` flag (`notexcolor`, `nopackedcolor`,
 `unrollexits`, `nomaskbool`, `noiftest`) for bisecting a hardware failure.
 `tools/isa/hwt_p13.py` checks the new instructions (`pck.u8.u8` lanes, mask `or` / `and`,
-`test.and.eq`) on a box: all 11 passed on the EA3 (2026-11-09). Full dEQP-GLES2 on the
-EA3 with the whole pass (60eea0e): 16,637 pass, 0 unexpected, 0 wedges.
-On the EA1 (708a02e, uapi-stream, 2026-11-09): the dEQP shaders/fragment_ops/texture.format
+`test.and.eq`) on a box: all 11 passed on the CE5300 board (2026-11-09). Full dEQP-GLES2 on the
+CE5300 board with the whole pass (60eea0e): 16,637 pass, 0 unexpected, 0 wedges.
+On the CE5310 board (708a02e, uapi-stream, 2026-11-09): the dEQP shaders/fragment_ops/texture.format
 subset 11,940 pass with no new failure (`functional.shaders.*` 10,101 with the one expected
 fail); glmark2 720x480 on Xorg/glamor score 51 -> 53 (most scenes 2-5% faster, loop/uniform
 +9%); Minecraft 10.1 / 10.9 -> 10.2 / 11.0 FPS standing / walking, picture unchanged
@@ -597,7 +597,7 @@ fail); glmark2 720x480 on Xorg/glamor score 51 -> 53 (most scenes 2-5% faster, l
 
 efo chaining (3db45e4, libusc's chained `v_mvp`: the next chain's first efo stores the
 previous chain's last lane with `d=i1`): gl4es terrain VS 29 → 26 instructions, glmark2
-slots 1292 → 1242. On the EA1 (uapi-stream, A/B against `noefochain`): the dEQP vertex
+slots 1292 → 1242. On the CE5310 board (uapi-stream, A/B against `noefochain`): the dEQP vertex
 subset (5,357 tests) identical; glmark2 build/texture/shading equal or slightly up
 (score 172 → 173); Minecraft renders correctly.
 
@@ -641,9 +641,9 @@ The stages:
 | irq → done | the interrupt thread finding the job done, imports flushed again |
 | done → finished | the hardware fence's callback signaling drm_sched's finished fence, which userspace waits on |
 
-### Baselines (EA3, 2026-11-08)
+### Baselines (CE5300 board, 2026-11-08)
 
-RAM boot of 46c8212 (ea3-v2). Each job type was traced back to back, so the device
+RAM boot of 46c8212 (ce5300-v2). Each job type was traced back to back, so the device
 stays powered: no runtime-PM resume is in these numbers. A render is the frame
 test's 256x256 clear and triangle, and a blit is the blit test's 64x64 copy. No
 imports are mapped, so no flushes are counted. Medians in microseconds, p90 in
@@ -678,7 +678,7 @@ Trims to consider, with these numbers:
 - `queue → run`: drm_sched's worker wakeup is the largest kernel share. It is
   roughly constant, and only worth attacking if submits ever queue back to back.
 
-## Minecraft's frame on the open stack (EA1, 2026-11-10)
+## Minecraft's frame on the open stack (CE5310 board, 2026-11-10)
 
 Bench world, standing, Xorg + our x11 Mesa, kernel ftrace grouped by render target
 plus a CLKGATESTATUS sampler (per-unit clock busy, about every 18 us).

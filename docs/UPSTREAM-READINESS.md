@@ -131,8 +131,7 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
 ### M5. Comments and naming
 
 - About 50 comments in the driver, winsys and compiler name the boot
-  image's application, the bench box or game titles (the Minecraft overlay,
-  "EA1"). Rewrite each to say what GL usage triggers the behavior and which
+  image's application, the bench box or game titles (the Minecraft overlay, a board name). Rewrite each to say what GL usage triggers the behavior and which
   test covers it (dEQP/piglit name), and move the history to `docs/log`.
 - "as the DDK does" comments: cite the `docs/` section instead
   (DRIVER-UPSTREAM.md §2).
@@ -178,7 +177,7 @@ Each driver opts in with its own `.clang-format`. The PowerVR code
     the way `ci/` dirs of other gallium drivers have them. Mesa CI runs them
     only once a farm has the hardware, but the files go in with the driver.
   - Refresh the expectations from the full runs on mg-perf (2026-11-08,
-    EA3): dEQP 17,165 tests, 0 wedges; piglit in progress.
+    CE5300 board): dEQP 17,165 tests, 0 wedges; piglit in progress.
 
 ### M8. `docs/drivers/sgx.rst`
 
@@ -519,7 +518,7 @@ a PCI function.
 Text that will go upstream names the platform and GPU neutrally: the Intel
 Atom CE5300, the PowerVR SGX545 and the SGX5xx family. The dev-board history
 moves to `docs/log/`. The replacements:
-- the dev-board names (EA1, EA3, HC-800) become "a CE5300 board", or a plain
+- the dev-board names become "a CE5300 board", or a plain
   dated hardware tag;
 - shorthand for our microkernel ("UK", "our µK") becomes "the open microkernel";
 - IP addresses, box workspaces and product names go.
@@ -527,10 +526,10 @@ moves to `docs/log/`. The replacements:
 Long bring-up narratives move to a dated `docs/log/entries/` file, with a
 pointer left in their place.
 
-Box-specific references, counted on 2026-11-08 (and again on 2026-11-11, when the last ones went) by
-`grep -E 'Control4|\bEA[0-9]\b|EA-[0-9]|HC-800|10\.0\.0\.|Bench plug'` plus the
-downstream distribution's name (which must not appear anywhere in this
-repository, 2026-11-08).
+Box-specific references are checked by the `name-guard` CI workflow
+(`.github/workflows/name-guard.yml`); its match pattern lives in the
+`NAME_GUARD_PATTERN` repository variable, so the names are not written into the
+tree. The check must stay at zero.
 The last column is the count of lines naming a branch, commit or log entry.
 
 | doc | box refs | branch/log refs | status | owner |

@@ -55,13 +55,13 @@
 /*
  * Register window.
  *
- * BAR0 on 01:02.0 is 16 MB (0xdc000000-0xdcffffff on a stock EA-3). The SGX
+ * BAR0 on 01:02.0 is 16 MB (0xdc000000-0xdcffffff on a stock CE5300 board). The SGX
  * core registers sit at the very start of it, not at an offset -- this is the
  * one place CE5300 genuinely differs from every other Intel SGX part. On
  * Poulsbo/Moorestown/Cedarview the SGX shares the display BAR and lives at
  * +0x40000 or +0x80000; here it has its own function and starts at zero.
  *
- * Established by disassembling the stock Control4 pvrsrvkm.ko (DDK 1.12,
+ * Established by disassembling the stock vendor pvrsrvkm.ko (DDK 1.12,
  * vermagic 3.12.74): its SysLocateDevices stores the return of
  * OSPCIAddrRangeStart(hSGXPCI, 0) straight into both sRegsSysPBase and
  * sRegsCpuPBase with no add in between, then writes 0x4000 to ui32RegsSize.

@@ -7,7 +7,7 @@
  * Each destination is dumped to <outdir>/<case>.bin for check_blit.py, which
  * predicts every byte.
  *
- *   blitest <outdir>          (tools/tex/build.sh builds it static for the EA3)
+ *   blitest <outdir>          (tools/tex/build.sh builds it static for the CE5300 board)
  *
  * Cases (the source is a fixed pattern, see pattern()):
  *   up      64x64 strided  -> 64x64 twiddled      (texture upload)

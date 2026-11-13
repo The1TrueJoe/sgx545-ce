@@ -2036,7 +2036,7 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 	{
 		0x10100, 0x10101,
 		/*
-		 * EA-3 / Intel CE5310: the silicon is core revision 1.0.14, and the
+		 * Intel CE5310: the silicon is core revision 1.0.14, and the
 		 * only DDK 1.7 userspace that exists for this core -- Intel's
 		 * Cedarview release -- reports itself as 1.0.13. Without this pair
 		 * the check below refuses the combination outright.

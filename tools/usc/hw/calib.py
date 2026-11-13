@@ -1,4 +1,4 @@
-"""Find out, on the EA3, which DDK constant number each uniform component
+"""Find out, on the CE5300 board, which DDK constant number each uniform component
 gets (libglslcompiler chooses them, and keeps the map outside the USP).
 
     python3 -I tools/usc/hw/calib.py SGXC OUTDIR [-k name]

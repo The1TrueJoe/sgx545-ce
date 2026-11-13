@@ -9,7 +9,7 @@ default), documented, and the frame-rate work moves to the GPU work itself.
 ## What the control experiment settled
 
 The vendor DDK firmware (`sgx545-ukernel-1.7.862890.bin`) was loaded under our
-`powervr_sgx` kernel through its DDK-compat path and run on the EA1 at
+`powervr_sgx` kernel through its DDK-compat path and run on the CE5310 board at
 `SGX_SLOTS=4`. It ran `overlap=1` cleanly — ftrace showed `hw job count:2` for
 382 windows, 160 of 265 kicks issued while the previous job was still running,
 zero timeouts, into steady state. So overlap **is** achievable on this

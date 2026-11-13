@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       board:
-        description: CE5300 board (ea1-v1, ea3-v2, ...)
-        default: ea1-v1
+        description: CE5300 board (ce5310-v1, ce5300-v2, ...)
+        default: ce5310-v1
       debug:
         description: Lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (drm/ci/debug.fragment)
         type: boolean
@@ -30,14 +30,14 @@ on:
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
-  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ea1-v1' }}-${{ inputs.debug && 'debug' || 'plain' }}-${{ inputs.linux || 'default' }}
+  group: powervr-sgx-${{ github.ref }}-${{ inputs.board || 'ce5310-v1' }}-${{ inputs.debug && 'debug' || 'plain' }}-${{ inputs.linux || 'default' }}
   cancel-in-progress: true
 
 env:
   LINUX_VERSION: ${{ inputs.linux || '7.3.3' }}
   DIST_REF: main
-  BOARD: ${{ inputs.board || 'ea1-v1' }}
-  SET: ${{ inputs.board || 'ea1-v1' }}${{ inputs.debug && '-debug' || '' }}${{ inputs.linux && format('-linux-{0}', inputs.linux) || '' }}
+  BOARD: ${{ inputs.board || 'ce5310-v1' }}
+  SET: ${{ inputs.board || 'ce5310-v1' }}${{ inputs.debug && '-debug' || '' }}${{ inputs.linux && format('-linux-{0}', inputs.linux) || '' }}
 
 jobs:
   build:

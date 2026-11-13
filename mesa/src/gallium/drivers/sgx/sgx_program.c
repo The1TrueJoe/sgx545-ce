@@ -652,7 +652,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    }
    /* st's fixed-function fragment programs only owe the framebuffer's
     * precision: mediump (texture coordinates stay F32); dEQP-GLES2 mustpass
-    * and piglit unchanged with it and F16 samples (EA1, 2026-11-10) */
+    * and piglit unchanged with it and F16 samples (CE5310 board, 2026-11-10) */
    /* the units sampling 8888 texels get them B, G, R, A ordered
     * (sgx_tex_format): all of them unless the variant says otherwise */
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {

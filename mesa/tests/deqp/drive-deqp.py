@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Run dEQP-GLES2 (or piglit) on an EA from the host, across wedges and power cycles.
 
-    drive-deqp.py sgx|ddk|piglit [--box 10.0.0.110] [--chunk 200] [--filter REGEX] [--max-wedges N]
+    drive-deqp.py sgx|ddk|piglit [--box board] [--chunk 200] [--filter REGEX] [--max-wedges N]
                   [--name NAME] [--caselist FILE]
 
 --name keeps a run apart from the others (its results in run-NAME, its Mesa in
@@ -31,9 +31,9 @@ through piglit-runner, which takes no caselist: each chunk is passed as anchored
 
 Environment:
   RECOVER     shell command that power-cycles the box and returns once it has
-              booted and its GPU is up, e.g. mesa/tests/deqp/recover-ea3.sh;
+              booted and its GPU is up, e.g. mesa/tests/deqp/recover-ce5300.sh;
               "none" (the default) stops the run at the first wedge instead
-  BOX         the box (default 10.0.0.110, the EA1, the GPU box)
+  BOX         the board (the GPU board)
   MESA_DIR    our x86_64 Mesa's lib directory on this machine
   DDK_ROOT    the DDK's i386 root on the box (default /opt/sgx-i386)
   BOX_ENV     more variables for our driver on the box, e.g. "SGX_F16=0"
@@ -86,7 +86,7 @@ class Box:
                                    timeout=timeout)
             except subprocess.TimeoutExpired:
                 return None, b""
-            # a login refused at once (the EA1 does that now and then) is not a wedge
+            # a login refused at once (the board does that now and then) is not a wedge
             if r.returncode != 255 or time.time() - t0 > 15:
                 break
             time.sleep(3)
@@ -368,7 +368,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit("terminated: the lock is let go"))
     ap = argparse.ArgumentParser()
     ap.add_argument("who", choices=["sgx", "ddk", "piglit"])
-    ap.add_argument("--box", default=os.environ.get("BOX", "10.0.0.110"))
+    ap.add_argument("--box", default=os.environ.get("BOX", "board"))
     ap.add_argument("--chunk", type=int, default=200)
     ap.add_argument("--filter", default=None)
     ap.add_argument("--max-wedges", type=int, default=40)
@@ -381,7 +381,7 @@ def main():
     ap.add_argument("--copy-only", action="store_true", help="copy the payload and stop (no GPU work)")
     ap.add_argument("--boot", choices=["normal", "ramboot"], default="normal",
                     help="the boot a slice runs on: p1's, or a RAM boot the runner marked with "
-                         + RAMBOOT_MARK + " (the EA3's)")
+                         + RAMBOOT_MARK + " (the board's)")
     ap.add_argument("--hold-lock", action="store_true",
                     help="hold /tmp/gpu.lock on the box for the whole run, so nothing interleaves between chunks")
     a = ap.parse_args()

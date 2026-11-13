@@ -28,12 +28,12 @@ branch. Bringing it up on another core or board: `docs/porting/kernel.md`.
 | transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
 | shader validator (D9) | written; HW-verified on a CE5300 board: every frame, blit and hang test runs its shaders from validated read-only code objects, and the PBE can't write into one (log `2026-11-03-0730-drm-d9-validator`) |
 | devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
-| PRIME | export and import (shmem helpers); a dma-buf maps on the CPU only with `ALLOW_CPU_ACCESS`; imports flushed around the jobs that list them (the SGX doesn't snoop the CPU caches); HW-verified with simpledrm both ways (log `2026-11-04-0100-drm-prime-ea1`) |
+| PRIME | export and import (shmem helpers); a dma-buf maps on the CPU only with `ALLOW_CPU_ACCESS`; imports flushed around the jobs that list them (the SGX doesn't snoop the CPU caches); HW-verified with simpledrm both ways (log `2026-11-04-0100-drm-prime-ce5310`) |
 | open microkernel file (UKERNEL.md 4a), cleanup v2, secure mode | the default. The loader works on hardware: frames render on the open microkernel (um-re e78a17c), with runtime PM, hang recovery and the RT/RC/PB cleanups. Transfers wait on its destination sync (log `2026-11-04-0330-drm-open-ukernel`). KUnit covers the file checks. secure mode HW-verified with the open microkernel f36ddd2: no firmware heap in any client VM, every test right (log `2026-11-08-1858-drm-secure-mode`); cleanup v2 written, no image declares it yet |
 | checkpatch `--strict`, sparse, kernel-doc, `Documentation/gpu/powervr_sgx` | clean, checked in CI |
 | core table (`pvrsgx_core.c`) | per core design: ID, the registers that move between SGX5xx cores, features, ISA, directory lists, address width, init script; per part: revision, clock, firmware file. The bus names the core (PCI ID, gma500 auxiliary device), and anything not in the table is refused before a register is written (KUnit `powervr_sgx_core`) |
 | Cedarview (GMA3600/3650) | gma500 publishes the SGX as the auxiliary device `gma500_gfx.sgx` (drm/gma500/0001, with PRIME export in 0002) and hands over its interrupt; powervr_sgx binds to it (`CONFIG_DRM_POWERVR_SGX_GMA500`). A GPU-accelerated desktop runs on four testers' Cedarview machines (issue #5) |
-| runtime PM | on with `CONFIG_PM` (`pvrsgx_pm.c`); no runtime suspend while a render context exists; HW-verified on two CE5300 boards (logs `2026-11-03-0630-drm-runtime-pm-ea3`, `2026-11-03-1700-drm-runtime-pm-ea1`); the first try froze the CE5300 board (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
+| runtime PM | on with `CONFIG_PM` (`pvrsgx_pm.c`); no runtime suspend while a render context exists; HW-verified on two CE5300 boards (logs `2026-11-03-0630-drm-runtime-pm-ce5300`, `2026-11-03-1700-drm-runtime-pm-ce5310`); the first try froze the CE5300 board (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
 
 First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
 triangle from client streams, pixels exact, 10 of 10 frames at 256x256, completion from the
@@ -209,7 +209,7 @@ VM so far before it lets go of the pages.
   capability, so the PCI core leaves it in D0. Suspend is `pvrsgx_fw_stop` (the
   microkernel's power-off, the deinit script, the cores held in reset). Resume is the
   restart a reset does, minus its quiesce, because a register read of the gated core
-  froze the SoC (log `2026-11-03-0630-drm-runtime-pm-ea3`). Every restart bumps
+  froze the SoC (log `2026-11-03-0630-drm-runtime-pm-ce5300`). Every restart bumps
   `fw_gen`, so the PB is set up again after a resume as after a reset. While the core is
   stopped, nothing reads its registers: the shared-IRQ handler, debugfs `status` and the
   devcoredump check `powered`. A render from suspended takes 13-17 ms on two CE5300 boards.

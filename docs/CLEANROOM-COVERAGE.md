@@ -239,7 +239,7 @@ re-read these rows against the sections named:
   - "Background object" T3 `00800000`: STATE.md §5.
   - "Vertices per task": corrected. The rule holds for compiled shaders;
     the DDK's built-in clear programs run 8 per task (STATE.md §2).
-- **From new DDK captures (EA1, 2026-11-08; 33 one-change probes in
+- **From new DDK captures (CE5310 board, 2026-11-08; 33 one-change probes in
   `~/Documents/GitHub/sgx545-work/caps-ddk/2026-11-08/`):**
   - PDS word 1 b25-28 (STATE.md §3 "PDS words");
   - TSP word 1 by precision (§3 "Output select … and TSP words");
@@ -325,7 +325,7 @@ Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 | `sgx_texture.c:210-218` `sgx_tex_uses_cube0` | a cube with levels sampled with no mip filter reads faces spaced by level 0 alone | TEX.md §8 → "Mip levels sampled without mipmapping" (T0 b18) | covered |
 | `sgx_texture.c:267-280` `wrap` | 0 repeat, 1 mirror, 2 clamp (CLAMP, CLAMP_TO_EDGE, CLAMP_TO_BORDER all 2) | STATE.md §5 T0 b3-5 / b6-8 | covered |
 | `sgx_texture.c:289-293` | view from a later base level of a 2-D texture: T2 = that level's offset, T1 size = that level's size | TEX.md §1 "Mipmaps" (T2 is the base; chain length implied by the size); STATE.md §5 T2 | partial |
-| `sgx_texture.c:294-298` | no mipmapping on a linear (NPOT) texture: it locks the 3D | PIGLIT.md "Results (EA3, 2026-11-03)" (NPOT 2D textures sampled through their mipmaps lock the 3D) | covered |
+| `sgx_texture.c:294-298` | no mipmapping on a linear (NPOT) texture: it locks the 3D | PIGLIT.md "Results (CE5300 board, 2026-11-03)" (NPOT 2D textures sampled through their mipmaps lock the 3D) | covered |
 | `sgx_texture.c:300-312` T0 | wrap T b3-5, wrap S b6-8, mip linear b9, min linear b10, mag linear b12, b17-20 0xf / 0xd with mipmaps, b21-26 0x3f, b30 for L8/A8/LA88 | STATE.md §5 "Texture words, measured" (T0 table; b21-26 [G]) | covered |
 | `sgx_texture.c:313-318` T1, T2 | T1 = layout (2 cube, 0 twiddled, 3 linear) << 29 \| format << 24 \| (w−1) << 12 \| (h−1); T2 = base (or the cube0 copy) | STATE.md §5 T1, T2; PDS.md "DOUTT" | covered |
 | `sgx_texture.c:319-335` strided render target | T1 layout 6, format 0x0d for B,G,R,A memory and 0x0c for R,G,B,A; T0 = (pitch−1) low 3 bits in b9-11, the rest in b17-26, wraps, mag linear b12 | STATE.md §5 T1 layout 6; TEX.md §3 "The transfer queue" (pitch split), §10 "Sources and filters" (strided sources sample nearest) | partial |
@@ -349,7 +349,7 @@ Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 | `sgx_draw.c:244-298, 1090-1119` primitives | hardware prims used: triangles, triangle strip, lines, points; fans, line strips/loops, quads, polygons drawn as lists; comment: "primitives the hardware doesn't have" includes the fan; points need a vertex-program size (else nothing) | STATE.md §2 draw word 0, §3 "Lines and points" (prim 0 + b28 is a fan; no line strip or loop; pt1 draws nothing) | covered (the code comment contradicts STATE.md on fans) |
 | `sgx_draw.c:488-544` `fill_consts` | constant encodings: f32; F16 half at a shift; C10 = clamp(lrint(clamp(v, −2, 2)·255 in double), −512, 511) & 0x3ff at a shift; kind 0x10 = F16 of c/255; F16 and C10 values sharing an SA word | ISA.md "Float classes" (h8 C10: signed 10-bit channel at 10·chan, read as clamp(v/255, ±2)); ISA.md "Hardware checks" (hwt_p3, hwt_p4); ISA.md "sop2" (C10 channel layout in a register) | partial |
 | `sgx_draw.c:546-566` `mem_consts` | constants past SA in a per-draw block, n base registers | ISA.md "Constants past sa127", "hw 1d: ld" Address | covered |
-| `sgx_draw.c:568-593, 1178-1185` `varyings_match` | DOUTI source 0 = gl_FragCoord, set + 1 = a varying, ≥ 0x20 not a varying (0x22 the discard's depth plane); sample half = coordinate set + 1, 2 comps for 2-D, 3 for projected; TSP sizes 3 bits per set, 5 = 4 components, sets < 10; iterating a set the vertex program doesn't output (or with more components) locks the GPU (EA3) | PDS.md "DOUTI"; STATE.md §3 "Output select … and TSP words"; ISA.md "Vertex shaders" (10 sets) | partial |
+| `sgx_draw.c:568-593, 1178-1185` `varyings_match` | DOUTI source 0 = gl_FragCoord, set + 1 = a varying, ≥ 0x20 not a varying (0x22 the discard's depth plane); sample half = coordinate set + 1, 2 comps for 2-D, 3 for projected; TSP sizes 3 bits per set, 5 = 4 components, sets < 10; iterating a set the vertex program doesn't output (or with more components) locks the GPU (CE5300 board) | PDS.md "DOUTI"; STATE.md §3 "Output select … and TSP words"; ISA.md "Vertex shaders" (10 sets) | partial |
 | `sgx_draw.c:596-838` vertex cache | 16-bit indices rebased into a < 65536 range; vertices aligned to 64 bytes, indices to 16; 2 MB chunks | STATE.md §2 draw word 1 (16-bit indices: bit 0 clear); UAPI.md §5 constraints (index buffer 2- or 4-byte aligned; DMA sources on 32, G10) | covered |
 | `sgx_draw.c:738, 1218-1250` index limit, whole primitives | draws split at `SGXWS_MAX_INDICES` (strips longer than it become lists; lists in pieces of whole primitives); counts trimmed to whole primitives because "the VDM takes the count as it is" | STATE.md §2 draw word 0 (`… \| prim<<26 \| index count`) | partial |
 | `sgx_draw.c:887-908` | NPOT cube maps of ≥ 16 texels, or mipmapped, lock the 3D: not drawn | PIGLIT.md "Open bug: NPOT cube maps lock the 3D" | covered |
@@ -370,7 +370,7 @@ Facts that live behind `sgxws.h` (winsys words) are in the winsys section;
 | `sgx_program.c:634-657` vertex program words | `in_dwords` = 4·attribute slots; `out_dwords` = 4 + set sizes + 1 with a point size; TSP sizes 3 bits per set (1, 2, 3, 5 for 4); TSP word 1 = 0 except bit 0 for a sprite's coordinate set ("with a set's bit in it, the TPU samples at a constant coordinate") | STATE.md §3 "Output select … and TSP words", "Lines and points" (ES2 point draws: TSP words 2 and 1); ISA.md "Vertex shaders" | partial |
 | `sgx_program.c:659-691` | dependent samples' state words in SA after the constants: sa(9 + constants + 4j) | ISA.md "Constants past sa127", "The texture-sample sequence …" | covered |
 | `sgx_program.c:692-702` | a discarding program must end in the feedback `nop` (hi `0xf8000140`, lo 0) | ISA.md "hw 1f" → "flow control" (`nop` h6-8 = 5), "Phases, visibility feedback and discard" (USP's discard `nop` at the feedback label) | covered |
-| `sgx_program.c:715-759` DOUTI building | one DOUTI per iteration in PA order; varying source = set + 1; gl_FragCoord (iterator 14) → source 0; sample half merged into the previous plain DOUTI when it iterates the same set; a separate DOUTI sampling a set already iterated samples at coordinate 0 (EA3); otherwise a pure sample (source 0x24 = 0x12000); b25-26 = 3; F16 iteration (`prec1`, b28); w1 0x10 for gl_PointCoord; no placeholder color iteration (source 0x20): it hangs the GPU when the vertex program outputs no color | PDS.md "DOUTI"; ISA.md "Lists and blocks" (list A); ISA.md "What a compiler needs" → "Fragment shaders" | partial |
+| `sgx_program.c:715-759` DOUTI building | one DOUTI per iteration in PA order; varying source = set + 1; gl_FragCoord (iterator 14) → source 0; sample half merged into the previous plain DOUTI when it iterates the same set; a separate DOUTI sampling a set already iterated samples at coordinate 0 (CE5300 board); otherwise a pure sample (source 0x24 = 0x12000); b25-26 = 3; F16 iteration (`prec1`, b28); w1 0x10 for gl_PointCoord; no placeholder color iteration (source 0x20): it hangs the GPU when the vertex program outputs no color | PDS.md "DOUTI"; ISA.md "Lists and blocks" (list A); ISA.md "What a compiler needs" → "Fragment shaders" | partial |
 | `sgx_program.c:760-787` | discard: one more plain DOUTI, source 0x22, 3 components, after the inputs; pa index = registers the iterations fill (an F32 component 1, an F16 pair 1, a sampled texel 1); `pa_dwords` ≥ that + 3 | ISA.md "Phases, visibility feedback and discard" (`0x7811000`, pcoeff pa<n>), "What a compiler must emit to discard"; ISA.md "Lists and blocks" (registers per list-A entry); ISA.md "The texture-sample sequence …" (one chunk for any ≤ 32-bit texel) | covered |
 | `sgx_program.c:790-793` | last plain iteration b29, last sample b30 | PDS.md "DOUTI" | covered |
 | `sgx_program.c:703-708` | gl_FragDepth not written (depthf form not traced) | ISA.md "Program structure …" (gl_FragDepth guess) | n/a: no fact used (warning only) |
@@ -407,7 +407,7 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - A frame that samples a texture whose memory was freed before the frame reached the GPU locks up the 3D (st's bitmap cache freed at teardown). State it as hardware behavior (no fault reported / a 3D lockup), so a driver keeps sampled buffers alive until the render is done.
 
 ##### `sgx_texture.c:25-60` `sgx_tex_format` (partial) — TEX.md §1 "Texel formats"
-- RGBA8 textures (R, G, B, A bytes) sampled with T1 0x0c give GL-order texels through an xyzw unpack (byte-identical to the DDK on the EA3: 16×16, 64×64, NPOT, nearest and linear); 0x0d is "0x0c with R and B swapped". TEX.md lists 0x0d for RGBA uploads (the DDK's choice, with the DDK compiler's zyxw reorder folded into the sample: corpus) and doesn't say what each code returns to the shader.
+- RGBA8 textures (R, G, B, A bytes) sampled with T1 0x0c give GL-order texels through an xyzw unpack (byte-identical to the DDK on the CE5300 board: 16×16, 64×64, NPOT, nearest and linear); 0x0d is "0x0c with R and B swapped". TEX.md lists 0x0d for RGBA uploads (the DDK's choice, with the DDK compiler's zyxw reorder folded into the sample: corpus) and doesn't say what each code returns to the shader.
 - T1 0x05 (RGB565): the channel order it hands the compiler's unpack (R and B swapped against GL, per `sgx_screen.c:190-192`).
 - sRGB: no T1 code decodes sRGB (the driver maps each sRGB format to its linear twin and decodes in the shader); say so with the formats probed.
 
@@ -452,7 +452,7 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - Several F16 halves / C10 channels share one SA word (OR'd at their shifts; the word zeroed first).
 
 ##### `sgx_draw.c:568-593` `varyings_match` (partial) — PDS.md "DOUTI" or STATE.md §3 "Output select … and TSP words"
-- A fragment DOUTI that iterates or samples a set the vertex program doesn't output (TSP size 0), or with more components than it outputs, locks up the GPU (EA3; color placeholder, gl4es neverball shaders).
+- A fragment DOUTI that iterates or samples a set the vertex program doesn't output (TSP size 0), or with more components than it outputs, locks up the GPU (CE5300 board; color placeholder, gl4es neverball shaders).
 - DOUTI sources from 0x20 on are not varyings (0x20 color, 0x22 depth plane, 0x24 = the pure-sample pattern); PDS.md lists 0x20 and 0x22 but not the range rule.
 
 ##### Index limit and whole primitives (partial) — STATE.md §2 "The VDM control stream"
@@ -470,7 +470,7 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - The effect of a set's bit in TSP word 1: with it set for a set the pixel program samples (PDS sample), the TPU samples at a constant coordinate; the driver leaves word 1 = 0 for every set except a sprite's coordinate set 0 (bit 0). STATE.md states the DDK's rule (precision ≤ 2) but not what the bit does.
 
 ##### `sgx_program.c:715-759` DOUTI building (partial) — PDS.md "DOUTI"
-- A separate (unmerged) sample DOUTI of a set that an earlier plain DOUTI already iterates samples at coordinate 0 (EA3); merge it into that DOUTI instead.
+- A separate (unmerged) sample DOUTI of a set that an earlier plain DOUTI already iterates samples at coordinate 0 (CE5300 board); merge it into that DOUTI instead.
 - The DDK's placeholder color iteration (source 0x20) in a shader without varyings hangs the GPU when the vertex program outputs no color.
 - Projected samples (0x400): PDS.md says "captures only show 2-D"; hardware-check `texture2DProj` through the PDS.
 
@@ -538,7 +538,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | sgx_frame.c:453-475 `pds_secondary` | optional DOUTD then DOUTU | PDS.md "What the DDK generates" (0x1ed20/0x1ee40); STATE.md §2 "The state programs and what they DMA" | covered |
 | sgx_frame.c:477-515 `dma_ctrl`, `pds_dma_task` | DOUTD ctrl: dwords-1, register, b22-24 = (n-1)&3, b25 secondary; one DOUTD per 16 dwords; consecutive registers | PDS.md "DOUTD" (fields; b22-24 "unknown"); STATE.md §2 table (kinds 3/0/1 for 12/25/10 dwords); GEN.md source table [G] list | partial |
 | sgx_frame.c:589-602 ring sizes | pixel code 1 MB of the 5 MB ten code bases reach; PDS pixel 32 MB, PDS vertex 28 MB, general ~2.8 GB | UAPI.md §5 "Heap layout" | covered |
-| sgx_frame.c:612-622, 1275-1278 `sec_wait` | phas.i #0,#0 [wait=7] (0, 0xfa440700); secondary prologue up to `wdf`; `nop [end]` (0, 0xf8040140); a pixel secondary DMA task that ends without waiting for its DMA locks the GPU (EA3) | ISA.md "flow control" (`nop`), "phase" (`phas.i`), "Program structure and calling conventions" (prologue), "What the draw-time builder emits" (word values) | partial |
+| sgx_frame.c:612-622, 1275-1278 `sec_wait` | phas.i #0,#0 [wait=7] (0, 0xfa440700); secondary prologue up to `wdf`; `nop [end]` (0, 0xf8040140); a pixel secondary DMA task that ends without waiting for its DMA locks the GPU (CE5300 board) | ISA.md "flow control" (`nop`), "phase" (`phas.i`), "Program structure and calling conventions" (prologue), "What the draw-time builder emits" (word values) | partial |
 | sgx_frame.c:623-625 + mkusse.py:45-54 `state_emit[1..32]` | phas; prologue; `mov o<r>, pa<r> [rcnt rpt<=16]`; `emit.t3 r0,#0,#0`; `op0xd6 #0`; `emit.t1 o0,#0,#0 [end f3_20]` | STATE.md §2 ("The state-emit USSE programs are just emit instructions"); ISA.md "other" (emit, op0xd6 encodings), "Moves" (rpt up to 16) | partial |
 | sgx_frame.c:627-642 `empty_state`, `terminate` | empty secondary update; VDM type-6 TA terminate: DOUTA (0x2000, reg 0), 3 × DOUTA (0x0016000e, reg 1), DOUTU of `state_emit[2]` | STATE.md §2 state-program table (`63040000 0e022401`, `43040006 0400e100`); PDS.md "DOUTA", "What the DDK generates" (0x1fd60) | partial |
 | sgx_frame.c:644-648 `pds_empty_p`, `clear_pds` | empty pixel task; clear pixel program (copy_fs + color DOUTI) | STATE.md §1 header +0x08 (background secondary `04001800`); §3 "PDS words" (clear `04001800 00030001 ...`) | covered |
@@ -563,7 +563,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | sgx_frame.c:1698-1755 `blend_const_words` | 4 × sopwm (hi 0x90807800 / 0x90800800 + selector tables) + sop2 0x81808804; X/Y operand per factor; swap; `atrade` reordering for alpha subtract | STATE.md §3 "Constant-color blending"; ISA.md "sopwm (hw 12 ...)", "sop2" | partial |
 | sgx_frame.c:1775-1783 `wmask_words` | `sopwm o0, pa<c>, pa<c> [skipinv end mask=m c1=c2=zero cop=aop=max]` = lo 0xa0000000\|c<<7\|c, hi 0x90b40601 with mask bits h12 h13 h14 h11 | ISA.md "sopwm" (mask order h12,h13,h14,h11), "Text notation and defaults"; STATE.md §3 color-mask bullet | covered (STATE.md's `mask<<11` form conflicts, see §3) |
 | sgx_frame.c:1798-1830 discard program | `phas.i #phase1, #t [wait=1]` (0xfa440100\|t); pcoeff (0xb0000004\|n<<14\|(n+1)<<7, 0xf8300004); shader minus its feedback nop; atst8 [end] (0xf0000184\|c<<21\|c<<14, 0xf9340406); `nop` (0, 0xf8000140) so phase 1 starts on an even instruction; blend / mask without end, or `mov o0, pa<c> [skipinv rcnt]` (0x28a10001); `phas.i #0,#0 [end wait=7]` (0xfa4c0700) | ISA.md "What the draw-time builder emits", "What a compiler must emit to discard", "visibility test" | partial |
-| sgx_frame.c:1831-1846 single-phase fragment program | `phas.i #0,#0 [wait=7]`; shader; blend/mask, or `mov o0, pa<c> [skipinv end mask=1]` (0xa0000000\|c<<7, 0x28851001); the same mov without the mask locks the GPU (EA3) | ISA.md "What the draw-time builder emits" (single phase), "Moves (hw 5)", "Text notation and defaults" (mask default) | partial |
+| sgx_frame.c:1831-1846 single-phase fragment program | `phas.i #0,#0 [wait=7]`; shader; blend/mask, or `mov o0, pa<c> [skipinv end mask=1]` (0xa0000000\|c<<7, 0x28851001); the same mov without the mask locks the GPU (CE5300 board) | ISA.md "What the draw-time builder emits" (single phase), "Moves (hw 5)", "Text notation and defaults" (mask default) | partial |
 | sgx_frame.c:1848-1862 `sgxws_upload_fs_secondary` | phas.i [wait=7], code, `nop [end]` | ISA.md "Phases" bullet in "Program structure", "flow control" (`nop`) | covered |
 | sgx_frame.c:1864-1881 `clear_pds_masked` | masked clear = color DOUTI + phas + color-mask sopwm on pa0 | STATE.md §3 color-mask bullets ("a different clear shader"); ISA.md "sopwm" | covered |
 | mkusse.py:24-32 `PROLOGUE` | `nop [nosched]`, `test.and.ne p0,#0,#0 [skipinv nodst=0]`, `(p0) ld.a.d pa0,pa0,#0 [skipinv rpt=4]`, `wdf` at the start of every vertex/state task | ISA.md "How the corpus builds control flow" / "Program structure" (stated for secondary programs only) | partial |
@@ -625,10 +625,10 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 
 **DOUTD control and chunking (partial)**
 - PDS.md "DOUTD": the b22-24 rule the code uses is (dwords - 1) & 3. It fits 12 → 3, 25 → 0, 10 → 1, 11 → 2, 27 → 2. Say whether it is a hardware field or only the DDK's value.
-- PDS.md "DOUTD": at most 16 dwords per DOUTD. A 20-dword vertex DMA lost its last dwords (Minecraft arm, EA3). Also that the DDK never DMAs more than 25 dwords at once.
+- PDS.md "DOUTD": at most 16 dwords per DOUTD. A 20-dword vertex DMA lost its last dwords (Minecraft arm, CE5300 board). Also that the DDK never DMAs more than 25 dwords at once.
 
 **`sec_wait` (partial)**
-- ISA.md "Program structure" or PDS.md: a pixel secondary task that follows a DOUTD must `wdf` before it ends. Pointing the DMA task at the empty task (`phas.i [end]`) locked the GPU (EA3). Give the minimal program: phas, prologue up to `wdf`, `nop [end]`.
+- ISA.md "Program structure" or PDS.md: a pixel secondary task that follows a DOUTD must `wdf` before it ends. Pointing the DMA task at the empty task (`phas.i [end]`) locked the GPU (CE5300 board). Give the minimal program: phas, prologue up to `wdf`, `nop [end]`.
 
 **State-emit programs (partial)**
 - STATE.md §2 or ISA.md: the program text: phas, prologue, `mov o<r>, pa<r> [rcnt rpt=k]` in chunks of at most 16, `emit.t3 r0,#0,#0`, `op0xd6 #0`, `emit.t1 o0,#0,#0 [end f3_20]`. One program per block length 1-32.
@@ -667,7 +667,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
   - 4 or 8 output dwords: 16;
   - 12: 10; 16: 8; 20: 6; 24: 5;
   - input dwords don't count.
-- STATE.md §2: 64 / output dwords hung the GPU at 12 output dwords (EA3). GEN.md's [G] list says "64 / output dwords" and needs correcting.
+- STATE.md §2: 64 / output dwords hung the GPU at 12 output dwords (CE5300 board). GEN.md's [G] list says "64 / output dwords" and needs correcting.
 
 **VDM draw (partial)**
 - STATE.md §2 draw word 2: what "batch" is, and why the value is 16 (`f0000000`).
@@ -679,7 +679,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
   - b0-15 = the fragment program's primary-attribute registers in units of 4 dwords (minimum 1);
   - b25-28 = 12 / units, capped at 0xb. Captures with 0-5 vec4 varyings give units 1 1 1 2 2 3 and b25-28 12 12 6 6 4; 0xb with one unit;
   - b16-17 = 3;
-  - a program that uses more attributes than the word declares locks the GPU (two F32 vec4 varyings, EA3).
+  - a program that uses more attributes than the word declares locks the GPU (two F32 vec4 varyings, CE5300 board).
 - STATE.md §3: the DMA kind for the 27-dword two-sided block is 2. It follows from the (n-1)&3 rule above, which STATE.md doesn't state.
 
 **Vertex secondary attributes (partial)**
@@ -705,7 +705,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
   - the phase-1 color out without end is `mov o0, pa<c> [skipinv rcnt]` (0xa0000000 | c<<7, 0x28a10001).
 
 **Single-phase fragment color out (partial)**
-- ISA.md "Moves" or "Phases": the final `mov o0, pa<c> [end]` needs mask=1 (h12; 0x28851001). Without it the GPU locks up (EA3). The same holds for the builtin `mov o0, sa9 [skipinv end mask=1]`.
+- ISA.md "Moves" or "Phases": the final `mov o0, pa<c> [end]` needs mask=1 (h12; 0x28851001). Without it the GPU locks up (CE5300 board). The same holds for the builtin `mov o0, sa9 [skipinv end mask=1]`.
 
 **PROLOGUE (partial)**
 - ISA.md "Program structure": that every vertex and state task (not only secondary programs) starts with `nop [nosched]; test.and.ne p0,#0,#0 [skipinv]; (p0) ld.a.d pa0,pa0,#0 [skipinv rpt=4]; wdf`. Also whether the hardware needs it (DRIVER-UPSTREAM.md §3 asks for a test).
@@ -754,7 +754,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
   - its access word (sync, 8).
   Then the RT word, RT data, TA-data blocks, background block (3D params, 0x4b, 0x200, 0x1000), region headers and entry words, in that order with attribs 0x4f / 0xb.
 - STATE.md §6 "RT data": header [1] is given as 1, but the client leaves it 0 (the microkernel may write it; the debug line reads it as "RT frames"). Say who writes it.
-- STATE.md §6 "RT data": the frame counter word [0]. Its value & 1 picks the entry that renders. The client writes f + 1 before every kick. Left at 1, odd frames retire the wrong entry, their PB pages are never freed, and the 3D locks up on the fourth frame (EA3, 2026-10-28).
+- STATE.md §6 "RT data": the frame counter word [0]. Its value & 1 picks the entry that renders. The client writes f + 1 before every kick. Left at 1, odd frames retire the wrong entry, their PB pages are never freed, and the 3D locks up on the fourth frame (CE5300 board, 2026-10-28).
 
 **Render details (partial)**
 - STATE.md §6 "Render details" table, the words it doesn't list:

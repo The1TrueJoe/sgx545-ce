@@ -1,6 +1,6 @@
 # Secure mode: client VMs without the firmware's heaps, every test right
 
-EA3 (ea3-v2) RAM boot of 3d0604b, 2026-11-08 ~18:58 UTC. The open microkernel is um-re
+CE5300 board (ce5300-v2) RAM boot of 3d0604b, 2026-11-08 ~18:58 UTC. The open microkernel is um-re
 f36ddd2, wrapped with feature bit 1 (secure mode). Nothing flashed, and p1 was clean
 afterwards.
 

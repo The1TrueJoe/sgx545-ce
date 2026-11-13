@@ -1,4 +1,4 @@
-# eba829c, EA1 RAM boot 2026-11-03 ~03:36 UTC
+# eba829c, CE5310 board RAM boot 2026-11-03 ~03:36 UTC
 ## process 1: powervr_sgx_frame -k 2 -n 10 -s 720x480
 frame 0: render done, centre ff00ff00 (want ff00ff00), corner ff000080 (want ff000080)
 frame 1: render done, centre ffffff00 (want ffffff00), corner ff000080 (want ff000080)

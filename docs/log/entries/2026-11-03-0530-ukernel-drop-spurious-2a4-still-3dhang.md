@@ -35,12 +35,12 @@ TA's DPM produced that the ISP walks (region headers at 0x408, tile-pointer list
 
 ## Next (ta3d-state leads #2/#3)
 
-1. Transfer test: a 3D-only render (no TA) on the EA1. If it completes, the 3D/PBE/
+1. Transfer test: a 3D-only render (no TA) on the CE5310 board. If it completes, the 3D/PBE/
    end-event path works and the problem is what the TA left in memory.
 2. Dump the region headers (0x408 base, expect `00000000 00001000 00000000` 0x80
    apart, tail pointers `8040xxxx`) and 0x728 at the lockup; compare with the DDK.
 
-Data: `data/2026-11-03-0530-ea1-no2a4-still-3dhang.dmesg.log`. rd+0x2a4 drop held
+Data: `data/2026-11-03-0530-ce5310-no2a4-still-3dhang.dmesg.log`. rd+0x2a4 drop held
 uncommitted with A+B+C+D; committed render path stands through f852218.
 
 ## Note: cold boot got harder

@@ -1,5 +1,5 @@
 {
- "rig": "EA3, Minecraft runtime (CI run 40647098861), glretrace --singlethread, LIBGL_FB=3, LIBGL_NOTEST=1, gl4es 1891af3 + downstream patches 0001-0005",
+ "rig": "CE5300 board, Minecraft runtime (CI run 40647098861), glretrace --singlethread, LIBGL_FB=3, LIBGL_NOTEST=1, gl4es 1891af3 + downstream patches 0001-0005",
  "metric": "ctest: ImageMagick AE fuzz 20% over the extract region, pass under the test's tolerance; ours_vs_ddk: pixel for pixel",
  "first_suite_bd3f641": {
   "glxgears es1": {

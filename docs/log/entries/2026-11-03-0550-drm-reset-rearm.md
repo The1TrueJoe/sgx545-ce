@@ -1,6 +1,6 @@
 # Contexts that live through a GPU reset render again
 
-M2 item 4, following 0530. EA1 RAM boot of e0bc846, 2026-11-03 ~05:42 UTC, DDK
+M2 item 4, following 0530. CE5310 board RAM boot of e0bc846, 2026-11-03 ~05:42 UTC, DDK
 microkernel, nothing flashed, no power-cycle.
 
 ## The fix

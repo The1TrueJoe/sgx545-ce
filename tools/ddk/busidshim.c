@@ -1,5 +1,5 @@
 /*
- * busidshim — make Cedarview's DDK 1.7 userspace find the EA-3's SGX.
+ * busidshim — make Cedarview's DDK 1.7 userspace find the CE5300 board's SGX.
  *
  * libsrv_um.so calls drmOpen(NULL, "pci:0000:00:02.0"), with that bus id
  * hardcoded as a string constant. That is where the SGX sits on Cedarview:

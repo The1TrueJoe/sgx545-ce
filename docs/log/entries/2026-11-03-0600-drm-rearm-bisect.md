@@ -1,6 +1,6 @@
 # After a reset only the PB needs setting up again; devcoredump; IGT reserved bits
 
-M2, following 0550. EA1 RAM boots of f52a569, 2026-11-03 ~06:00 UTC, DDK microkernel,
+M2, following 0550. CE5310 board RAM boots of f52a569, 2026-11-03 ~06:00 UTC, DDK microkernel,
 nothing flashed, no power-cycle. One deliberate device loss, recovered by a plain reboot
 into the same RAM kernel.
 
@@ -43,7 +43,7 @@ the type labels were in the wrong order, and that is fixed.
 
 ## IGT: reserved bits, VAs outside the VM
 
-The uAPI suite now has 33 tests, 33/33 on the EA1:
+The uAPI suite now has 33 tests, 33/33 on the CE5310 board:
 
 | test | checks |
 |---|---|

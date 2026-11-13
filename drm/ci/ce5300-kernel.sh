@@ -14,7 +14,7 @@
 # and the DT files come from build.sh itself (OHC_DEFCONFIG_ONLY), so the
 # board/ea/<model>/<board> layers are followed as the distribution follows
 # them. On top: the vendor driver (SGX545_CE) out and powervr_sgx in as a
-# module (powervr-sgx.fragment). BOARD picks the board (default ea1-v1);
+# module (powervr-sgx.fragment). BOARD picks the board (default ce5310-v1);
 # EXTRA_FRAGMENTS adds fragments last (debug.fragment for the lockdep, KASAN
 # and UBSAN kernel).
 set -eu
@@ -22,7 +22,7 @@ set -eu
 DIST=$1
 SRC=$2
 DRM=$3
-BOARD=${BOARD:-ea1-v1}
+BOARD=${BOARD:-ce5310-v1}
 B=$DIST/board
 
 for p in "$B"/common/patches/linux/*.patch "$B"/ea/common/patches/linux/*.patch "$DRM"/sysfb/*.patch; do

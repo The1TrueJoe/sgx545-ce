@@ -396,7 +396,7 @@ def main():
     ap.add_argument("--dump", action="append", default=[], help="devva:size:file to dump at the end")
     ap.add_argument("--flushrt", action="store_true",
                     help="end with SGX_FLUSH_HW_RENDER_TARGET of the frame's RT data set, as the DDK does on "
-                         "teardown (it timed out and locked the GPU up on a srvinit-started EA3)")
+                         "teardown (it timed out and locked the GPU up on a srvinit-started CE5300 board)")
     ap.add_argument("--sleep", type=int, default=200, help="ms between kicks")
     ap.add_argument("--wait", type=int, default=2000, help="longest wait for the last kick's destination syncs, ms")
     ap.add_argument("--vb", type=lambda x: int(x, 0), default=0x3e51d000,

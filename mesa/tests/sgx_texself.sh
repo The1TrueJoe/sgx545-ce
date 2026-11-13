@@ -1,5 +1,5 @@
 #!/bin/sh
-# texture cases on ours only (EA1: no DDK probe): md5 per case, to compare builds
+# texture cases on ours only (CE5310 board: no DDK probe): md5 per case, to compare builds
 cd /tmp/mesa
 export PROBE_TEX=1 PROBE_ATTRS=2 PROBE_TEXPAT=1
 export PROBE_VS="attribute vec4 p; attribute vec2 a1; varying vec2 v; void main() { gl_Position = p; v = p.xy + vec2(0.5, 0.5); }"

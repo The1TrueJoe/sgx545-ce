@@ -1,6 +1,6 @@
 """The shaders gl4es generates for Minecraft 1.7.10 (mc.glsl, from fpegen.c:
 gl4es's own fpe_VertexShader/fpe_FragmentShader + ConvertShader for the
-game's fixed-function states), compiled with sgxc and drawn on the EA3
+game's fixed-function states), compiled with sgxc and drawn on the CE5300 board
 against the DDK.
 
     python3 -I tools/usc/tests/gl4es/mc_run.py SGXC OUT [--calibrate] [--draw]

@@ -1,4 +1,4 @@
-# powervr_sgx on the EA1 (DDK microkernel), RAM boot of abd4ca8, 2026-11-03 ~05:30 UTC
+# powervr_sgx on the CE5310 board (DDK microkernel), RAM boot of abd4ca8, 2026-11-03 ~05:30 UTC
 # insmod powervr_sgx.ko snapshot=1 snap_gap_ms=200
 # SGXGEN_DUMP_PROGS=1 powervr_sgx_frame -D -n 2       (two kicks per frame, 256x256; both frames right)
 # SGXGEN_DUMP_PROGS=1 powervr_sgx_frame -D -k 1 -n 1  (one kick; second half of this file)

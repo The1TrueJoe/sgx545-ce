@@ -1,3 +1,3 @@
 # 2026-11-03: 17165 tests, Fail 150, Pass 16566, Skip 445, Warn 4
-# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on the EA1 (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: one full pass on um-re 5886029 (drive-deqp.py), 0 wedges, 0 recoveries; flakes: sgx-flakes-seen.txt
+# dEQP-GLES2 (VK-GL-CTS 4.6.8.0) on the CE5310 board (CE5300 SGX545), pbuffer 256x256 rgba8888d24s8: one full pass on um-re 5886029 (drive-deqp.py), 0 wedges, 0 recoveries; flakes: sgx-flakes-seen.txt
 # tests that wedged the GPU or the box (drive-deqp.py)

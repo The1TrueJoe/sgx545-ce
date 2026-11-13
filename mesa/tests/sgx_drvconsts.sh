@@ -1,5 +1,5 @@
 #!/bin/sh
-# the driver's own constant formats (list C kinds 0x10 and 0x11, opts.driver_consts) A/B on the EA1:
+# the driver's own constant formats (list C kinds 0x10 and 0x11, opts.driver_consts) A/B on the CE5310 board:
 # lowp uniforms pre-converted to F16 from their C10 value, and literals in SA, against the DDK
 cd /tmp/mesa
 printf "#!/bin/sh\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\n" > ddk-probe.sh; chmod +x ddk-probe.sh
