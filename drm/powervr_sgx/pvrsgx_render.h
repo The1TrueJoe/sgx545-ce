@@ -119,6 +119,12 @@ void pvrsgx_render_job_fini(struct pvrsgx_job *job);
 int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6]);
 struct seq_buf;
 void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job);
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+void pvrsgx_render_dump_last(struct seq_buf *sb, struct pvrsgx_device *sdev);
+void pvrsgx_render_dbg_fini(struct pvrsgx_device *sdev);
+#else
+static inline void pvrsgx_render_dbg_fini(struct pvrsgx_device *sdev) { }
+#endif
 
 /* Command checks shared with transfer jobs. */
 bool pvrsgx_cmd_mapped(const void *priv, u64 addr, u64 size);

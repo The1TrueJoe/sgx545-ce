@@ -210,6 +210,21 @@ struct pvrsgx_device {
 	struct list_head active;
 	/** @last_fence: Hardware fence of the job last sent to the firmware. */
 	struct dma_fence *last_fence;
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	/** @dbg_render: The last render submitted, for debugfs "render". */
+	struct pvrsgx_render_dbg {
+		/** @dbg_render.lock: Protects the fields below. */
+		spinlock_t lock;
+		/** @dbg_render.rtds: Its dataset, a reference. */
+		struct pvrsgx_rt_dataset *rtds;
+		/** @dbg_render.kicked: The dataset of the last kick written; never dereferenced. */
+		const void *kicked;
+		/** @dbg_render.cmd_off: That kick's TA command in its context's ring. */
+		u32 cmd_off;
+		/** @dbg_render.entry: That kick's RT-data entry. */
+		u32 entry;
+	} dbg_render;
+#endif
 	/**
 	 * @wq: Runs @poll_work, which signals fences: the queue has a rescuer
 	 * and never waits on memory reclaim.

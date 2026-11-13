@@ -49,9 +49,41 @@ static void rt_test_720x480_4x(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, (n.zls_xt - 1) << 3, 0x168);
 }
 
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+/* debugfs tracking: a swap takes a reference and hands the old one back to be put. */
+static void rt_test_dbg_track(struct kunit *test)
+{
+	struct pvrsgx_rt_dataset *a = kunit_kzalloc(test, sizeof(*a), GFP_KERNEL);
+	struct pvrsgx_rt_dataset *b = kunit_kzalloc(test, sizeof(*b), GFP_KERNEL);
+	struct pvrsgx_render_dbg d = {};
+
+	KUNIT_ASSERT_NOT_NULL(test, a);
+	KUNIT_ASSERT_NOT_NULL(test, b);
+	spin_lock_init(&d.lock);
+	kref_init(&a->ref);
+	kref_init(&b->ref);
+	KUNIT_EXPECT_NULL(test, dbg_track(&d, a));
+	KUNIT_EXPECT_EQ(test, kref_read(&a->ref), 2);
+	dbg_kicked(&d, a, 0x2c0, 1);
+	KUNIT_EXPECT_PTR_EQ(test, d.kicked, (const void *)a);
+	/* the same dataset again: one more reference, its kick kept */
+	KUNIT_EXPECT_PTR_EQ(test, dbg_track(&d, a), a);
+	KUNIT_EXPECT_EQ(test, kref_read(&a->ref), 3);
+	KUNIT_EXPECT_PTR_EQ(test, d.kicked, (const void *)a);
+	/* another dataset: the old one comes back, the kick is forgotten */
+	KUNIT_EXPECT_PTR_EQ(test, dbg_track(&d, b), a);
+	KUNIT_EXPECT_EQ(test, kref_read(&b->ref), 2);
+	KUNIT_EXPECT_NULL(test, d.kicked);
+	KUNIT_EXPECT_PTR_EQ(test, d.rtds, b);
+}
+#endif
+
 static struct kunit_case pvrsgx_rt_test_cases[] = {
 	KUNIT_CASE(rt_test_720x480_1x),
 	KUNIT_CASE(rt_test_720x480_4x),
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	KUNIT_CASE(rt_test_dbg_track),
+#endif
 	{}
 };
 

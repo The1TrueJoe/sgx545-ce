@@ -17,6 +17,7 @@
 #include "pvrsgx_device.h"
 #include "pvrsgx_dump.h"
 #include "pvrsgx_fw.h"
+#include "pvrsgx_render.h"
 
 /*
  * The registers only while the device is still bound and already awake:
@@ -67,9 +68,29 @@ static int ctlblk_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
+/* The last render's dataset: region headers, tail pointers, RT data, syncs. */
+static int render_show(struct seq_file *m, void *unused)
+{
+	struct drm_debugfs_entry *entry = m->private;
+	struct pvrsgx_device *sdev = to_pvrsgx_device(entry->dev);
+	struct seq_buf sb;
+	char *buf = kvmalloc(SZ_64K, GFP_KERNEL);
+
+	if (!buf)
+		return -ENOMEM;
+	seq_buf_init(&sb, buf, SZ_64K);
+	pvrsgx_render_dump_last(&sb, sdev);
+	seq_puts(m, seq_buf_str(&sb));
+	if (seq_buf_has_overflowed(&sb))
+		seq_puts(m, "(truncated)\n");
+	kvfree(buf);
+	return 0;
+}
+
 static const struct drm_debugfs_info pvrsgx_debugfs_list[] = {
 	{ "status", status_show, 0 },
 	{ "ctlblk", ctlblk_show, 0 },
+	{ "render", render_show, 0 },
 };
 
 void pvrsgx_debugfs_init(struct drm_minor *minor)

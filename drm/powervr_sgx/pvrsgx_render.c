@@ -661,6 +661,39 @@ int pvrsgx_cmd_take(struct pvrsgx_device *sdev, const struct pvrsgx_cmd_def *def
 	return err;
 }
 
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+/*
+ * debugfs "render" keeps the last render submitted: a reference, swapped in
+ * the ioctl, so the old one is put outside fence signalling. A new dataset
+ * forgets the last kick, so a freed dataset's address can't match it.
+ */
+static struct pvrsgx_rt_dataset *dbg_track(struct pvrsgx_render_dbg *d,
+					   struct pvrsgx_rt_dataset *s)
+{
+	struct pvrsgx_rt_dataset *old;
+
+	kref_get(&s->ref);
+	spin_lock(&d->lock);
+	old = d->rtds;
+	d->rtds = s;
+	if (old != s)
+		d->kicked = NULL;
+	spin_unlock(&d->lock);
+	return old;
+}
+
+/* From run_job: no reference taken or dropped. */
+static void dbg_kicked(struct pvrsgx_render_dbg *d, struct pvrsgx_rt_dataset *s, u32 off,
+		       u32 p)
+{
+	spin_lock(&d->lock);
+	d->kicked = s;
+	d->cmd_off = off;
+	d->entry = p;
+	spin_unlock(&d->lock);
+}
+#endif
+
 int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 			   const struct drm_powervr_sgx_job *in)
 {
@@ -719,6 +752,10 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		err = err ?: pvrsgx_cmd_take(sdev, kdef, &cctx, vm, &rj->kick[k], present);
 	}
 	kvfree(kicks);
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	if (!err)
+		pvrsgx_rtds_put(dbg_track(&sdev->dbg_render, rj->rtds));
+#endif
 	return err;
 }
 
@@ -896,6 +933,9 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	if (last) {
 		rj->cmd_off = woff;
 		rj->entry = p;
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+		dbg_kicked(&job->ctx->sdev->dbg_render, s, woff, p);
+#endif
 		trace_pvrsgx_render_kick(cmd, s->w, s->h, rgn_next, woff);
 		s->frames++;
 	}
@@ -965,6 +1005,43 @@ void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
 	else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER)
 		pvrsgx_transfer_dump(sb, job);
 }
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+/* The last render submitted, read from memory only: never the registers, never the GPU. */
+void pvrsgx_render_dump_last(struct seq_buf *sb, struct pvrsgx_device *sdev)
+{
+	struct pvrsgx_render_dbg *d = &sdev->dbg_render;
+	struct pvrsgx_rt_dataset *s;
+	bool kicked;
+	u32 off, p;
+
+	spin_lock(&d->lock);
+	s = d->rtds;
+	if (s)
+		kref_get(&s->ref);
+	kicked = s && d->kicked == s;
+	off = d->cmd_off;
+	p = d->entry;
+	spin_unlock(&d->lock);
+	if (!s) {
+		seq_buf_puts(sb, "no render submitted\n");
+		return;
+	}
+	seq_buf_printf(sb, "dataset %ux%u, %u frames (read live, not a snapshot)\n", s->w, s->h,
+		       READ_ONCE(s->frames));
+	if (kicked)
+		render_dump(sb, sdev, s, off, p);
+	else
+		seq_buf_puts(sb, "its kick is not written yet\n");
+	pvrsgx_rtds_put(s);
+}
+
+void pvrsgx_render_dbg_fini(struct pvrsgx_device *sdev)
+{
+	pvrsgx_rtds_put(sdev->dbg_render.rtds);
+	sdev->dbg_render.rtds = NULL;
+}
+#endif
 
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
 #include "tests/pvrsgx_kobj_test.c"
