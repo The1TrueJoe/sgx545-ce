@@ -1,8 +1,8 @@
-# Agent brief: powervr_sgx → a GPU that works on stock desktop distros
+# Agent brief: powervr_sgx, an out-of-tree GPU driver for Cedarview and CE5300
 
 **Read this first if you are a session working on `The1TrueJoe/powervr_sgx` (branch `dev`; `main` is the stable branch).**
-It explains the end goal, the standards the work has to meet to get there, and the
-work that remains, in order. It does not replace `docs/`. `docs/` says how the
+It explains what the project is for, the standards the work has to meet, and the
+work that was planned, in order. It does not replace `docs/`. `docs/` says how the
 hardware works; this says what we are building with that knowledge and what rules
 that build has to follow.
 
@@ -10,15 +10,12 @@ that build has to follow.
 
 ## 1. The goal, in one paragraph
 
-Old netbooks and nettops with **Intel Cedarview (GMA 3600/3650: Atom D2500/D2550/D2700/N2600/N2800)**
-should get GPU acceleration on a **stock** modern distro (Debian, Ubuntu, Fedora,
-Arch) with no custom image and no setup. The only way to get that is
-**upstream**: a kernel DRM driver in Linux, the microkernel in `linux-firmware`,
-and the GL driver in Mesa. Distros then pick it up on their own. The CE5300/CE5310
-boards stay the development target, but the
-deliverable is upstream code that runs on Cedarview. We are **not** building a
-distro. A DKMS module plus out-of-tree Mesa packages (apt/PPA/COPR/AUR) is an
-acceptable *bridge* until things are merged, never the destination.
+Old netbooks and nettops with **Intel Cedarview (GMA 3600/3650: Atom D2500/D2550/D2700/N2600/N2800)**,
+and CE5300/CE5310 boards, get GPU acceleration from this **out-of-tree** driver: a kernel
+package or a DKMS module, the open microkernel, and Mesa with the sgx driver, from this
+repository's releases and apt repository. Upstream (Linux, linux-firmware, Mesa) was the
+original goal; the kernel RFC and the Mesa merge request were withdrawn in November 2026,
+and the driver is not headed upstream. The project is maintained for the people who use it.
 
 Secondary goal: climb from GLES2 to **GLES 3.0 / OpenGL 3.x**. The hardware was
 marketed as DX10.1 / OpenGL 3.2, and Intel's Windows ICD shipped GL 3.0 on this
@@ -177,7 +174,10 @@ Needs a Cedarview machine (open question §7).
 
 **Exit:** a stock Debian or Ubuntu install with our kernel driver (DKMS) and our Mesa build runs Weston, labwc, sway, Mutter and Xorg (modesetting+glamor) with GPU compositing on a Cedarview netbook. This is also the bridge release.
 
-### M5: upstream submission
+### M5: upstream submission (withdrawn)
+
+Withdrawn in November 2026: Mesa declined the driver, and the kernel RFC was withdrawn with it. The plan is kept as a record.
+
 1. RFC series to **dri-devel** (driver + uAPI + docs + MAINTAINERS), with the Mesa MR open as a draft that points at it, and the gma500 auxiliary-device patches CC'd to gma500's maintainers. The target tree is probably drm-misc.
 2. Firmware to linux-firmware (open microkernel binary, license, WHENCE entry, and a source pointer).
 3. Iterate. Once the kernel lands in drm-misc-next/drm-next, sync `include/drm-uapi/` in Mesa and merge the Mesa driver.
