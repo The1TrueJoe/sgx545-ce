@@ -165,29 +165,13 @@ attribute instead.
   board test makes stores commit with `EDM_PROTECT` back on, gap 19's stopgap (mapping the
   arena without the flag) can be dropped.
 
-## 7. Init-script part 2 values (U)
+## 7. Init-script part 2 values
 
-The host runs these register writes after the reset, from the script the user space builds.
-Offsets the 530 GPL header does not name are given by offset; the values are the vendor's.
-Where ours differs, the stage-1 value is shown.
-
-| Register | Vendor value | Note |
-|---|---|---|
-| `0xa58` (event enable) | 0x2204f00f | ours 0x2204b00f; the vendor also enables the bit at 0x4000 (b14) |
-| `0xa68` (event program) | init program offset from `PDS_EXEC_BASE`, `& ~0xf` | a 26-bit offset, as stage 1 found (C) |
-| `0xa6c`, `0xa70` | 3, 0x00013d01 | the event program's control words (§5) |
-| `0xa74` | 0x003f8200 | `(EDM-task limit << 16) \| 0x8200`; the limit defaults to 0x3f. Ours wrote 0x00208200 |
-| `0xa78` | 0 | |
-| `0xa00` | 0x7c000 | (0xfc000 when clock gating is disabled) |
-| `0xabc` (`PDS`, K) | 0x40 | ours wrote 0xe |
-| `0x804` | 0xffff | |
-| `0xb30` | 0x100 | |
-| `0x800`, `0x810`, `0x814`, `0x818`, `0x4e8` | not written | agrees with stage-1 attempt 37, which found these do not latch on the 530 (C) |
-| `0x13c`, `0xa7c`, `0xa80` | 0 | |
-| `0x130` (`EVENT_HOST_ENABLE`) | 0x4000 | |
-| `0x110` (`EVENT_HOST_ENABLE2`) | 0 | |
-
-Part 1 writes `0xa58` = 0 and `EVENT_TIMER` (`0xacc`) = 0 before the reset.
+After the reset the host writes the event enables, the event program's address and
+control words, the EDM-task limit word `0xa74` and a handful of unit enables (§1 lists
+where they differ from ours). Hardware-confirmed so far (**C**): `0xa68` takes a 26-bit
+offset from `PDS_EXEC_BASE`, `& ~0xf`; `0x800`, `0x810`, `0x814`, `0x818` and `0x4e8` don't
+latch on the 530 (stage-1 attempt 37).
 
 **Watchdog / clock values** passed in `SGX_BRIDGE_INIT_INFO` (hardware-read on an OMAP3630
 board, **C**):
