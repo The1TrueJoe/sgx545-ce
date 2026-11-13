@@ -441,6 +441,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
 			bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
+	/* Counted before any fence says so: a client woken by one sees the reset. */
+	WRITE_ONCE(sdev->reset_count, sdev->reset_count + 1);
 	pvrsgx_coredump(sdev, bad);
 	/* Stopped before any fence signals: userspace may free the jobs' memory then. */
 	pvrsgx_fw_halt(sdev);
@@ -473,7 +475,6 @@ fail:
 	 * pending faults, the first kick).
 	 */
 	cookie = dma_fence_begin_signalling();
-	sdev->reset_count++;
 	WRITE_ONCE(sdev->fw_running, false);
 	/* The restart's reset clears the BIF's fault state. */
 	WRITE_ONCE(sdev->faulted, false);

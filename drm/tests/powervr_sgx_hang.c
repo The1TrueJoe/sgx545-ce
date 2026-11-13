@@ -477,7 +477,9 @@ static int hang(struct rc *a, unsigned f)
 	CHECK(sb.reset_count == s0.reset_count + 1);
 	CHECK(state(a->c->ctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_OK);
 	CHECK(state(xctx).state == DRM_POWERVR_SGX_CONTEXT_STATE_OK);
-	dump = coredump_take();
+	/* Written by a worker, possibly after the fence: give it two seconds. */
+	for (int t = 0; (dump = coredump_take()) <= 0 && t < 100; t++)
+		usleep(20000);
 	printf("  devcoredump: %ld bytes\n", dump);
 	CHECK(dump > 1000);
 
