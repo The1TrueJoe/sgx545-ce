@@ -80,7 +80,7 @@ On a CE5300 board, add the repository the same way but install only
 kernel" below.
 
 If you'd rather install the files by hand, download them from the newest release on the
-[Releases page](https://github.com/The1TrueJoe/powervr_sgx/releases): the four `.deb` files
+[Releases page](https://github.com/The1TrueJoe/powervr_sgx/releases): the `.deb` files
 and `SHA256SUMS`. Put them in one folder and check them there:
 
 ```bash
@@ -125,8 +125,8 @@ All four must show `=y` or `=m`. Then, from a copy of this repository:
 
 ```bash
 sudo apt install dkms build-essential linux-headers-$(uname -r)
-sudo drm/dkms/mkdkms.sh 0.1
-sudo dkms add powervr_sgx/0.1 && sudo dkms install powervr_sgx/0.1
+sudo drm/dkms/mkdkms.sh 0.2
+sudo dkms add powervr_sgx/0.2 && sudo dkms install powervr_sgx/0.2
 ```
 
 If the old vendor driver `pvrsrvkm` is installed, block it so it doesn't take the GPU:
@@ -226,6 +226,39 @@ If the desktop reacts slowly while a game runs, let programs keep fewer frames i
 add the line `SGX_SLOTS=3` to `/etc/environment` and log in again. Games then run a little
 slower. Delete the line to go back to the default of 4.
 
+## Upgrading
+
+The kernel, the firmware and Mesa change together: Mesa only works with a kernel from the
+same release. A Mesa that finds an older kernel interface leaves the GPU alone, so programs
+fall back to Debian's software renderer (`llvmpipe`) until the kernel matches.
+
+**From an earlier release, with the apt repository:**
+
+```bash
+sudo apt update && sudo apt upgrade
+```
+
+Then restart right away, so the new kernel runs with the new Mesa. Since 0.2.0, apt moves
+all three packages together, and the 32-bit `mesa-sgx:i386` with them.
+
+**From packages you downloaded from GitHub Actions** (test builds, not a release): their
+version numbers, such as `26.2.5+sgx20261112.694a777` or `7.3.3-sgx1`, sort above the
+releases, so `apt upgrade` keeps them. Check what you have:
+
+```bash
+dpkg -l 'linux-image-7.3.3-sgx' sgx545-firmware 'mesa-sgx*' | grep '^ii'
+```
+
+Replace them with the release, naming its version (0.2.0 here). Add `mesa-sgx:i386=…` if
+you have the 32-bit package; leave it out otherwise:
+
+```bash
+sudo apt update && sudo apt install --allow-downgrades linux-image-7.3.3-sgx=7.3.3-sgx0.2.0 sgx545-firmware=0.2.0 mesa-sgx:amd64=26.2.5+sgx0.2.0 mesa-sgx:i386=26.2.5+sgx0.2.0
+```
+
+Then restart. Test builds from 0.2.0 on number themselves below the next release, so this
+is needed only once.
+
 ## Removing it again
 
 You can undo each piece on its own.
@@ -235,7 +268,7 @@ You can undo each piece on its own.
 - **The firmware:** `sudo apt remove sgx545-firmware`. On its own, it does nothing anyway.
 - **The kernel (Cedarview):** pick Debian's kernel under "Advanced options" in the boot menu.
   To uninstall ours, run `sudo apt remove linux-image-7.3.3-sgx`.
-- **DKMS (CE5300):** run `sudo dkms remove powervr_sgx/0.1 --all`. If you blocked
+- **DKMS (CE5300):** run `sudo dkms remove powervr_sgx/0.2 --all`. If you blocked
   `pvrsrvkm` and want it back, delete `/etc/modprobe.d/sgx-no-pvrsrvkm.conf`.
 
 ## Reporting problems

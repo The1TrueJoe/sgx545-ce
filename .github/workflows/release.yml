@@ -194,3 +194,21 @@ jobs:
         run: |
           set -eux
           docker run --rm -v "$PWD:/w" -w /w debian:trixie sh tools/release/repo-test.sh site "$PREV"
+
+      # The CE5300 path (docs/INSTALL.md): the driver built by DKMS, here against
+      # the release kernel's own headers
+      - name: DKMS build of the driver
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eux
+          docker run --rm -v "$PWD:/w" -w /w -e VERSION debian:trixie sh -euxc '
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              dkms build-essential bc bison flex libelf-dev ./assets/linux-headers-7.3.3-sgx_*_amd64.deb
+            v=$(printf %s "$VERSION" | tr "~" ".")
+            sh drm/dkms/mkdkms.sh "$v"
+            dkms add "powervr_sgx/$v"
+            dkms build "powervr_sgx/$v" -k 7.3.3-sgx --kernelsourcedir /usr/src/linux-headers-7.3.3-sgx ||
+              { cat /var/lib/dkms/powervr_sgx/"$v"/build/make.log; exit 1; }
+            find /var/lib/dkms/powervr_sgx -name "powervr_sgx.ko*" | grep .'

@@ -4,10 +4,11 @@ A release is a tag. Pushing a tag `v<version>` (for example `v0.1.0`) runs
 `.github/workflows/release.yml`. It builds, from that tag:
 - the Cedarview kernel package in its release flavor, which has no test-kit patches
   (`powervr-sgx-deb.yml`);
-- `mesa-sgx` and `sgx545-firmware` (`mesa-debian.yml`);
+- `mesa-sgx` for amd64 and i386, and `sgx545-firmware` (`mesa-debian.yml`);
 - `SHA256SUMS` over all of them.
 
-It then attaches them to a **draft pre-release**. Nothing is public until a person
+It then attaches them to a **draft pre-release**, with `docs/releases/<tag>.md` as its notes
+when that file exists (generic notes otherwise). Nothing is public until a person
 publishes the draft on GitHub. Publishing runs `.github/workflows/apt-repo.yml`, which
 rebuilds the signed apt repository on GitHub Pages from every published release.
 
@@ -19,6 +20,15 @@ The packages take their versions from the tag:
 | `mesa-sgx` | `<Mesa version>+sgx0.1.0` |
 | `sgx545-firmware` | `0.1.0` |
 
+A CI build that isn't a release numbers its packages `0~git<date>.<commit>` (the
+kernel `7.3.3-sgx0~git…`, Mesa `<Mesa version>+sgx0~git…`), which sorts below every
+release, so apt moves from a test build to the next release by itself.
+
+The kernel and Mesa must come from the same release once the uAPI changes. A release's
+`mesa-sgx` and `sgx545-firmware` carry `Breaks:` on the kernels before their uAPI
+(`mesa/debian/BREAKS`), so apt upgrades the kernel with them. Raise it when the uAPI's
+major version changes.
+
 A tag is `v` and a version that starts with a digit: digits, letters, dots, `+` and
 `-`. A `-` becomes `~` in the package versions, so a pre-release sorts before its release
 (`v0.2.0-rc1` gives `0.2.0~rc1`, which apt treats as older than `0.2.0`).
@@ -27,6 +37,18 @@ there (`sgx545-firmware_0.2.0.rc1_all.deb`). `SHA256SUMS` lists those names,
 and the package inside still says `0.2.0~rc1`.
 
 ## Steps
+
+0. When the kernel isn't on `dev` yet, cut a release branch from `dev` and merge the
+   kernel branch into it (`release/v0.2` is `dev` plus `m2-drm`), then run every workflow
+   on it from the Actions tab (`gh workflow run <file> --ref release/vX.Y`). Rehearse the
+   release on the branch: run `release` by hand with a version such as `0.2.0~rc0`. It builds
+   the packages under that version, signs a throwaway apt repository and runs
+   `tools/release/repo-test.sh` in Debian 13: the upgrade from the last published release,
+   `mesa-sgx:i386` alone, a fresh install, and the way off CI-built packages. It also builds
+   the driver with DKMS against the release kernel's headers. Nothing is tagged or
+   published. `kernel_run` reuses a finished release-flavor `powervr-sgx-deb` run with the
+   same version instead of building the kernel again. Put the notes in
+   `docs/releases/v<version>.md`; the tag's draft takes them.
 
 1. Merge `dev` into `main` (a merge commit) once `dev`'s CI is green, then tag `main`
    and push the tag:
@@ -40,8 +62,8 @@ and the package inside still says `0.2.0~rc1`.
    ```
 
 2. Wait for the `release` run to finish. The kernel build takes several hours.
-3. On the Releases page, check the draft: its five files (the four packages and
-   `SHA256SUMS`), and that `SHA256SUMS` checks against a plain download:
+3. On the Releases page, check the draft: its six files (the kernel image and headers,
+   the firmware, Mesa for amd64 and i386, and `SHA256SUMS`), and that `SHA256SUMS` checks against a plain download:
 
    ```bash
    gh release download v0.1.0 --repo The1TrueJoe/powervr_sgx --dir /tmp/v0.1.0 && (cd /tmp/v0.1.0 && sha256sum -c SHA256SUMS)
