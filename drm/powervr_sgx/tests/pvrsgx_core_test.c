@@ -45,10 +45,29 @@ static void core_test_table(struct kunit *test)
 	}
 }
 
+/*
+ * Only Cedarview limits the CPU's wake-up latency, below its C4 exit (100 us)
+ * and above C2's (20 us); the CE5300 shares the family but not the limit.
+ */
+static void core_test_cpu_latency(struct kunit *test)
+{
+	for (unsigned int i = 0; i < ARRAY_SIZE(cores); i++) {
+		u32 us = cores[i].cpu_latency_us;
+
+		if (cores[i].family == &families[0] && cores[i].core_rev == 0x0001000d) {
+			KUNIT_EXPECT_GT(test, us, 20);
+			KUNIT_EXPECT_LT(test, us, 100);
+		} else {
+			KUNIT_EXPECT_EQ(test, us, 0);
+		}
+	}
+}
+
 static struct kunit_case pvrsgx_core_test_cases[] = {
 	KUNIT_CASE(core_test_lookup),
 	KUNIT_CASE(core_test_unknown),
 	KUNIT_CASE(core_test_table),
+	KUNIT_CASE(core_test_cpu_latency),
 	{}
 };
 

@@ -3,6 +3,7 @@
 
 #include <drm/drm_print.h>
 
+#include <linux/pm_qos.h>
 #include <linux/pm_runtime.h>
 
 #include "pvrsgx_device.h"
@@ -17,6 +18,19 @@
  * run_job until it leaves the active list.
  */
 #define AUTOSUSPEND_MS	500
+
+/* The core's CPU latency limit, held while the GPU is awake (pvrsgx_core_info). */
+static void cpu_latency_hold(struct pvrsgx_device *sdev, bool on)
+{
+	struct pm_qos_request *req = &sdev->cpu_latency;
+
+	if (!sdev->core->cpu_latency_us || cpu_latency_qos_request_active(req) == on)
+		return;
+	if (on)
+		cpu_latency_qos_add_request(req, sdev->core->cpu_latency_us);
+	else
+		cpu_latency_qos_remove_request(req);
+}
 
 int pvrsgx_power_get(struct pvrsgx_device *sdev)
 {
@@ -41,6 +55,8 @@ void pvrsgx_power_init(struct pvrsgx_device *sdev)
 {
 	struct device *dev = sdev->base.dev;
 
+	/* Awake from probe until the first runtime suspend. */
+	cpu_latency_hold(sdev, true);
 	pm_runtime_set_autosuspend_delay(dev, AUTOSUSPEND_MS);
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_mark_last_busy(dev);
@@ -69,6 +85,7 @@ void pvrsgx_power_fini(struct pvrsgx_device *sdev)
 		pm_runtime_set_suspended(dev);
 		pm_runtime_put_noidle(dev);
 	}
+	cpu_latency_hold(sdev, false);
 }
 
 static int pvrsgx_runtime_suspend(struct device *dev)
@@ -77,6 +94,7 @@ static int pvrsgx_runtime_suspend(struct device *dev)
 
 	if (!sdev->lost)
 		pvrsgx_fw_stop(sdev);
+	cpu_latency_hold(sdev, false);
 	return 0;
 }
 
@@ -84,6 +102,7 @@ static int pvrsgx_runtime_resume(struct device *dev)
 {
 	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
 
+	cpu_latency_hold(sdev, true);
 	/* A failed start loses the device: run_job then fails every job with -EIO. */
 	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
 		drm_err(&sdev->base, "microkernel did not start on resume: device lost\n");

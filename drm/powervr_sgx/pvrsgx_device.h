@@ -13,6 +13,7 @@
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
@@ -225,6 +226,8 @@ struct pvrsgx_device {
 
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
+	/** @cpu_latency: The core's CPU latency limit while awake (pvrsgx_pm.c). */
+	struct pm_qos_request cpu_latency;
 };
 
 #define to_pvrsgx_device(drm) container_of_const(drm, struct pvrsgx_device, base)
