@@ -77,8 +77,7 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
   identity index buffer (0, 1, 2, … 1024 entries); the clear object has its own
   three-index buffer.
 - **PDS vertex programs** are a data segment followed by code. The clear and
-  the triangle share the same 4-word code (`67800072 2f032343 030403e5
-  af000000`); only the data segment differs: vertex address, DMA size in dwords
+  the triangle share the same code; only the data segment differs: vertex address, DMA size in dwords
   minus one, stride (clear: 3, 16; xy-float triangle: 1, 8) and one control
   word (`0x0001010a` / `0x00011b0a`).
 
@@ -180,17 +179,10 @@ pokes overrides after the snapshot loads and again before each kick
   probe run with the same PROBE_VERTS/PROBE_CLEAR/PROBE_COLOR: 0 of 345600
   pixels differ. The three clear-vertex color words are the only clear state,
   and the uniform copy in the PDS pixel data is the only one the frame reads.
-- **The probe's fragment shader, as the driver finalized it** (pixel-shader
-  heap, buffer `0x37008000`):
-  - secondary program at `0x37008300`: header word `fa440700 00000000`,
-    `op0xf1`, `and.test`, `ld pa0 <- [#0]`, `wdf`, then
-    `pck.u8.f16 pa9.f8.f9, pa9.f6, pa9` and `pck.u8.f16 pa9.f7.f10, pa10, pa10.f6`
-    (the FP16 `c` packed to 8 bits per channel);
-  - main program at `0x37008380`: the same header word, then `mov o0, sa9`.
-    The secondary program's `pa9` is the main program's `sa9`, and `o0` is the
-    pixel color.
-  - The rest of the buffer and the small heap-4 allocations are the driver's
-    own programs (clears, byte-mask variants); they don't take part in this draw.
+- **The probe's fragment shader, as the driver finalized it:** a secondary
+  program packs the FP16 `c` to 8 bits per channel into `pa9`, and the main
+  program is one `mov o0, sa9`: the secondary program's `pa9` is the main
+  program's `sa9`, and `o0` is the pixel color.
 - **f1.17 (h18) ends a program.** It is set on the last instruction of every
   finalized program. A program can grow into the free space after it (the
   secondary program grew from 6 to 7 instructions) with no other change.

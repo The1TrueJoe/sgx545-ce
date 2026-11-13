@@ -263,20 +263,9 @@ The draw is six words:
   picks one of four copies.
 - **The state-emit USSE programs are just `emit` instructions.** They copy
   the DMA'd attributes to the MTE (macro tiling engine). The block is the
-  state; the program only forwards it. The DDK's, from the base4 capture
-  (`0x3c008700` for 12 dwords, `0x3c008a00` for 18):
-
-      phas.i #0, #0 [wait=7]                         fa440700 00000000
-      nop [nosched]                                  f8000940 00000000
-      test.and.ne p0, #0, #0 [skipinv]               48831280 a00c0000
-      (p0) ld.a.d pa0, pa0, #0 [skipinv rpt=4]       e9833084 a0000000
-      wdf                                            f9200000 00000000
-      mov o0, pa0 [skipinv rcnt rpt=n]               rpt at most 16 per mov: 18 dwords
-                                                     are `rpt=16` then `mov o16, pa16 rpt=2`
-      emit.t3 r0, #0, #0                             fb23c000 a0000000
-      op0xd6 #0                                      ff200000 00000000
-      emit.t1 o0, #0, #0 [end f3_20]                 fb2f4000 a0200000
-
+  state; the program only forwards it: it waits for the DMA, moves the
+  attributes to the outputs (`mov o0, pa0` with a repeat count, at most 16 per
+  `mov`), then emits them to the MTE and ends
   [capture]. The triangle's block is DMAed as 25 dwords, but its program
   forwards 18 (pa0-pa17). The clear's DMA and program both cover 12.
 - **The TA terminate's USSE task (`0x3c000000`) is the same program for two
@@ -491,19 +480,9 @@ z scale.
     Its texcoord-size word is 5 (one 4-component set: the color) and its
     MTE control 0x40.
   - Status: capture; hardware (open driver).
-- **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
-  base4 capture; 4 input dwords from one vertex stream, 8 output dwords):
-
-      phas.i #<phase 1>, #0 [wait=2]; then the prologue (nop / test / ld pa / wdf)
-      mov o0, pa0 [skipinv rcnt rpt=3]                o0-o2 = x, y, z
-      mov o3, c3 [skipinv rcnt]                       o3 = 1.0 (w)
-      pck.f32.u8 o4, pa3.l2, pa3.l2 [skipinv rcnt scale]   R = byte 2 of the ARGB8888 word
-      pck.f32.u8 o5, pa3.l1, pa3.l1 [...]                  G = byte 1
-      pck.f32.u8 o6, pa3,    pa3    [...]                  B = byte 0
-      pck.f32.u8 o7, pa3.l3, pa3.l3 [...]                  A = byte 3
-      emit.t3 r0, #0, #0 [end f12 f10]
-      phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12 f10 f3_20]
-
+- **The clear's vertex program** (the DDK's built-in; 4 input dwords from one
+  vertex stream, 8 output dwords) moves the position, sets w to 1.0 and unpacks
+  the color word's four bytes to floats.
   So the vertex stream is x, y, z (floats) and the color as one ARGB8888
   word, and the outputs are position (4) then color as 4 floats in 0-1
   [capture].
