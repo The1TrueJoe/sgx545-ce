@@ -1,6 +1,6 @@
-# The kick-2 TA hang: do_ta never advanced the client CCB read offset, so every kick re-read kick 1 (EA1)
+# The kick-2 TA hang: do_ta never advanced the client CCB read offset, so every kick re-read kick 1 (CE5310 board)
 
-The do_ta entry-counter sentinel settled the kick-2 TA hang on the EA1. This is
+The do_ta entry-counter sentinel settled the kick-2 TA hang on the CE5310 board. This is
 the root cause behind the whole "kick 2 hangs / do_3d never runs" chain.
 
 ## The sentinel result
@@ -49,8 +49,8 @@ CCB needs a mask by its size.) Offline: `test_emu`, `test_commands`, `run_ours`
 5/5 MATCH (the advance is a client-memory write, not a core register, so the
 register oracle is unaffected).
 
-Not committed yet — verifying on the next EA1 slot with the counter sentinel
+Not committed yet — verifying on the next CE5310 board slot with the counter sentinel
 (expect count 2 / flag 0 => kick 2 reads 0x62; then the terminate TA finishes,
 ta_finished sees READY, do_3d runs, the triangle renders — or the next layer, e.g.
 kick 1/kick 2 TA overlap if the two do_ta calls aren't serialized). Evidence:
-`data/2026-11-03-0325-ea1-counter-kick2-rereads-kick1.dmesg.log`.
+`data/2026-11-03-0325-ce5310-counter-kick2-rereads-kick1.dmesg.log`.

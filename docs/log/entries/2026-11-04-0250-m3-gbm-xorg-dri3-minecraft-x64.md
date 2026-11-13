@@ -1,6 +1,6 @@
 # GBM, Xorg with DRI3, and Minecraft on a 64-bit JVM, all on powervr_sgx
 
-The display path after M3. EA1 RAM boot of m2-drm c95e32d (CI run 41752797996) with the DDK
+The display path after M3. CE5310 board RAM boot of m2-drm c95e32d (CI run 41752797996) with the DDK
 microkernel, 2026-11-04 02:52 to 03:30 UTC. Nothing was flashed and there was no power-cycle.
 Another session's open-microkernel image was on the box, and powervr_sgx prefers it. The
 module was therefore loaded with `firmware=powervr_sgx/sgx545-ukernel-1.7.862890.bin`
@@ -87,5 +87,5 @@ Results:
 - The title panorama.
 - piglit's GLX tests, which need a piglit build against the X11 root.
 - A frame-rate measurement in a world.
-- On the EA1's p1: `/opt/x64root` (354 MB) and `/root/m3`, `/root/deqp/lib-m3*`, all files
+- On the CE5310 board's p1: `/opt/x64root` (354 MB) and `/root/m3`, `/root/deqp/lib-m3*`, all files
   only.

@@ -173,7 +173,7 @@ token_done(const struct pvr_token *t)
 
 /* Poll a render's completion.  The counter is polled, not waited on, so the
  * poll's steps round the wait up: at 50 us steps doubling to 1 ms a 3 ms
- * render was seen done at 3.55 ms (perfmicro tex 0.71 of the DDK on the EA3,
+ * render was seen done at 3.55 ms (perfmicro tex 0.71 of the DDK on the CE5300 board,
  * 0.9 at 50 us steps), and 0.1 ms steps all the way were thousands of
  * wakeups.  So a render whose kick time is known is slept on until just
  * before it should be done (from its target's last renders), then polled

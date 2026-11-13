@@ -17,7 +17,7 @@ independent of GPU translation.
 If the write lands and is live, the next GPU access (the shader's own next fetch / the PBE store)
 mistranslates and the GPU wedges; HW recovery resets the core and restores the register. The
 sentinel is inside RAM and page-aligned so a directory walk faults cleanly rather than bus-hangs.
-One test. The EA1 has no smart plug: if this wedges and HW recovery does not bring it back, stop."""
+One test. The CE5310 board has no smart plug: if this wedges and HW recovery does not bring it back, stop."""
 from iso import T, out
 
 DIRBASE = 0xc84

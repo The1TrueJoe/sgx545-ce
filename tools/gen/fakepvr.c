@@ -2,7 +2,7 @@
  * fakepvr: a stand-in for the services kernel driver, so the generator can run
  * on any x86_64 Linux without touching a GPU (tools/gen/build.sh builds
  * frame-fake with it). It answers the bridge calls sgxgen makes, hands out
- * device addresses from the heaps' bases the way the EA3's kernel does (bump
+ * device addresses from the heaps' bases the way the CE5300 board's kernel does (bump
  * allocation per heap), and backs every "device" buffer with ordinary memory.
  * With -t, frame-fake writes a pvrtrace log that the decoders read like a
  * real run: the frame's every word can be checked before it goes near the GPU.
@@ -18,7 +18,7 @@
 
 #include "pvr.h"
 
-/* the EA3's client heaps (GET_DEVMEM_HEAPINFO in a DDK capture): id, base, size */
+/* the CE5300 board's client heaps (GET_DEVMEM_HEAPINFO in a DDK capture): id, base, size */
 static const uint32_t heaps[][3] = {
 	{ 0x7000000, 0x3e000000, 0xb1fff000 }, { 0x7000001, 0x20000000, 0xcfff000 },
 	{ 0x7000002, 0x30000000, 0x7f000 },    { 0x7000003, 0x32000000, 0x4fff000 },
@@ -77,7 +77,7 @@ int fake_ioctl(int fd, unsigned long req, ...)
 
 		o->hDevMemContext = (IMG_HANDLE)0x33;
 		heapinfo(o->sHeapInfo, &o->ui32ClientHeapCount);
-		/* what the kernel had already taken in the shared heaps on the EA3 */
+		/* what the kernel had already taken in the shared heaps on the CE5300 board */
 		next[3] = 0xe000;
 		next[8] = 0x3000;
 		break;

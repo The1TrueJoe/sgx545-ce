@@ -1,9 +1,9 @@
-# The residual lockup_TA is the kick-2 terminate TA hanging with fully-valid CCB state (EA3)
+# The residual lockup_TA is the kick-2 terminate TA hanging with fully-valid CCB state (CE5300 board)
 
 Follow-up to the deferral refutation (b52b093/bf43365). ta3d-state corrected the
 earlier sentinel (0xD8 was SC_TAFLIGHT, not cmd+0x04) and handed over the DDK CCB
 model. Built UK_CCBTRACE (78d2dcf): non-colliding T3C words that record how the
-client CCB is actually consumed. Ran it on the EA3 (5 lockups captured).
+client CCB is actually consumed. Ran it on the CE5300 board (5 lockups captured).
 
 ## Trace words (UK_CCBTRACE, T3C byte offsets)
 
@@ -52,4 +52,4 @@ or the 0x274 save/restore), or a TA-idle/flush/barrier between the two kicks the
 DDK gets from its emit->worker launch. Candidate HW registers for a targeted
 DDK-vs-ours trajectory poll next slot: 0x8 CLKGATESTATUS, 0x724/0x72c TA DPM,
 0x274, 0xa74, 0x630, 0x618-0x628 DPM free-list, 0x12c EVENT_STATUS (OOM). Evidence:
-`scratchpad/ea3-ccbtrace.out`, `docs/log/data/2026-11-03-1210-ea3-ccbtrace.log`.
+`scratchpad/ce5300-ccbtrace.out`, `docs/log/data/2026-11-03-1210-ce5300-ccbtrace.log`.

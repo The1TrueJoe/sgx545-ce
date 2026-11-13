@@ -1,4 +1,4 @@
-"""Compare gl4es ctest snapshots from the EA3 (mesa/tests/gl4es-ctest-ab.sh).
+"""Compare gl4es ctest snapshots from the CE5300 board (mesa/tests/gl4es-ctest-ab.sh).
 
     python3 ctest_cmp.py OUT_DIR REFS_DIR [--json out.json]
 

@@ -1,5 +1,5 @@
 # 2026-11-02: 17165 tests, Crash 9, Fail 1146, Flake 1, Pass 15837, Skip 124, Warn 38
-# the stock DDK (Cedarview 1.7 libGLESv2, i386 under IA32 compat) on the same EA3, kernel and dEQP build, for comparison; not a Mesa driver
+# the stock DDK (Cedarview 1.7 libGLESv2, i386 under IA32 compat) on the same CE5300 board, kernel and dEQP build, for comparison; not a Mesa driver
 # tests that wedged the GPU or the box (drive-deqp.py); for the DDK: its compiler never returns on recursive macros (60 s timeouts, crashes, and the box stopped answering 7 times around them)
 dEQP-GLES2.functional.shaders.preprocessor.recursion.recursion_1_fragment
 dEQP-GLES2.functional.shaders.preprocessor.recursion.recursion_1_vertex

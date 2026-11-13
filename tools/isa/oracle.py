@@ -144,6 +144,6 @@ class Oracle:
 if __name__ == "__main__":
     import sys
     o = Oracle(sys.argv[1] if len(sys.argv) > 1 else None)
-    # the and.test from the secondary-program prologue, as libusc was given it on the EA3
+    # the and.test from the secondary-program prologue, as libusc was given it on the CE5300 board
     inst = [int(x, 16) for x in "4f 40000201 0 0 18 0 6 10000 0 1 0 c 0 0 0 0 8 0 0 0 0 8 0 0 0".split()]
     print(o.encode(inst), "want lo a00c0000 hi 488b1281")

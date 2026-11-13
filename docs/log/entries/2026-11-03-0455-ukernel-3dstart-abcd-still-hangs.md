@@ -30,5 +30,5 @@ The micro-architectural debugging is beyond register-dump inference. ta3d-state
 runs the DDK microkernel in tools/ukernel/emu with breakpoints; asked it to run the
 open microkernel's do_3d through the same frame and diff the actual 3D-start
 writes (values + addresses) against the DDK, to find the wrong/missing one. Data:
-`data/2026-11-03-0455-ea1-3dstart-abcd-still-3dhang.dmesg.log`. Committed render
+`data/2026-11-03-0455-ce5310-3dstart-abcd-still-3dhang.dmesg.log`. Committed render
 path stands through f852218; A+B+C+D held uncommitted.

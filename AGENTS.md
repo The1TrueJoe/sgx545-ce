@@ -39,7 +39,7 @@ core.
 
 ### Hardware facts that drive the design
 
-- **CE5300/CE5310 (EA-1/EA-3):** the SGX545 is its own PCI function, `01:02.0 8086:089b`. The display (VDC, `01:08.0 8086:2e61`) is a separate function with **no upstream KMS driver**. Core rev **1014**.
+- **CE5300/CE5310:** the SGX545 is its own PCI function, `01:02.0 8086:089b`. The display (VDC, `01:08.0 8086:2e61`) is a separate function with **no upstream KMS driver**. Core rev **1014**.
 - **Cedarview:** the SGX sits **behind the same PCI function/BAR as the display engine**, which upstream `gma500` already owns. gma500 keeps Cedar Trail support (Medfield and Moorestown were removed in 2021; Poulsbo, Oaktrail and Cedar Trail stay). Core rev **10131** (same errata as 1014, but the microkernel build may differ, so verify).
 - **Clover Trail (Atom Z2760)** also has SGX545, but its display has no upstream support. Out of scope.
 
@@ -99,7 +99,7 @@ Write a short **threat-model section** in the uAPI design doc. Reviewers will as
 
 - linux-firmware only takes **redistributable** firmware with a license file and a `WHENCE` entry. Imagination's 53,096-byte microkernel can't go in, and can't go on any ISO, unless Imagination licenses it. (Joseph is asking them separately. Don't block on it.)
 - **Our open microkernel is the primary plan.** To be submittable it needs:
-  1. Hardware validation on **both core revs** (1014 EA-3 and 10131 Cedarview).
+  1. Hardware validation on **both core revs** (1014 on a CE5300 board and 10131 on Cedarview).
   2. The full command set the kernel driver uses: TA, 3D, render teardown with multi-render bookkeeping, transfer, cleanup, power, HWR re-init, get-misc-info.
   3. A permissive license (MIT/BSD), source in-tree, and a **reproducible build** from `ukernel/build.py` with no DDK inputs.
   4. A versioned host interface. The kernel checks the version at load.
@@ -150,10 +150,10 @@ Each milestone has an exit criterion. Don't start the next one's upstream-facing
 
 ### M0: finish GLES2 on the current stack (keeps the downstream distribution moving)
 The `mesa/README.md` "What is missing" list: discard/alpha test (ISPA pass types 2/4), gl_FragCoord/gl_PointCoord, constant-colour blend (sop2 k18/k19), the rest of textures, scissor/partial viewports, lines/points, ZLS, tear-free present, zero-copy vertices and pipelining, extension pruning.
-**Exit:** dEQP-GLES2 runs to completion on the EA3 with a fails list we understand. Run it on the DDK too for comparison.
+**Exit:** dEQP-GLES2 runs to completion on a CE5300 board with a fails list we understand. Run it on the DDK too for comparison.
 
 ### M1: open microkernel complete and on hardware
-Finish what `ukernel/README.md` lists as not yet reproduced. Bring it up on the EA3 with `srvinit -o`, then run frames, multi-render, transfers, cleanup, power and HWR. Validate against the DDK with `run_ours.py` per phase.
+Finish what `ukernel/README.md` lists as not yet reproduced. Bring it up on a CE5300 board with `srvinit -o`, then run frames, multi-render, transfers, cleanup, power and HWR. Validate against the DDK with `run_ours.py` per phase.
 **Exit:** the full M0 dEQP run passes as well with our microkernel as with the DDK's, with HWR recovery demonstrated. Reproducible build, license chosen.
 
 ### M2: uAPI design doc, then the new kernel driver (on CE5300 first)
@@ -163,7 +163,7 @@ CE5300 first, because the SGX is its own PCI device there and nothing needs unta
 3. IGT tests for each ioctl, including the negative cases (bad flags, VAs outside the VM, malformed streams).
 
 Leave `pvrsrvkm` alone apart from the downstream distribution's needs. **Don't add more compat-layer work to it.**
-**Exit:** the driver boots the GPU from the kernel on the EA3 and runs submitted jobs, IGT passes, and one client can't corrupt another (test it).
+**Exit:** the driver boots the GPU from the kernel on a CE5300 board and runs submitted jobs, IGT passes, and one client can't corrupt another (test it).
 
 ### M3: Mesa winsys on the new uAPI
 Replace `libpvr` in `src/gallium/winsys/sgx/` with a DRM winsys: BO allocation, VM_BIND, submit, syncobj, dma-buf import/export. Drop the fbdev platform from the upstream branch (keep it in the downstream overlay). Enable surfaceless, GBM, Wayland and X11.
@@ -202,7 +202,7 @@ Expectation to set in docs: the point of GL3 on this GPU is that apps start and 
 ## 6. Rules of engagement for sessions on this repo
 
 - Follow the repo's existing rules: wrap GPU runs in `flock /tmp/gpu.lock`, never build Buildroot locally, and log hardware work in `docs/log/entries/`.
-- **Boxes (Joseph, 2026-11-01):** GPU work with visible output, including Minecraft on our driver, runs on the **EA-1** (the box on Joseph's monitor; it has no smart plug, so nothing wedge-prone; stop and restart `mc-session` around runs and tell the Minecraft session). The **EA3** belongs to the DSP and Ethernet-switch work; open-microkernel tests that may wedge the GPU run there in slots agreed with those sessions, recovered with the Bench plug.
+- **Boxes (Joseph, 2026-11-01):** GPU work with visible output, including Minecraft on our driver, runs on a CE5310 board with a monitor (it has no smart plug, so nothing wedge-prone; stop and restart `mc-session` around runs and tell the Minecraft session). A second CE5300 board belongs to the DSP and Ethernet-switch work; open-microkernel tests that may wedge the GPU run there in slots agreed with those sessions, recovered with a remote power switch.
 - Don't break the downstream distribution. `pvrsrvkm` + the overlay stay its shipping stack until the new driver replaces them.
 - Don't put uAPI in Mesa before the kernel side has merged. Don't write 32-bit compat structs in new uAPI. Don't copy `kernel/src` material into Mesa. Don't commit proprietary binaries.
 - Before code relies on any reverse-engineered fact, it goes into `docs/` with how it was established.

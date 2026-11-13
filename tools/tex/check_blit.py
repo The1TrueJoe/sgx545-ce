@@ -2,7 +2,7 @@
 
     python3 check_blit.py <dir with blitest's *.bin>
 
-Every case has an exact prediction, measured on the EA3: up (tex.py's twiddle
+Every case has an exact prediction, measured on the CE5300 board: up (tex.py's twiddle
 of the source), down (the source again), mipn (texel 2x+1, 2y+1, as the DDK's
 glGenerateMipmap), mipl (LINEAR at half size: a two-step rounded average),
 up2x (pixel replication), npot (the source rows), to565 (each channel

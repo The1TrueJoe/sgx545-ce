@@ -1,6 +1,6 @@
 # Mixed submits work; a context that survives a reset does not; the 3D before and after
 
-M2 item 4. EA1 RAM boots of abd4ca8, 2026-11-03 ~05:25 UTC, DDK microkernel, nothing
+M2 item 4. CE5310 board RAM boots of abd4ca8, 2026-11-03 ~05:25 UTC, DDK microkernel, nothing
 flashed, no power-cycle.
 
 ## uAPI suite: 31/31
@@ -47,7 +47,7 @@ and the VM's PB all lived through the reset. Two things the restart does not red
 
 Fix: before restarting, write every live context's HW context word 0 back to its
 first-use value and reset every PB to its state at creation. It goes on the next
-EA1 slot.
+CE5310 board slot.
 
 ## For the open microkernel: what the DDK microkernel writes around the 3D
 

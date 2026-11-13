@@ -40,4 +40,4 @@ render details, which OURS skips entirely:
   0x200) rd+0xfc/0x100 = cmd+0x110/0x114.
 rd is microkernel-internal (HW never reads it); these feed do_3d's programming and the
 completion path. Implement the block in do_ta. The 0x274 save stays (DDK-matching,
-correct). Data: data/2026-11-03-0557-ea1-0x274-ta-output-correct.dump.log.
+correct). Data: data/2026-11-03-0557-ce5310-0x274-ta-output-correct.dump.log.

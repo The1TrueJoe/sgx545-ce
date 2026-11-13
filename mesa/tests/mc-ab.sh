@@ -1,5 +1,5 @@
 #!/bin/sh
-# Minecraft on the EA3 through gl4es, on the DDK or on ours, for the A/B.
+# Minecraft on the CE5300 board through gl4es, on the DDK or on ours, for the A/B.
 #   mc-ab.sh ddk|sgx SECONDS [xdotool steps: "at:sec cmd args" ...]
 # Runs the Minecraft runtime's game (/opt/minecraft/rootfs) on Xvfb :0
 # with gl4es' FPS counter, under the GPU lock and gpuwatch.sh; after SECONDS

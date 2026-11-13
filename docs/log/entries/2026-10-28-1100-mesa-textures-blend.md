@@ -2,7 +2,7 @@
 
 The driver of the previous entry drew untextured, opaque geometry. gl4es and
 Minecraft need three more things before anything of theirs can draw:
-textures, blending and color masks. All three are now on the EA3, each
+textures, blending and color masks. All three are now on the CE5300 board, each
 checked against the DDK drawing the same scene with `glReadPixels`:
 
 | feature | cases | against the DDK | commit |
@@ -88,7 +88,7 @@ reads pa0. Ours writes the blend back to pa<c>, and the pixels match.
 ## Numbers
 
 `data/2026-10-28-1100-mesa-textures-blend.json`. 720×480, x86_64 build,
-srvinit-started EA3. A/B scripts: `mesa/tests/sgx545_texab.sh`,
+srvinit-started CE5300 board. A/B scripts: `mesa/tests/sgx545_texab.sh`,
 `mesa/tests/sgx545_blendab.sh`. No SGX recoveries and no power cycles in this
 work. The reference scene is still md5 `232e4930…`, and es2gears still runs
 at about 420 FPS.

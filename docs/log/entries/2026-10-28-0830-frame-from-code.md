@@ -24,7 +24,7 @@ The bridge client `libpvr/pvr.c` learned to write pvrtrace logs of its own
 runs, and `mkreplay.py` learned to read x86_64 traces. So a generated frame
 can be read by the same decoders as a blob capture.
 
-- **On the fake driver.** `frame-fake` ran on the EA3 without opening the GPU.
+- **On the fake driver.** `frame-fake` ran on the CE5300 board without opening the GPU.
   Its trace went through `state/decode.py` and `pds/dis.py`.
 - **Against the reference.** A pairwise comparison followed the same
   pointers through the generated frame and through `ref.bin`. That covers the
@@ -111,7 +111,7 @@ Raw results: `data/2026-10-28-0830-frame-from-code.json`.
 
 ## Cost
 
-The EA3 was power-cycled three times (`data/story-power-cycles.csv`):
+The CE5300 board was power-cycled three times (`data/story-power-cycles.csv`):
 
 - after the epilogue hang;
 - after the layout hang;

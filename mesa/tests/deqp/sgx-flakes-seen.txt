@@ -1,4 +1,4 @@
-# tests seen passing and failing on the same build: the fbo.render ones fail in a run after other fbo tests and pass alone (2026-11-02, EA3)
+# tests seen passing and failing on the same build: the fbo.render ones fail in a run after other fbo tests and pass alone (2026-11-02, CE5300 board)
 dEQP-GLES2.functional.fragment_ops.depth_stencil.stencil_ops.incr_wrap_decr_keep
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.24
 dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.52
@@ -29,7 +29,7 @@ dEQP-GLES2.functional.fbo.render.color.blend_npot_tex2d_rgb_depth_component16
 dEQP-GLES2.functional.fbo.render.color.mix_npot_tex2d_bgra_depth_component16
 dEQP-GLES2.functional.fbo.render.color.mix_npot_tex2d_rgb_depth_component16
 dEQP-GLES2.functional.fbo.render.repeated_clear.tex2d_rgb
-# order-dependent NPOT fbo.render: in fbo.* order the mix_npot ones fail and the depth ones pass on c76d83e, f466585, 1953c53 and 5886029 alike, run alone they pass; in the full suite all fail (2026-11-03, EA1)
+# order-dependent NPOT fbo.render: in fbo.* order the mix_npot ones fail and the depth ones pass on c76d83e, f466585, 1953c53 and 5886029 alike, run alone they pass; in the full suite all fail (2026-11-03, CE5310 board)
 dEQP-GLES2.functional.fbo.render.color.mix_npot_tex2d_bgra
 dEQP-GLES2.functional.fbo.render.color.mix_npot_tex2d_rgb
 dEQP-GLES2.functional.fbo.render.color.mix_npot_tex2d_rgba

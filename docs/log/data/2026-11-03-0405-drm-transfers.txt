@@ -1,4 +1,4 @@
-# 5c6fd45, EA1 RAM boot 2026-11-03 ~04:03 UTC
+# 5c6fd45, CE5310 board RAM boot 2026-11-03 ~04:03 UTC
 7.1.8-m2drm
 ohc.ramboot=1
 HELD-BY-US

@@ -3,7 +3,7 @@
 """P1 open half, the safe pre-flight (UAPI.md 7.2 / G1, Joseph's D9). Run this first.
 
 It confirms the rig renders on this box and that client memory works, re-confirms the P1 read
-on the EA1, and establishes the discriminator for the write test: the host reads a register
+on the CE5310 board, and establishes the discriminator for the write test: the host reads a register
 before and after the frame, so after != before means the client's `str` reached the register.
 
 USE_CODE_BASE_14 (0xa44) and _15 (0xa48) are unused code bases, so writing them changes nothing

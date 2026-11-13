@@ -73,11 +73,11 @@ bit sweep is in `docs/TEX.md` section 7.
 
 - 13 runs in `data/2026-10-28-0936-render-targets-present.csv`; every claim
   except the depth load is 0 pixels off.
-- Power cycles on the EA3 caused by this work: 4 (three while finding the FBO
+- Power cycles on the CE5300 board caused by this work: 4 (three while finding the FBO
   sync-list hang, one for a ZLS bit), each followed by srvinit and a
   pixel-exact control replay.
 - Also learned: the "wait until card0 is free" loops of the sessions sharing
-  the EA3 raced, which shifted 9 captures' addresses. Captures and replays now
+  the CE5300 board raced, which shifted 9 captures' addresses. Captures and replays now
   take `flock /tmp/gpu.lock` and are rejected and retaken if shifted.
 
 Commits on `um-re` after the restructure: `da88290`, `adddd09`, and this

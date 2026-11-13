@@ -40,4 +40,4 @@ multi-render scheduler keeps, which our one-context microkernel does not
 maintain; they matter for multi-frame stability (Minecraft), not for a single
 replayed frame to display. They, the completion-event *waits*
 (cache-invalidate / DPM-load), and the `srvinit --ours` loader are what remain
-before the EA3. No hardware has been touched.
+before the CE5300 board. No hardware has been touched.
