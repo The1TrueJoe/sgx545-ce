@@ -60,8 +60,9 @@ jobs:
           [ -s tags.txt ] || { echo "no published release"; exit 1; }
           while read -r tag; do
             mkdir -p "debs/$tag"
+            # a release whose downloads were withdrawn has no packages to serve
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "debs/$tag" \
-              --pattern '*.deb' --pattern SHA256SUMS
+              --pattern '*.deb' --pattern SHA256SUMS || { echo "$tag: no packages"; continue; }
             if [ -f "debs/$tag/SHA256SUMS" ]; then (cd "debs/$tag" && sha256sum -c SHA256SUMS); fi
           done < tags.txt
 
