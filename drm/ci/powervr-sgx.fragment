@@ -6,8 +6,6 @@ CONFIG_MODULE_UNLOAD=y
 CONFIG_DRM=y
 # CONFIG_SGX545_CE is not set
 CONFIG_DRM_POWERVR_SGX=m
-# The vendor microkernel for A/B runs; the upstream build leaves it out.
-CONFIG_DRM_POWERVR_SGX_DDK_COMPAT=y
 CONFIG_DEBUG_FS=y
 CONFIG_FW_LOADER=y
 # simpledrm in place of simplefb on the CEFDK framebuffer: a KMS device for

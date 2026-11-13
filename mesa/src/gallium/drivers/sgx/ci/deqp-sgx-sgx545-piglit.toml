@@ -1,0 +1,8 @@
+# piglit's gpu profile on an SGX545: the run sgx-piglit-fails.txt,
+# sgx-piglit-flakes.txt and sgx-piglit-skips.txt were made from.
+[[piglit]]
+piglit_folder = "/piglit"
+profile = "gpu"
+process_isolation = true
+  [piglit.env]
+  PIGLIT_NO_WINDOW = "1"

@@ -13,6 +13,19 @@
 struct sgx_context;
 struct sgx_screen;
 
+/* A spare device copy of a texture: it lacks what was written since it was
+ * current, the dirty boxes or everything (SGX_ALT_ALL) */
+struct sgx_tex_copy {
+   struct sgxws_bo bo;
+   uint32_t use_seq;
+   unsigned n_dirty;
+   struct {
+      uint16_t level, layer, x0, y0, x1, y1;
+   } dirty[32];
+};
+
+#define SGX_TEX_SPARES_MAX 15
+
 struct sgx_resource {
    struct pipe_resource base;
 
@@ -27,7 +40,9 @@ struct sgx_resource {
    bool shared;  /* imported or exported dma-buf: its frames name it
                     (sgxws_use_bo) */
    struct renderonly_scanout
-      *scanout; /* kmsro: its buffer on the display device */
+      *scanout;     /* kmsro: its buffer on the display device */
+   bool dumb_later; /* kmsro with a display the CPU reads: made the display's
+                       dumb buffer when a KMS handle is asked for */
 
    uint32_t uid, gen; /* buffers: an id never reused, and a count of writes
                          (vertex cache) */
@@ -36,6 +51,9 @@ struct sgx_resource {
     * vbo_seq is the last kick that reads it */
    struct sgxws_bo vbo;
    uint32_t vbo_seq;
+   /* write maps open (a stream uploader keeps its buffer mapped while it
+    * writes more into it: sgx_buffer_vbo) */
+   unsigned write_maps;
    uint64_t written_ns;     /* buffers: when last written */
    uint32_t stride;         /* bytes per row of level 0 */
    size_t level_offset[16]; /* each level in the linear CPU copy */
@@ -46,15 +64,12 @@ struct sgx_resource {
    uint32_t pitch;    /* pixels per row of a render target (a multiple of 32) */
 
    /* A texture written while a render may still sample it: the write goes to
-    * a second copy, which takes over (the DDK's ghosting).  alt lacks what
-    * was written since it was current: alt_dirty boxes, or everything. */
+    * a spare copy, which takes over (the DDK's ghosting).  A frame that
+    * updates one texture between draws needs a copy per update in flight,
+    * so a texture has up to sgx_tex_spares_max spares (sgx_resource.c). */
    uint32_t use_seq; /* the last kick that samples bo */
-   struct sgxws_bo alt;
-   uint32_t alt_use_seq;
-   unsigned n_alt_dirty; /* SGX_ALT_ALL: re-encode everything */
-   struct {
-      uint16_t level, layer, x0, y0, x1, y1;
-   } alt_dirty[32];
+   struct sgx_tex_copy *spare; /* SGX_TEX_SPARES_MAX, on the first spare */
+   unsigned n_spares;
 
    /* A cube map with mip levels sampled without mipmapping: the TPU then
     * spaces the faces by level 0 alone, so it samples a copy of the six
@@ -75,6 +90,12 @@ struct sgx_resource {
     * last stored at (0: nothing stored yet, so nothing to load). */
    struct sgxws_bo zls;
    uint32_t zls_bytes, zls_w, zls_h;
+   /* a render stored into zls after the CPU copy (data) was last brought
+    * up from it: a map reads it back first (sgx_transfer_map) */
+   bool zls_stored;
+   /* a depth texture's CPU copy brought up from zls by a map, which its
+    * sampled copy doesn't have yet (sgx_resource_zls_for_sampling) */
+   bool zls_unsampled;
 };
 
 static inline struct sgx_resource *
@@ -105,7 +126,8 @@ struct sgx_transfer {
 
 void sgx_resource_screen_init(struct sgx_screen *screen);
 /* with the screen lock held: a buffer's device copy, made if need be */
-bool sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res);
+bool sgx_buffer_vbo(struct sgx_context *ctx, struct sgx_resource *res,
+                    uint32_t off, uint32_t size);
 void sgx_resource_context_init(struct sgx_context *ctx);
 
 /* the target a render into this level and layer of the resource writes; with
@@ -113,6 +135,11 @@ void sgx_resource_context_init(struct sgx_context *ctx);
 bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
                          unsigned level, unsigned layer,
                          struct sgxws_target *t);
+
+/* before a draw samples res: a depth texture's stored depth (ZLS) into its
+ * sampled copy */
+void sgx_resource_zls_for_sampling(struct sgx_context *ctx,
+                                   struct sgx_resource *res);
 
 /* brings res->cube0 up to date with level 0 (sgx_tex_words samples it) */
 bool sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res);

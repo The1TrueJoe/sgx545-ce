@@ -532,14 +532,29 @@ the same open problem panthor has, and it isn't solved here.
 
 ### 8.6 Use (the winsys)
 
+What needs an entry follows from the flush points:
+
+- **A write** needs one, so the CPU's stale lines go after the job. A `WRITE` range only
+  has to cover the bytes the job changes.
+- **A read** needs one only if the CPU wrote those bytes since a job last flushed them.
+  The GPU reads memory, so clean CPU lines don't matter to it.
+
+The winsys (`sgx_powervr_sgx.c`, `cache_ranges()`):
+
 - **The target of a render, linear layout:** `WRITE`, with the frame's damage as rows:
   - `offset = target offset + y0 * pitch + x0 * 4`, `size = (x1 - x0) * 4`,
     `stride = pitch`, `rows = y1 - y0`;
-  - the damage is the union of the clip of every draw and clear in the frame.
-- **A twiddled target, or a frame with no damage bound:** the whole object, `{0, size}`.
-- **Every other shared buffer the job reads or writes:** the whole object, with its
-  direction.
-- **Jobs that don't touch an import** list nothing.
+  - the damage is the union of the clip of every draw and clear in the frame. A frame
+    with no draws lists nothing, since its render rewrites only loaded tiles.
+- **A twiddled target, or another shared buffer the job writes:** the whole object,
+  `{0, size}`, `WRITE`.
+- **Any shared buffer the CPU may have written** since it was last listed: the whole
+  object, `READ`. That covers a fresh import, whose earlier CPU lines aren't known, and a
+  resource the driver mapped for writing (`sgxws_bo_cpu_written()` at the unmap).
+- **A shared buffer the job only reads, clean:** nothing.
+
+For X on simpledrm, that's one damage entry per frame. For a 128x128 change the cost is
+about 52 us, against about 2.3 ms for flushing the whole buffer twice.
 
 ### 8.7 Alternatives (rejected)
 

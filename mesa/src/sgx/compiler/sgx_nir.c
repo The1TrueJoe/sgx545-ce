@@ -7,12 +7,14 @@
  * SGX545 compiler: NIR options, varying set allocation, I/O assignment and
  * the NIR lowering pipeline that runs before instruction selection.
  */
+#include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "nir.h"
 #include "nir_builder.h"
+#include "nir_builtin_builder.h"
 #include "nir_deref.h"
 #include "nir_legacy.h"
 
@@ -29,6 +31,9 @@ static const nir_shader_compiler_options options = {
    .lower_fpow = true,
    .lower_fmod = true,
    .lower_fsign = true,
+   /* (integers are floats by then: a clamp to [-1, 1] stays imin/imax,
+    * which nir_lower_int_to_float takes, not isign, which it doesn't) */
+   .lower_isign = true,
    .lower_fceil = true,
    .lower_ftrunc = true,
    .lower_fround_even = true,
@@ -38,20 +43,24 @@ static const nir_shader_compiler_options options = {
    .lower_extract_word = true,
    .lower_insert_byte = true,
    .lower_insert_word = true,
-   /* fmad: the product is rounded before the add (hwt_p7: not fused) */
+   /* fmad: the product is rounded before the add (not fused: checked on
+      hardware) */
    .float_mul_add32 =
       nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
-   /* fmad16, as libusc fuses a mediump a * b + c (one rounding) */
+   /* fmad16: a mediump a * b + c, one rounding (checked on hardware) */
    .float_mul_add16 =
       nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
    .no_integers = true,
-   .max_unroll_iterations = 8, /* (libusc unrolls nothing; a 16-trip loop with a
-                                  break became 125 instructions) */
+   .max_unroll_iterations = 8, /* (a 16-trip loop with a break unrolled to
+                                  125 instructions) */
    .lower_int64_options = ~0,
    /* (not lower_doubles_options = ~0: GLSL ES has no doubles, and with it
     * 144 dEQP fragment loops came out wrong on hardware) */
    .force_indirect_unrolling = nir_var_all,
    .force_indirect_unrolling_sampler = true,
+   /* the PDS reads a texture with a varying in a whole vec4 slot from
+    * component 0: the linker mustn't pack another varying in front of it */
+   .io_options = nir_io_dont_optimize_varyings,
 };
 
 const nir_shader_compiler_options *
@@ -61,8 +70,7 @@ sgx_nir_options(void)
 }
 
 /* ------------------------------------------------------------------------
- * varyings -> texture coordinate sets, as glslcompiler allocates them
- * (ISA.md "Varyings to sets"): by type mat4, mat2, vec4,
+ * varyings -> texture coordinate sets: by type mat4, mat2, vec4,
  * mat3, vec3, vec2, float; within a type the largest array first, then
  * declaration order; one set per row while sets last.
  */
@@ -122,6 +130,55 @@ var_used(nir_shader *nir, nir_variable *var, bool store)
    return false;
 }
 
+bool
+sgx_lower_clip_fs(nir_shader *fs, unsigned ucp_enables)
+{
+   ucp_enables &= 0xff;
+   if (fs->info.stage != MESA_SHADER_FRAGMENT || !ucp_enables)
+      return false;
+   nir_variable *in[2] = {NULL, NULL};
+   for (unsigned h = 0; h < 2; h++) {
+      if (!(ucp_enables & (0xfu << (4 * h))))
+         continue;
+      gl_varying_slot slot = VARYING_SLOT_CLIP_DIST0 + h;
+      in[h] = nir_find_variable_with_location(fs, nir_var_shader_in, slot);
+      if (!in[h]) {
+         char name[16];
+         snprintf(name, sizeof(name), "clipdist_%u", h);
+         in[h] =
+            nir_variable_create(fs, nir_var_shader_in, glsl_vec4_type(), name);
+         in[h]->data.location = slot;
+         in[h]->data.interpolation = INTERP_MODE_NONE;
+      }
+   }
+   nir_function_impl *impl = nir_shader_get_entrypoint(fs);
+   nir_builder b = nir_builder_at(nir_before_impl(impl));
+   nir_def *d[2] = {NULL, NULL}, *out = NULL;
+   for (unsigned h = 0; h < 2; h++)
+      if (in[h])
+         d[h] = nir_load_var(&b, in[h]);
+   u_foreach_bit (p, ucp_enables) {
+      nir_def *neg = nir_flt_imm(&b, nir_channel(&b, d[p / 4], p % 4), 0.0);
+      out = out ? nir_ior(&b, out, neg) : neg;
+   }
+   nir_discard_if(&b, out);
+   fs->info.fs.uses_discard = true;
+   return nir_progress(true, impl, nir_metadata_none);
+}
+
+static bool
+has_noperspective(nir_shader *nir, bool vertex)
+{
+   nir_foreach_variable_with_modes (
+      var, nir, vertex ? nir_var_shader_out : nir_var_shader_in)
+      /* (before linking, user varyings have no location yet) */
+      if (var->data.interpolation == INTERP_MODE_NOPERSPECTIVE &&
+          (var->data.location < 0 || var->data.location >= VARYING_SLOT_VAR0) &&
+          var_used(nir, var, vertex))
+         return true;
+   return false;
+}
+
 void
 sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
 {
@@ -141,8 +198,8 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
           var_used(nir, var, true))
          out->point_size = true;
       /* the point-sprite coordinate is iterated from set 0, the set a vertex
-       * shader that writes gl_PointSize reserves (DDK capture: gl_PointCoord
-       * = list A iterator 1) */
+       * shader that writes gl_PointSize reserves (gl_PointCoord = list A
+       * iterator 1) */
       if (!vertex && builtin &&
           (var->data.location == VARYING_SLOT_PNTC ||
            !strcmp(var->name, "gl_PointCoord")) &&
@@ -185,10 +242,25 @@ sgx_assign_varyings(nir_shader *nir, bool vertex, struct sgx_varyings *out)
       v->rows = len * cols;
       v->comps = glsl_get_vector_elements(e);
       v->precision = var->data.precision;
+      if (glsl_base_type_is_integer(glsl_get_base_type(e))) {
+         v->split = true;
+         v->rows *= 2;
+         /* (whole numbers to 65535: F32 iteration) */
+         v->precision = GLSL_PRECISION_HIGH;
+      }
       v->set = set;
       for (unsigned r = 0; r < v->rows; r++, set++)
          if (set < SGX_MAX_SETS)
             out->set_comps[set] = v->comps;
+   }
+   if (has_noperspective(nir, vertex) && out->n < ARRAY_SIZE(out->v)) {
+      struct sgx_varying *v = &out->v[out->n++];
+      snprintf(v->name, sizeof v->name, "%s", SGX_NOPERSPECTIVE_W);
+      v->rows = v->comps = 1;
+      v->precision = GLSL_PRECISION_HIGH;
+      v->set = set;
+      if (set < SGX_MAX_SETS)
+         out->set_comps[set] = 1;
    }
    sgx_pack_varyings(out);
 }
@@ -203,8 +275,8 @@ sgx_pack_varyings(struct sgx_varyings *out)
    if (fits)
       return true;
 
-   /* glslcompiler: a set per row while sets remain, then rows into free
-    * components of earlier sets (ISA.md "Varyings to sets"). It packs by
+   /* a set per row while sets remain, then rows into free components of
+    * earlier sets. It packs by
     * precision too, but a varying's precision may differ between the stages,
     * each placed on its own, so not here (a mixed set is iterated in f32). A
     * sprite's set 0 is the point coordinate's alone. */
@@ -250,7 +322,7 @@ sgx_pack_varyings(struct sgx_varyings *out)
 
 /* ------------------------------------------------------------------------
  * sin/cos: the hardware's fsin/fcos take quarter turns and are accurate
- * only on [-2, 2) (hwt_p3), so reduce: t = 4 * fract(x / 2pi + c) - 2, and
+ * only on [-2, 2) (measured), so reduce: t = 4 * fract(x / 2pi + c) - 2, and
  * sin(x) = fsin(t) for c = 0.5, cos(x) = fsin(t) for c = 0.75.
  * fsin_agx is NIR's sin(t * pi / 2).
  */
@@ -283,30 +355,17 @@ lower_sincos(nir_shader *s)
                               NULL);
 }
 
-/* sampler derefs -> texture/sampler indices. The USP's sampler number is
- * glslcompiler's: it counts the samplers a shader uses, in order of use
- * (corpus c3 tx_nd_s1: s1 alone is sampler 0; tx_nd_two: s, s1 = 0, 1),
- * unless the caller pinned it (-s). */
+/* sampler derefs -> texture/sampler indices: the caller's unit for the
+ * sampler, else its binding */
 struct tex_ctx {
    struct sgx_ctx *c;
-   nir_variable *seen[16];
-   unsigned n;
 };
 
 static unsigned
 sampler_number(struct tex_ctx *t, nir_variable *var)
 {
-   const struct sgx_compile_options *o = t->c->opts;
-   int pinned = place(o, SGX_LAYOUT_SAMPLER, var->name);
-   if (pinned >= 0)
-      return pinned;
-   unsigned next = first_free(o, SGX_LAYOUT_SAMPLER);
-   for (unsigned i = 0; i < t->n; i++)
-      if (t->seen[i] == var)
-         return next + i;
-   if (t->n < 16)
-      t->seen[t->n++] = var;
-   return next + t->n - 1;
+   int pinned = place(t->c->opts, SGX_LAYOUT_SAMPLER, var->name);
+   return pinned >= 0 ? (unsigned)pinned : var->data.binding;
 }
 
 static bool
@@ -340,6 +399,30 @@ lower_tex_derefs(nir_shader *s, struct sgx_ctx *c)
    struct tex_ctx t = {.c = c};
    return nir_shader_instructions_pass(s, lower_tex_derefs_instr,
                                        nir_metadata_control_flow, &t);
+}
+
+/* a texel of a tex_f32 unit: its first component, the rest (0, 0, 1),
+ * an integer 1 for an integer sampler */
+static bool
+lower_f32_texel(nir_builder *b, nir_instr *instr, void *data)
+{
+   uint32_t units = *(const uint32_t *)data;
+   if (instr->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   if (tex->texture_index >= 32 || !(units >> tex->texture_index & 1) ||
+       tex->def.num_components != 4 || nir_tex_instr_is_query(tex))
+      return false;
+   unsigned bits = tex->def.bit_size;
+   nir_alu_type base = nir_alu_type_get_base_type(tex->dest_type);
+   b->cursor = nir_after_instr(instr);
+   nir_def *one = base == nir_type_float ? nir_imm_floatN_t(b, 1, bits)
+                                         : nir_imm_intN_t(b, 1, bits);
+   nir_def *v = nir_vec4(b, nir_channel(b, &tex->def, 0),
+                         nir_imm_intN_t(b, 0, bits), nir_imm_intN_t(b, 0, bits),
+                         one);
+   nir_def_rewrite_uses_after(&tex->def, v);
+   return true;
 }
 
 /* gl_FrontFacing as the constant true (see sgx_compile_options.front_sa) */
@@ -396,8 +479,8 @@ int16_as_32(nir_builder *b, nir_def *d, unsigned comp)
    }
 }
 
-/* What nir_lower_bit_size leaves of 16-bit integers (mediump int, under
- * sgxc -p) are conversions at the edges: read them from the 32-bit value */
+/* What nir_lower_bit_size leaves of 16-bit integers (mediump int in F16
+ * mode) are conversions at the edges: read them from the 32-bit value */
 static bool
 int16_conv_instr(nir_builder *b, nir_alu_instr *alu, void *data)
 {
@@ -576,7 +659,7 @@ alu_of(nir_src s)
 }
 
 /* The colour is packed to U8 with pck's saturation: a clamp to [0, 1] of
- * what is stored there is the pack's own (libusc drops it, sat_m) */
+ * what is stored there is the pack's own */
 static bool
 colour_sat_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
@@ -1092,8 +1175,8 @@ vec_to_regs_32(const nir_instr *instr, unsigned wrmask, const void *data)
  * uniforms -> load_uniform with base = the constant number of the first
  * component. Each deref step adds vec4-aligned offsets (array elements,
  * struct members, matrix columns), unless the caller numbered that member
- * itself (-u var.member=k): glslcompiler's layout of struct members isn't
- * known, so it can be pinned member by member. */
+ * itself (sgx_compile_options.layout can pin a struct's members one by
+ * one). */
 
 static unsigned
 slots4(const struct glsl_type *t)
@@ -1188,7 +1271,7 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
       nir_def_replace(&in->def, v);
       return true;
    }
-   /* the constants' format in SA, as the DDK loads them: F16 pairs for
+   /* the constants' format in SA: F16 pairs for
     * mediump (16-bit loads), C10 for lowp vectors used as F16, else f32 */
    unsigned n = in->def.num_components, fmt = in->def.bit_size == 16 ? 2 : 1;
    if (u->c->opts->verbose)
@@ -1218,9 +1301,9 @@ lower_uniform_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    }
    if (fmt == 2 && u->c->p16 && prec == GLSL_PRECISION_LOW && !(k & 3) &&
        n >= 3 && !(nir_def_components_read(&in->def) & ~7u)) {
-      /* a lowp vector loaded 16-bit (sgxc's frontend) and read for xyz: C10
-       * as the DDK loads it, then to F16 where read; or with driver_consts
-       * the F16 of its C10 value from the upload */
+      /* a lowp vector loaded 16-bit (a frontend that lowers precision) and
+       * read for xyz: C10 as loaded, then to F16 where read; or with
+       * driver_consts the F16 of its C10 value from the upload */
       fmt = u->c->opts->driver_consts ? 5 : 3;
    }
    for (unsigned j = 0; j < n && k + j < ARRAY_SIZE(u->c->const_fmt); j++)
@@ -1288,8 +1371,7 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
    if (k < ARRAY_SIZE(c->const_prec) && c->const_prec[k])
       return c->const_prec[k];
    nir_foreach_variable_with_modes (var, c->nir, nir_var_uniform) {
-      if (glsl_type_is_sampler(glsl_without_array(var->type)) ||
-          var->data.driver_location < 0)
+      if (glsl_type_is_sampler(glsl_without_array(var->type)))
          continue;
       unsigned base = var->data.driver_location,
                n = 4 * glsl_count_vec4_slots(var->type, false, false);
@@ -1300,11 +1382,11 @@ uniform_prec(struct sgx_ctx *c, unsigned k)
 }
 
 /* f32 uniforms that F16 math reads (every use an f2f16), in the format the
- * DDK loads such a constant in: mediump as F16 constants (list C kind 2,
+ * driver loads such a constant in: mediump as F16 constants (list C kind 2,
  * rounded at upload), a lowp vector's xyz as C10 (kind 3), highp left f32
- * (converted where read with pck.f16.f32, truncating as libusc's own
- * conversion does). sgxc's frontend loads mediump uniforms 16-bit already;
- * the gallium driver's arrive as f32 load_uniform. */
+ * (converted where read with pck.f16.f32, which truncates). A frontend
+ * that lowers precision loads mediump uniforms 16-bit already; the gallium
+ * driver's arrive as f32 load_uniform. */
 static bool
 uniform_format_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
 {
@@ -1376,7 +1458,7 @@ uniform_format_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
    if (prec != GLSL_PRECISION_MEDIUM && prec != GLSL_PRECISION_LOW)
       return false;
    /* F16 constants; a C10 vector's xyz as the F16 of its C10 value (the
-    * driver converts at upload what libusc's secondary program does) */
+    * driver converts at upload) */
    b->cursor = nir_after_instr(&in->instr);
    nir_def *h = nir_load_uniform(b, n, 16, in->src[0].ssa, .base = k,
                                  .range = n, .dest_type = nir_type_float16);
@@ -1435,6 +1517,155 @@ first_free(const struct sgx_compile_options *o, enum sgx_layout_kind k)
    return o->layout && o->layout->first_free
              ? o->layout->first_free(o->layout->data, k)
              : 0;
+}
+
+/* A loop that can leave early (a break besides its trip count, or one the
+ * frontend merged into it, so the trip count isn't exact) stays a loop:
+ * unrolled, its exits become a select tree that holds every
+ * iteration's value to the end (eight vec4 sums with a break: 31 temporaries,
+ * 4 as a loop). Loops that index arrays are still unrolled. */
+static bool
+keep_early_exit_loops_cf(struct exec_list *list)
+{
+   bool progress = false;
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      switch (node->type) {
+      case nir_cf_node_if: {
+         nir_if *nif = nir_cf_node_as_if(node);
+         progress |= keep_early_exit_loops_cf(&nif->then_list);
+         progress |= keep_early_exit_loops_cf(&nif->else_list);
+         break;
+      }
+      case nir_cf_node_loop: {
+         nir_loop *loop = nir_cf_node_as_loop(node);
+         progress |= keep_early_exit_loops_cf(&loop->body);
+         if (loop->control == nir_loop_control_none && loop->info &&
+             !loop->info->force_unroll &&
+             (list_length(&loop->info->loop_terminator_list) > 1 ||
+              !loop->info->exact_trip_count_known)) {
+            loop->control = nir_loop_control_dont_unroll;
+            progress = true;
+         }
+         break;
+      }
+      default:
+         break;
+      }
+   }
+   return progress;
+}
+
+static bool
+keep_early_exit_loops(nir_shader *s)
+{
+   bool progress = false;
+   nir_foreach_function_impl (impl, s) {
+      nir_metadata_require(impl, nir_metadata_loop_analysis,
+                           s->options->force_indirect_unrolling,
+                           (int)s->options->force_indirect_unrolling_sampler);
+      progress |= keep_early_exit_loops_cf(&impl->body);
+      nir_progress(true, impl, nir_metadata_all);
+   }
+   return progress;
+}
+
+/* An if on a uniform condition takes one way for every instance of a draw:
+ * a branch over the side not taken costs a test and a br, where flattening
+ * computes both sides on every pixel (glamor's composite programs branch on
+ * their repeat-mode uniforms: 100-200 instructions as selects). So such ifs,
+ * with more than a few instructions inside, stay branches. */
+static unsigned
+cf_size(struct exec_list *list)
+{
+   unsigned n = 0;
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      switch (node->type) {
+      case nir_cf_node_block:
+         nir_foreach_instr (i, nir_cf_node_as_block(node))
+            n++;
+         break;
+      case nir_cf_node_if: {
+         nir_if *f = nir_cf_node_as_if(node);
+         n += 1 + cf_size(&f->then_list) + cf_size(&f->else_list);
+         break;
+      }
+      case nir_cf_node_loop:
+         n += 16 * cf_size(&nir_cf_node_as_loop(node)->body);
+         break;
+      default:
+         break;
+      }
+   }
+   return n;
+}
+
+static bool
+keep_uniform_ifs_cf(struct exec_list *list)
+{
+   bool progress = false;
+   foreach_list_typed (nir_cf_node, node, node, list) {
+      if (node->type == nir_cf_node_if) {
+         nir_if *f = nir_cf_node_as_if(node);
+         if (!nir_src_is_divergent(&f->condition) &&
+             f->control == nir_selection_control_none &&
+             cf_size(&f->then_list) + cf_size(&f->else_list) > 4) {
+            f->control = nir_selection_control_dont_flatten;
+            progress = true;
+         }
+         progress |= keep_uniform_ifs_cf(&f->then_list);
+         progress |= keep_uniform_ifs_cf(&f->else_list);
+      } else if (node->type == nir_cf_node_loop) {
+         progress |= keep_uniform_ifs_cf(&nir_cf_node_as_loop(node)->body);
+      }
+   }
+   return progress;
+}
+
+static bool
+keep_uniform_ifs(nir_shader *s)
+{
+   bool progress = false;
+   nir_divergence_analysis(s);
+   nir_foreach_function_impl (impl, s) {
+      bool p = keep_uniform_ifs_cf(&impl->body);
+      nir_progress(p, impl, nir_metadata_all);
+      progress |= p;
+   }
+   return progress;
+}
+
+/* A derivative of a value that is the same for every pixel (a uniform, or
+ * math over uniforms and constants) is 0: no fds on it */
+static bool
+uniform_derivative_instr(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   switch (in->intrinsic) {
+   case nir_intrinsic_ddx:
+   case nir_intrinsic_ddx_fine:
+   case nir_intrinsic_ddx_coarse:
+   case nir_intrinsic_ddy:
+   case nir_intrinsic_ddy_fine:
+   case nir_intrinsic_ddy_coarse:
+      break;
+   default:
+      return false;
+   }
+   if (nir_src_is_divergent(&in->src[0]))
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   nir_def_replace(&in->def,
+                   nir_imm_zero(b, in->def.num_components, in->def.bit_size));
+   return true;
+}
+
+static bool
+uniform_derivatives(nir_shader *s)
+{
+   if (s->info.stage != MESA_SHADER_FRAGMENT)
+      return false;
+   nir_divergence_analysis(s);
+   return nir_shader_intrinsics_pass(s, uniform_derivative_instr,
+                                     nir_metadata_control_flow, NULL);
 }
 
 static void
@@ -1512,10 +1743,11 @@ find_varying(const struct sgx_varyings *v, const char *name)
 
 /* per component of a varying variable, the register: base[set] + the
  * varying's component in the set */
-static void
-map_varying(int *tab, nir_variable *var, const struct sgx_varyings *vary,
-            const int *set_base)
+static bool
+map_varying(int *tab, int *hi, nir_variable *var,
+            const struct sgx_varyings *vary, const int *set_base, bool native)
 {
+   bool ok = true;
    char names[8][64];
    unsigned n = var_names(var, names, 8);
    unsigned comp = var->data.location_frac;
@@ -1523,17 +1755,29 @@ map_varying(int *tab, nir_variable *var, const struct sgx_varyings *vary,
       const struct sgx_varying *vy = find_varying(vary, names[i]);
       if (!vy)
          continue;
-      for (unsigned r = 0; r < vy->rows; r++) {
-         if (vy->set + r >= SGX_MAX_SETS || set_base[vy->set + r] < 0)
+      /* a raw integer word iterated as an F32 isn't kept exact (NaNs) */
+      if (native && !vy->split &&
+          glsl_base_type_is_integer(
+             glsl_get_base_type(glsl_without_array(var->type))))
+         ok = false;
+      unsigned step = vy->split ? 2 : 1;
+      for (unsigned r = 0; r < vy->rows / step; r++) {
+         unsigned set = vy->set + step * r;
+         if (set + step - 1 >= SGX_MAX_SETS || set_base[set] < 0 ||
+             set_base[set + step - 1] < 0)
             continue;
          for (unsigned j = 0; j < vy->comps && comp + j < 4; j++) {
             unsigned at = (var->data.location + r) * 4 + comp + j;
-            if (at < 512)
-               tab[at] = set_base[vy->set + r] + vy->comp + j;
+            if (at >= 512)
+               continue;
+            tab[at] = set_base[set] + vy->comp + j;
+            if (vy->split)
+               hi[at] = set_base[set + 1] + vy->comp + j;
          }
       }
-      comp += vy->rows == 1 ? vy->comps : 0;
+      comp += vy->rows == step ? vy->comps : 0;
    }
+   return ok;
 }
 
 /* Assign I/O registers (c->in_reg / c->out_reg, per component). */
@@ -1544,7 +1788,7 @@ assign_io(struct sgx_ctx *c)
    const struct sgx_compile_options *o = c->opts;
 
    for (unsigned i = 0; i < 512; i++)
-      c->in_reg[i] = c->out_reg[i] = -1;
+      c->in_reg[i] = c->out_reg[i] = c->in_hi[i] = c->out_hi[i] = -1;
    if (s->info.stage == MESA_SHADER_VERTEX) {
       unsigned next_attr = first_free(o, SGX_LAYOUT_ATTRIB);
       nir_foreach_shader_in_variable (var, s) {
@@ -1582,18 +1826,42 @@ assign_io(struct sgx_ctx *c)
          c->out_reg[VARYING_SLOT_POS * 4 + j] = j;
       if (c->vary->point_size)
          c->out_reg[VARYING_SLOT_PSIZ * 4] = c->psize_reg;
+      /* the clip distances (nir_lower_clip_vs: planes 0..n-1, a disabled one
+       * below the last 0.0) after everything else, one o register each */
+      unsigned nclip = 0;
+      nir_foreach_shader_out_variable (var, s) {
+         if (var->data.location == VARYING_SLOT_CLIP_DIST0 ||
+             var->data.location == VARYING_SLOT_CLIP_DIST1) {
+            const struct glsl_type *e = glsl_without_array(var->type);
+            unsigned n = glsl_get_aoa_size(var->type);
+            n = (n ? n : 1) * glsl_get_vector_elements(e);
+            nclip =
+               MAX2(nclip,
+                    MIN2((var->data.location - VARYING_SLOT_CLIP_DIST0) * 4 + n,
+                         8u));
+         }
+      }
+      if (s->info.clip_distance_array_size)
+         nclip = MIN2(nclip, s->info.clip_distance_array_size);
+      c->n_clip = nclip;
+      c->clip_o = c->n_out_regs;
+      for (unsigned p = 0; p < nclip; p++)
+         c->out_reg[VARYING_SLOT_CLIP_DIST0 * 4 + p] = c->clip_o + p;
+      c->n_out_regs += nclip;
       nir_foreach_shader_out_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
-            map_varying(c->out_reg, var, c->vary, obase);
+            if (!map_varying(c->out_reg, c->out_hi, var, c->vary, obase,
+                             o->native_integers))
+               sgx_fail(c, "integer varying %s not split", var->name);
    } else {
       /* in F16 mode, a varying every load of which is mediump is iterated as
-       * F16 (list A format 2: two components per register, as the DDK does) */
+       * F16 (list A format 2: two components per register) */
       bool hp[128] = {0}, mp[128] = {0};
       nir_foreach_function_impl (impl, s) {
          nir_foreach_block (b, impl) {
             nir_foreach_instr (instr, b) {
-               /* (sgxc's inputs are interpolated loads; the gallium driver's
-                * are still derefs here, before nir_lower_io: their
+               /* (lowered inputs are interpolated loads; the gallium
+                * driver's are still derefs here, before nir_lower_io: their
                 * variable's precision says) */
                if (instr->type == nir_instr_type_intrinsic &&
                    nir_instr_as_intrinsic(instr)->intrinsic ==
@@ -1602,10 +1870,12 @@ assign_io(struct sgx_ctx *c)
                      nir_src_as_deref(nir_instr_as_intrinsic(instr)->src[0]);
                   nir_variable *v = nir_deref_instr_get_variable(d);
 
+                  /* (noperspective: v * w, iterated in F32) */
                   if (v && v->data.mode == nir_var_shader_in &&
                       v->data.location >= 0 && v->data.location < 128)
                      ((v->data.precision == GLSL_PRECISION_MEDIUM ||
-                       v->data.precision == GLSL_PRECISION_LOW)
+                       v->data.precision == GLSL_PRECISION_LOW) &&
+                            v->data.interpolation != INTERP_MODE_NOPERSPECTIVE
                          ? mp
                          : hp)[v->data.location] = true;
                   continue;
@@ -1616,10 +1886,17 @@ assign_io(struct sgx_ctx *c)
                     nir_instr_as_intrinsic(instr)->intrinsic !=
                        nir_intrinsic_load_input))
                   continue;
-               nir_io_semantics sem =
-                  nir_intrinsic_io_semantics(nir_instr_as_intrinsic(instr));
+               nir_intrinsic_instr *li = nir_instr_as_intrinsic(instr);
+               nir_io_semantics sem = nir_intrinsic_io_semantics(li);
+               nir_intrinsic_instr *bary =
+                  li->intrinsic == nir_intrinsic_load_interpolated_input
+                     ? nir_src_as_intrinsic(li->src[0])
+                     : NULL;
+               bool np = bary && nir_intrinsic_has_interp_mode(bary) &&
+                         nir_intrinsic_interp_mode(bary) ==
+                            INTERP_MODE_NOPERSPECTIVE;
                if (sem.location < 128)
-                  (sem.medium_precision ? mp : hp)[sem.location] = true;
+                  (sem.medium_precision && !np ? mp : hp)[sem.location] = true;
             }
          }
       }
@@ -1645,7 +1922,25 @@ assign_io(struct sgx_ctx *c)
          for (unsigned set = 0; set < SGX_MAX_SETS; set++)
             set16[set] &= !not16[set];
       }
-      /* gl_FragCoord first (list A iterator 14, F32, as the DDK orders it),
+      /* (a set is flat when every varying in it is: the linker packs flat
+       * ones apart) */
+      bool flat[SGX_MAX_SETS] = {0}, smooth[SGX_MAX_SETS] = {0};
+      nir_foreach_shader_in_variable (var, s) {
+         char names[8][64];
+         unsigned l = var->data.location, n = var_names(var, names, 8);
+         if (l < VARYING_SLOT_VAR0 || l >= 128)
+            continue;
+         bool f = var->data.interpolation == INTERP_MODE_FLAT;
+         for (unsigned i = 0; i < n; i++) {
+            const struct sgx_varying *vy = find_varying(c->vary, names[i]);
+            if (!vy)
+               continue;
+            for (unsigned r = 0; r < vy->rows && vy->set + r < SGX_MAX_SETS;
+                 r++)
+               (f ? flat : smooth)[vy->set + r] = true;
+         }
+      }
+      /* gl_FragCoord first (list A iterator 14, F32),
        * then the sets in order; gl_PointCoord is set 0 */
       int pbase[SGX_MAX_SETS];
       unsigned pa = 0;
@@ -1689,30 +1984,32 @@ assign_io(struct sgx_ctx *c)
             continue;
          struct sgx_iter *it = &c->iters[c->n_iters++];
          it->set = set;
-         it->comps = MIN2(comps, 4);
+         /* (the colour source: four components packed BGRA8 in one
+          * register) */
+         it->colour = c->vary->colour && set == 0;
+         it->comps = it->colour ? 4 : MIN2(comps, 4);
          it->pa = pa;
-         it->f16 = set16[set];
+         it->f16 = set16[set] && !it->colour;
+         it->flat = flat[set] && !smooth[set];
          /* F16: in_reg holds SGX_IN_HALF | the half index */
-         pbase[set] = it->f16 ? (int)(SGX_IN_HALF | 2 * pa) : (int)pa;
-         pa += it->f16 ? (it->comps + 1) / 2 : it->comps;
+         pbase[set] = it->colour ? (int)(SGX_IN_U8 | 4 * pa)
+                      : it->f16  ? (int)(SGX_IN_HALF | 2 * pa)
+                                 : (int)pa;
+         pa += it->colour ? 1 : it->f16 ? (it->comps + 1) / 2 : it->comps;
       }
       c->n_pa_inputs = pa;
       nir_foreach_shader_in_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
-            map_varying(c->in_reg, var, c->vary, pbase);
+            if (!map_varying(c->in_reg, c->in_hi, var, c->vary, pbase,
+                             o->native_integers))
+               sgx_fail(c, "integer varying %s not split", var->name);
    }
 
    /* uniforms: constant numbers */
    unsigned next = ALIGN_POT(first_free(o, SGX_LAYOUT_UNIFORM), 4);
-   unsigned next_sampler = first_free(o, SGX_LAYOUT_SAMPLER);
    nir_foreach_uniform_variable (var, s) {
-      if (glsl_type_is_sampler(glsl_without_array(var->type))) {
-         /* the USP's sampler number: glslcompiler counts the samplers a
-          * shader uses (corpus c3 tx_nd_s1: s1 alone is sampler 0) */
-         int u = place(o, SGX_LAYOUT_SAMPLER, var->name);
-         var->data.binding = u >= 0 ? (unsigned)u : next_sampler++;
-         continue;
-      }
+      if (glsl_type_is_sampler(glsl_without_array(var->type)))
+         continue; /* lower_tex_derefs */
       int k = place(o, SGX_LAYOUT_UNIFORM, var->name);
       if (k < 0) {
          /* an array or matrix pinned element by element: its base */
@@ -1787,17 +2084,432 @@ copysign_instr(nir_builder *b, nir_alu_instr *alu, void *data)
    return false;
 }
 
+/* A shift by a constant as the integer arithmetic nir_lower_int_to_float
+ * takes (GLSL before 1.30 has no shifts: they come from the front end's
+ * lowering, e.g. a division by a power of two as a shift of iabs): ishl a
+ * multiply, ushr a division, ishr a division rounded down. */
+static bool
+lower_int_shift(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if ((alu->op != nir_op_ishl && alu->op != nir_op_ushr &&
+        alu->op != nir_op_ishr) ||
+       alu->def.bit_size != 32 || !nir_src_is_const(alu->src[1].src))
+      return false;
+   unsigned n = nir_alu_src_as_uint(alu->src[1]) & 31;
+   if (n > 23)
+      return false; /* past F32's exact integers */
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *x = nir_ssa_for_alu_src(b, alu, 0);
+   nir_def *p = nir_imm_int(b, 1 << n), *r;
+   if (alu->op == nir_op_ishl) {
+      r = nir_imul(b, x, p);
+   } else if (alu->op == nir_op_ushr) {
+      r = nir_idiv(b, x, p);
+   } else {
+      /* (x + (x < 0 ? 1 - 2^n : 0)) / 2^n, truncated: floor(x / 2^n) */
+      nir_def *adj = nir_bcsel(b, nir_ilt_imm(b, x, 0),
+                               nir_imm_int(b, 1 - (1 << n)), nir_imm_int(b, 0));
+      r = nir_idiv(b, nir_iadd(b, x, adj), p);
+   }
+   nir_def_replace(&alu->def, r);
+   return true;
+}
+
+/* an integer op nir_lower_int_to_float has no float for (it asserts) */
+static bool
+int_to_float_takes(nir_op op)
+{
+   switch (op) {
+   case nir_op_mov:
+   case nir_op_vec2:
+   case nir_op_vec3:
+   case nir_op_vec4:
+   case nir_op_bcsel:
+   case nir_op_b2i32:
+   case nir_op_i2f32:
+   case nir_op_u2f32:
+   case nir_op_f2i32:
+   case nir_op_f2u32:
+   case nir_op_iadd:
+   case nir_op_isub:
+   case nir_op_imul:
+   case nir_op_idiv:
+   case nir_op_iabs:
+   case nir_op_ineg:
+   case nir_op_imax:
+   case nir_op_imin:
+   case nir_op_umax:
+   case nir_op_umin:
+   case nir_op_i32csel_gt:
+   case nir_op_i32csel_ge:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static bool
+check_int_ops(struct sgx_ctx *c, nir_shader *s)
+{
+   nir_foreach_function_impl (impl, s) {
+      nir_foreach_block (block, impl) {
+         nir_foreach_instr (instr, block) {
+            if (instr->type != nir_instr_type_alu)
+               continue;
+            nir_alu_instr *alu = nir_instr_as_alu(instr);
+            nir_alu_type t = nir_op_infos[alu->op].output_type;
+            if (alu->def.bit_size == 1 || int_to_float_takes(alu->op) ||
+                (nir_alu_type_get_base_type(t) != nir_type_int &&
+                 nir_alu_type_get_base_type(t) != nir_type_uint))
+               continue;
+            sgx_fail(c, "unsupported integer op %s",
+                     nir_op_infos[alu->op].name);
+            return false;
+         }
+      }
+   }
+   return true;
+}
+
+static bool
+all_offsets(const nir_instr *instr, const void *data)
+{
+   return true;
+}
+
+/* texelFetch as an explicit-LOD read at the texel's center,
+ * (i + 0.5) / max(size >> lod, 1): smp has no integer coordinates */
+static bool
+txf_to_txl_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   if (tex->op != nir_texop_txf || tex->sampler_dim == GLSL_SAMPLER_DIM_BUF ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_MS)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+   nir_def *coord = tex->src[ci].src.ssa;
+   nir_def *lod = li >= 0 ? tex->src[li].src.ssa : nir_imm_int(b, 0);
+   unsigned n = tex->coord_components - tex->is_array;
+   nir_def *size = nir_channels(b, nir_get_texture_size(b, tex),
+                                nir_component_mask(n));
+   size = nir_umax(b, nir_ushr(b, size, lod), nir_imm_int(b, 1));
+   nir_def *uv = nir_fmul(
+      b, nir_fadd_imm(b, nir_i2f32(b, nir_channels(b, coord, nir_component_mask(n))),
+                      0.5),
+      nir_frcp(b, nir_u2f32(b, size)));
+   if (tex->is_array)
+      uv = nir_vec2(b, uv, nir_i2f32(b, nir_channel(b, coord, n)));
+   nir_src_rewrite(&tex->src[ci].src, uv);
+   if (li >= 0)
+      nir_src_rewrite(&tex->src[li].src, nir_i2f32(b, lod));
+   else
+      nir_tex_instr_add_src(tex, nir_tex_src_lod, nir_imm_float(b, 0.0));
+   tex->op = nir_texop_txl;
+   tex->sampler_index = tex->texture_index;
+   int ti = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+   if (ti >= 0 && nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref) < 0)
+      nir_tex_instr_add_src(tex, nir_tex_src_sampler_deref,
+                            tex->src[ti].src.ssa);
+   tex->backend_flags |= SGX_TEX_FETCH;
+   return true;
+}
+
+/* a texel of a tex_r32x4 / tex_r32x2 unit: N planes, each an R32 texture
+ * of the texel's size, channel c in plane c. One read per plane at the
+ * read's own coordinate and LOD, tagged with its plane
+ * (sgx_sample_info.plane); the driver points each at its plane */
+static bool
+r32_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   const struct sgx_compile_options *o = data;
+   unsigned u = tex->texture_index;
+   if (!o || u >= 32 || nir_tex_instr_is_query(tex) ||
+       (tex->backend_flags & SGX_TEX_PLANAR) ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_BUF ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_MS ||
+       (tex->op != nir_texop_tex && tex->op != nir_texop_txb &&
+        tex->op != nir_texop_txl && tex->op != nir_texop_txf))
+      return false;
+   unsigned n = o->tex_r32x4 >> u & 1 ? 4 : o->tex_r32x2 >> u & 1 ? 2 : 0;
+   if (!n)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   /* (a dependent read has no projection: the divide here) */
+   int pi = nir_tex_instr_src_index(tex, nir_tex_src_projector);
+   if (pi >= 0) {
+      int ci = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+      nir_def *q = nir_frcp(b, tex->src[pi].src.ssa);
+      nir_src_rewrite(&tex->src[ci].src, nir_fmul(b, tex->src[ci].src.ssa, q));
+      nir_tex_instr_remove_src(tex, pi);
+   }
+   unsigned bits = tex->def.bit_size;
+   nir_def *res[4];
+   for (unsigned k = 0; k < 4; k++) {
+      if (k < n) {
+         nir_tex_instr *t =
+            nir_instr_as_tex(nir_instr_clone(b->shader, &tex->instr));
+         t->backend_flags |= SGX_TEX_PLANAR | k << SGX_TEX_PLANE_SHIFT;
+         nir_builder_instr_insert(b, &t->instr);
+         res[k] = nir_channel(b, &t->def, 0);
+      } else if (k < 3) {
+         res[k] = nir_imm_intN_t(b, 0, bits);
+      } else {
+         res[k] = nir_alu_type_get_base_type(tex->dest_type) == nir_type_float
+                     ? nir_imm_floatN_t(b, 1, bits)
+                     : nir_imm_intN_t(b, 1, bits);
+      }
+   }
+   nir_def_replace(&tex->def, nir_vec(b, res, tex->def.num_components));
+   return true;
+}
+
+bool
+sgx_lower_tex(nir_shader *s, const struct sgx_compile_options *opts)
+{
+   nir_lower_tex_options to = {
+      .lower_txd = true,
+      .lower_txf_offset = true,
+      .lower_rect_offset = true,
+      .lower_rect = true,
+      .lower_1d = true,
+      .lower_offset_filter = all_offsets,
+   };
+   bool progress = false;
+   NIR_PASS(progress, s, nir_lower_tex, &to);
+   NIR_PASS(progress, s, nir_shader_tex_pass, r32_instr,
+            nir_metadata_control_flow, (void *)opts);
+   NIR_PASS(progress, s, nir_shader_tex_pass, txf_to_txl_instr,
+            nir_metadata_control_flow, NULL);
+   return progress;
+}
+
+/* src i of alu is the constant k in every component it reads */
+static bool
+alu_src_is_k(nir_alu_instr *alu, unsigned i, int64_t k)
+{
+   if (!nir_src_is_const(alu->src[i].src))
+      return false;
+   for (unsigned c = 0; c < alu->def.num_components; c++)
+      if (nir_src_comp_as_int(alu->src[i].src, alu->src[i].swizzle[c]) != k)
+         return false;
+   return true;
+}
+
+/* imin(imax(x, -1), 1) (lower_isign's, for the float path) back to isign:
+ * the integer units' isign is two movc */
+static bool
+isign_clamp_instr(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   nir_op in_op;
+   int64_t ko, ki;
+   if (alu->op == nir_op_imin) {
+      in_op = nir_op_imax, ko = 1, ki = -1;
+   } else if (alu->op == nir_op_imax) {
+      in_op = nir_op_imin, ko = -1, ki = 1;
+   } else {
+      return false;
+   }
+   for (unsigned o = 0; o < 2; o++) {
+      if (!alu_src_is_k(alu, 1 - o, ko))
+         continue;
+      nir_alu_instr *in = nir_def_as_alu_or_null(alu->src[o].src.ssa);
+      if (!in || in->op != in_op ||
+          in->def.num_components != alu->def.num_components)
+         continue;
+      bool ident = true;
+      for (unsigned c = 0; c < alu->def.num_components; c++)
+         ident &= alu->src[o].swizzle[c] == c;
+      if (!ident)
+         continue;
+      for (unsigned i = 0; i < 2; i++) {
+         if (!alu_src_is_k(in, 1 - i, ki))
+            continue;
+         b->cursor = nir_before_instr(&alu->instr);
+         nir_def_replace(&alu->def, nir_isign(b, nir_ssa_for_alu_src(b, in, i)));
+         return true;
+      }
+   }
+   return false;
+}
+
+/* the w varying of SGX_NOPERSPECTIVE_W at a free slot, when the stage has a
+ * noperspective varying */
+static nir_variable *
+add_noperspective_w(nir_shader *s)
+{
+   bool vs = s->info.stage == MESA_SHADER_VERTEX;
+   if (s->info.stage != MESA_SHADER_FRAGMENT && !vs)
+      return NULL;
+   nir_variable_mode mode = vs ? nir_var_shader_out : nir_var_shader_in;
+   bool any = false;
+   uint64_t used = 0;
+   nir_foreach_variable_with_modes (var, s, mode) {
+      if (var->data.location < VARYING_SLOT_VAR0)
+         continue;
+      any |= var->data.interpolation == INTERP_MODE_NOPERSPECTIVE;
+      unsigned n = glsl_count_vec4_slots(var->type, false, false);
+      for (unsigned r = 0; r < n; r++)
+         used |= BITFIELD64_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 63);
+   }
+   if (!any || used == ~0ull)
+      return NULL;
+   nir_variable *w =
+      nir_variable_create(s, mode, glsl_float_type(), SGX_NOPERSPECTIVE_W);
+   w->data.location = VARYING_SLOT_VAR0 + ffsll(~used) - 1;
+   w->data.interpolation = INTERP_MODE_SMOOTH;
+   w->data.precision = GLSL_PRECISION_HIGH;
+   return w;
+}
+
+static bool
+noperspective_slot(nir_shader *s, nir_variable_mode mode, unsigned loc)
+{
+   nir_foreach_variable_with_modes (var, s, mode) {
+      unsigned n = glsl_count_vec4_slots(var->type, false, false);
+      if (var->data.interpolation == INTERP_MODE_NOPERSPECTIVE &&
+          var->data.location >= VARYING_SLOT_VAR0 &&
+          loc >= (unsigned)var->data.location && loc < var->data.location + n)
+         return true;
+   }
+   return false;
+}
+
+/* noperspective (SGX_NOPERSPECTIVE_W) on lowered I/O. The vertex shader's
+ * noperspective outputs and gl_Position.w go through temporaries, stored
+ * at the end of the program; the fragment shader's loads are divided by w */
+static bool
+lower_noperspective(nir_shader *s, nir_variable *wv)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(s);
+   nir_builder b = nir_builder_at(nir_before_impl(impl));
+   bool progress = false;
+   if (s->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_foreach_block (blk, impl) {
+         nir_foreach_instr_safe (instr, blk) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+            bool interp = in->intrinsic == nir_intrinsic_load_interpolated_input;
+            if ((!interp && in->intrinsic != nir_intrinsic_load_input) ||
+                !nir_src_is_const(in->src[interp]))
+               continue;
+            unsigned loc = nir_intrinsic_io_semantics(in).location +
+                           nir_src_as_uint(in->src[interp]);
+            nir_intrinsic_instr *bary =
+               interp ? nir_src_as_intrinsic(in->src[0]) : NULL;
+            if (!noperspective_slot(s, nir_var_shader_in, loc) &&
+                !(bary && nir_intrinsic_has_interp_mode(bary) &&
+                  nir_intrinsic_interp_mode(bary) == INTERP_MODE_NOPERSPECTIVE))
+               continue;
+            b.cursor = nir_before_instr(instr);
+            nir_def *w =
+               interp ? nir_load_interpolated_input(
+                           &b, 1, 32, in->src[0].ssa, nir_imm_int(&b, 0),
+                           .base = wv->data.driver_location, .component = 0,
+                           .dest_type = nir_type_float32,
+                           .io_semantics.location = wv->data.location,
+                           .io_semantics.num_slots = 1)
+                      : nir_load_input(
+                           &b, 1, 32, nir_imm_int(&b, 0),
+                           .base = wv->data.driver_location, .component = 0,
+                           .dest_type = nir_type_float32,
+                           .io_semantics.location = wv->data.location,
+                           .io_semantics.num_slots = 1);
+            b.cursor = nir_after_instr(instr);
+            nir_def *r = nir_frcp(&b, w);
+            if (in->def.bit_size == 16)
+               r = nir_f2f16(&b, r);
+            nir_def *q = nir_fmul(&b, &in->def, r);
+            nir_def_rewrite_uses_after(&in->def, q);
+            progress = true;
+         }
+      }
+      return progress;
+   }
+
+   nir_variable *wt = nir_local_variable_create(impl, glsl_float_type(), "w");
+   nir_variable *tv[32] = {0};
+   nir_intrinsic_instr *tmpl[32] = {0};
+   unsigned mask[32] = {0};
+   nir_store_var(&b, wt, nir_imm_float(&b, 1.0), 1);
+   nir_foreach_block (blk, impl) {
+      nir_foreach_instr_safe (instr, blk) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *in = nir_instr_as_intrinsic(instr);
+         if (in->intrinsic != nir_intrinsic_store_output ||
+             !nir_src_is_const(in->src[1]))
+            continue;
+         unsigned loc = nir_intrinsic_io_semantics(in).location +
+                        nir_src_as_uint(in->src[1]);
+         unsigned comp = nir_intrinsic_component(in);
+         unsigned wm = nir_intrinsic_write_mask(in) << comp;
+         nir_def *v = in->src[0].ssa;
+         b.cursor = nir_before_instr(instr);
+         if (loc == VARYING_SLOT_POS) {
+            if (wm & 8)
+               nir_store_var(&b, wt, nir_channel(&b, v, 3 - comp), 1);
+            continue;
+         }
+         if (loc < VARYING_SLOT_VAR0 || loc >= VARYING_SLOT_VAR0 + 32 ||
+             !noperspective_slot(s, nir_var_shader_out, loc) || v->bit_size != 32)
+            continue;
+         unsigned i = loc - VARYING_SLOT_VAR0;
+         if (!tv[i]) {
+            tv[i] = nir_local_variable_create(impl, glsl_vec4_type(), "np");
+            tmpl[i] = in;
+         }
+         nir_def *ch[4];
+         for (unsigned k = 0; k < 4; k++)
+            ch[k] = k >= comp && k - comp < v->num_components
+                       ? nir_channel(&b, v, k - comp)
+                       : nir_undef(&b, 1, 32);
+         nir_store_var(&b, tv[i], nir_vec(&b, ch, 4), wm);
+         mask[i] |= wm;
+         if (tmpl[i] != in)
+            nir_instr_remove(instr);
+         progress = true;
+      }
+   }
+   if (!progress)
+      return false;
+   b.cursor = nir_after_impl(impl);
+   nir_def *w = nir_load_var(&b, wt);
+   for (unsigned i = 0; i < 32; i++) {
+      if (!tv[i])
+         continue;
+      nir_io_semantics sem = nir_intrinsic_io_semantics(tmpl[i]);
+      sem.location = VARYING_SLOT_VAR0 + i;
+      sem.num_slots = 1;
+      nir_store_output(&b, nir_fmul(&b, nir_load_var(&b, tv[i]), w),
+                       nir_imm_int(&b, 0), .base = nir_intrinsic_base(tmpl[i]),
+                       .component = 0, .write_mask = mask[i],
+                       .src_type = nir_type_float32, .io_semantics = sem);
+      nir_instr_remove(&tmpl[i]->instr);
+   }
+   nir_store_output(&b, w, nir_imm_int(&b, 0), .base = wv->data.driver_location,
+                    .component = 0, .write_mask = 1,
+                    .src_type = nir_type_float32,
+                    .io_semantics.location = wv->data.location,
+                    .io_semantics.num_slots = 1);
+   return true;
+}
+
 void
 sgx_lower(struct sgx_ctx *c)
 {
    nir_shader *s = c->nir;
 
-   s->options = &options;
+   /* the caller creates the shader with sgx_nir_options() */
+   assert(s->options == &options);
    NIR_PASS(_, s, nir_shader_alu_pass, copysign_instr,
             nir_metadata_control_flow, NULL);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT &&
        (c->opts->fs_mediump || !sgx_debug(c, SGX_DBG_NO_MEDIUMP)))
       NIR_PASS(_, s, lower_mediump, c->opts->fs_mediump);
+   nir_variable *w = add_noperspective_w(s);
    assign_io(c);
    NIR_PASS(_, s, nir_lower_io_vars_to_temporaries,
             nir_shader_get_entrypoint(s), nir_var_shader_out);
@@ -1805,6 +2517,13 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_split_var_copies);
    NIR_PASS(_, s, nir_lower_var_copies);
    NIR_PASS(_, s, nir_lower_vars_to_ssa);
+   if (!sgx_debug(c, SGX_DBG_UNROLL_EXITS))
+      NIR_PASS(_, s, keep_early_exit_loops);
+   if (!sgx_debug(c, SGX_DBG_FLATTEN_UNIFORM)) {
+      NIR_PASS(_, s, nir_opt_copy_prop);
+      NIR_PASS(_, s, keep_uniform_ifs);
+   }
+   NIR_PASS(_, s, uniform_derivatives);
    optimize(s);
    if (s->info.stage == MESA_SHADER_FRAGMENT &&
        nir_shader_intrinsics_pass(s, colour_sat_instr,
@@ -1822,14 +2541,22 @@ sgx_lower(struct sgx_ctx *c)
    /* (Mesa's GLSL linker hands over I/O already lowered: keep the
     * variables, they name the varyings) */
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
+   /* st's lowering sets flrp_lowered, which makes this a no-op: a flrp the
+    * driver adds after it (a filter in the shader) would reach the backend */
+   s->info.flrp_lowered = false;
    NIR_PASS(_, s, nir_lower_flrp, 32, false);
    NIR_PASS(_, s, lower_tex_derefs, c);
+   if (c->opts->tex_f32)
+      NIR_PASS(_, s, nir_shader_instructions_pass, lower_f32_texel,
+               nir_metadata_control_flow, (void *)&c->opts->tex_f32);
    if (s->info.stage == MESA_SHADER_FRAGMENT && !c->opts->front_sa)
       NIR_PASS(_, s, nir_shader_intrinsics_pass, front_true_instr,
                nir_metadata_control_flow, NULL);
 
    NIR_PASS(_, s, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
             type_size_vec4, 0);
+   if (w && lower_noperspective(s, w))
+      NIR_PASS(_, s, nir_lower_vars_to_ssa);
    NIR_PASS(_, s, lower_uniforms, c);
    if (c->p16 && s->info.stage == MESA_SHADER_FRAGMENT) {
       /* a mediump read of a texel: the texture's result in F16 (the
@@ -1846,6 +2573,14 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, lower_sincos);
    optimize(s);
+   if (c->opts->native_integers) {
+      /* no integer divide: a reciprocal and a fix-up */
+      bool idiv = false;
+      NIR_PASS(idiv, s, nir_lower_idiv,
+               &(nir_lower_idiv_options){.allow_fp16 = false});
+      if (idiv)
+         optimize(s);
+   }
 
    optimize_late(s);
 
@@ -1862,18 +2597,29 @@ sgx_lower(struct sgx_ctx *c)
    NIR_PASS(_, s, nir_lower_bit_size, int16_to_32, NULL);
    NIR_PASS(_, s, nir_opt_constant_folding);
    NIR_PASS(_, s, nir_opt_dce);
-   NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr,
-            nir_metadata_control_flow, NULL);
-   NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr, nir_metadata_control_flow,
-            NULL);
-   NIR_PASS(_, s, nir_opt_dce);
-   NIR_PASS(_, s, nir_lower_int_to_float);
-   NIR_PASS(_, s, nir_opt_copy_prop);
-   /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel takes
-    * any size, on the condition as a float) */
-   NIR_PASS(_, s, nir_shader_alu_pass, csel16_instr, nir_metadata_control_flow,
-            NULL);
-   NIR_PASS(_, s, nir_lower_bool_to_float, true);
+   if (c->opts->native_integers) {
+      /* integers stay integers; booleans are 0 / ~0 (testmask's dword) */
+      NIR_PASS(_, s, nir_lower_bool_to_int32);
+      NIR_PASS(_, s, nir_shader_alu_pass, isign_clamp_instr,
+               nir_metadata_control_flow, NULL);
+   } else {
+      NIR_PASS(_, s, nir_shader_alu_pass, int16_conv_instr,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_shader_alu_pass, i2f16_instr,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_shader_alu_pass, lower_int_shift,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_opt_dce);
+      if (!check_int_ops(c, s))
+         return;
+      NIR_PASS(_, s, nir_lower_int_to_float);
+      NIR_PASS(_, s, nir_opt_copy_prop);
+      /* (a 16-bit bcsel would become fcsel, an f32-only opcode: b32csel
+       * takes any size, on the condition as a float) */
+      NIR_PASS(_, s, nir_shader_alu_pass, csel16_instr,
+               nir_metadata_control_flow, NULL);
+      NIR_PASS(_, s, nir_lower_bool_to_float, true);
+   }
    NIR_PASS(_, s, nir_opt_copy_prop);
    NIR_PASS(_, s, nir_opt_constant_folding);
    NIR_PASS(_, s, nir_opt_cse);

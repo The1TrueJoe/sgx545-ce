@@ -27,7 +27,8 @@ on:
       - tools/gen/sgxgen.*
       - tools/tex/sgxtex.*
       - mesa/src/sgx/isa/sgx.xml
-      - tools/isa/hw.py
+      - tools/isa/asm.py
+      - tools/gen/mkusse.py
       - .github/workflows/powervr-sgx.yml
 
 concurrency:
@@ -61,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse qemu-system-x86
+            bc bison flex libelf-dev libssl-dev cpio ccache musl-tools sparse qemu-system-x86 python3-mako
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -136,6 +137,12 @@ jobs:
             --make_options "CC=ccache gcc" \
             --kunitconfig=drivers/gpu/drm/powervr_sgx/tests/.kunitconfig
 
+      - name: sgx-asm, from sgx.xml (tools/gen/mkusse.py assembles with it)
+        run: |
+          set -eux
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
+
       - name: uAPI tests (static, musl)
         run: |
           set -eux
@@ -190,11 +197,18 @@ jobs:
 
   # The validator's instruction check on the host: the kernel's own
   # pvrsgx_usse.c against random, mutated and per-form words, every accepted
-  # one decoded by tools/isa/hw.py (drm/tests/usse_fuzz).
+  # one disassembled by sgx-disasm, built from sgx.xml (drm/tests/usse_fuzz).
   usse-fuzz:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: sgx-disasm, from sgx.xml (the fuzzer's reference decoder)
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-mako
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
       - name: Fuzz the USSE check
         run: python3 -I drm/tests/usse_fuzz/usse_fuzz.py --seed 1 -n 200000 --per-form 2000

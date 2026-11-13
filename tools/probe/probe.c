@@ -18,6 +18,7 @@
  *
  * Render state (each one a single GL call or enable, for one-change captures):
  *   PROBE_CONFIG="r g b a d s" EGL config sizes                  (5 6 5 0 0 0)
+ *   PROBE_SAMPLES=n            a multisampled config: EGL_SAMPLE_BUFFERS 1, EGL_SAMPLES n
  *   PROBE_PBUFFER="w h"        render into a pbuffer of this size instead of the window
  *   PROBE_DEPTH="func mask"    glEnable(DEPTH_TEST), glDepthFunc, glDepthMask (func as a GL enum)
  *   PROBE_CLEARDEPTH=z         glClearDepthf, and DEPTH_BUFFER_BIT in the clear
@@ -59,6 +60,13 @@
  *   PROBE_TEXFILE=path         level 0 texels from a file, raw, in the GL upload format
  *   PROBE_TEXLEVELS=n          upload levels 0..n-1 one by one (each with its own level number)
  *   PROBE_TEXCUBE=1            a cube map: all six faces uploaded (face f in the pattern)
+ *   PROBE_TEX3D=d              a 3D texture (OES_texture_3D) of depth d: layer z of each level is
+ *                              the 2D image with face z in the pattern; PROBE_TEXWRAP's third value is R.
+ *                              The shader is PROBE_FS (#extension GL_OES_texture_3D, sampler3D)
+ *   PROBE_TEXBORDER="r g b a"  glTexParameterfv(TEXTURE_BORDER_COLOR), for a CLAMP_TO_BORDER (0x812D) wrap
+ *   PROBE_TEXCOMPARE="mode func"  TEXTURE_COMPARE_MODE (0x884E = compare) and TEXTURE_COMPARE_FUNC
+ *                              (EXT_shadow_samplers; PROBE_FS with sampler2DShadow)
+ *   PROBE_EXTS=1               print GL_VERSION, GL_RENDERER and GL_EXTENSIONS, then exit
  *
  * Render to texture (the triangle pass goes into an FBO, the window samples it):
  *   PROBE_FBO="w h fmt"        colour texture rgba8888 rgb565 rgba4444 rgba5551 rgb888
@@ -94,6 +102,7 @@ typedef char GLchar;
 	X(EGL, EGLDisplay, eglGetDisplay, (void *)) \
 	X(EGL, EGLBoolean, eglInitialize, (EGLDisplay, EGLint *, EGLint *)) \
 	X(EGL, EGLBoolean, eglChooseConfig, (EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *)) \
+	X(EGL, EGLBoolean, eglGetConfigAttrib, (EGLDisplay, EGLConfig, EGLint, EGLint *)) \
 	X(EGL, EGLSurface, eglCreateWindowSurface, (EGLDisplay, EGLConfig, uintptr_t, const EGLint *)) \
 	X(EGL, EGLSurface, eglCreatePbufferSurface, (EGLDisplay, EGLConfig, const EGLint *)) \
 	X(EGL, EGLContext, eglCreateContext, (EGLDisplay, EGLConfig, EGLContext, const EGLint *)) \
@@ -101,6 +110,9 @@ typedef char GLchar;
 	X(EGL, EGLBoolean, eglSwapBuffers, (EGLDisplay, EGLSurface)) \
 	X(EGL, EGLBoolean, eglQuerySurface, (EGLDisplay, EGLSurface, EGLint, EGLint *)) \
 	X(EGL, EGLBoolean, eglTerminate, (EGLDisplay)) \
+	X(EGL, void *, eglGetProcAddress, (const char *)) \
+	X(GL, const GLubyte *, glGetString, (GLenum)) \
+	X(GL, void, glTexParameterfv, (GLenum, GLenum, const GLfloat *)) \
 	X(GL, GLuint, glCreateShader, (GLenum)) \
 	X(GL, void, glShaderSource, (GLuint, GLsizei, const GLchar *const *, const GLint *)) \
 	X(GL, void, glCompileShader, (GLuint)) \
@@ -177,6 +189,8 @@ FNS(DECL)
 #define EGL_DEPTH_SIZE 0x3025
 #define EGL_STENCIL_SIZE 0x3026
 #define EGL_SURFACE_TYPE 0x3033
+#define EGL_SAMPLES 0x3031
+#define EGL_SAMPLE_BUFFERS 0x3032
 #define EGL_PBUFFER_BIT 0x0001
 #define EGL_WINDOW_BIT 0x0004
 #define EGL_RENDERABLE_TYPE 0x3040
@@ -221,6 +235,14 @@ FNS(DECL)
 #define GL_NEAREST 0x2600
 #define GL_REPEAT 0x2901
 #define GL_TEXTURE_CUBE_MAP 0x8513
+#define GL_TEXTURE_3D_OES 0x806F
+#define GL_TEXTURE_WRAP_R_OES 0x8072
+#define GL_TEXTURE_BORDER_COLOR 0x1004
+#define GL_TEXTURE_COMPARE_MODE 0x884C
+#define GL_TEXTURE_COMPARE_FUNC 0x884D
+#define GL_VERSION 0x1F02
+#define GL_RENDERER 0x1F01
+#define GL_EXTENSIONS 0x1F03
 #define GL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_RENDERBUFFER 0x8D41
@@ -569,7 +591,7 @@ int main(void)
 	EGLConfig cfg;
 	EGLint cfg_attr[] = { EGL_RED_SIZE, 5, EGL_GREEN_SIZE, 6, EGL_BLUE_SIZE, 5, EGL_ALPHA_SIZE, 0,
 			      EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-			      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE };
+			      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE, EGL_NONE, EGL_NONE, EGL_NONE, EGL_NONE };
 	const EGLint ctx_attr[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
 	const char *vs = getenv("PROBE_VS"), *fs = getenv("PROBE_FS"), *out = getenv("PROBE_OUT");
 	const char *texfmt = getenv("PROBE_TEXFMT") ? getenv("PROBE_TEXFMT") : "rgba8888";
@@ -608,9 +630,22 @@ int main(void)
 		cfg_attr[2 * i + 1] = conf[i];
 	if (getenv("PROBE_PBUFFER"))
 		cfg_attr[13] = EGL_PBUFFER_BIT;
+	if (getenv("PROBE_SAMPLES")) {
+		cfg_attr[16] = EGL_SAMPLE_BUFFERS;
+		cfg_attr[17] = 1;
+		cfg_attr[18] = EGL_SAMPLES;
+		cfg_attr[19] = atoi(getenv("PROBE_SAMPLES"));
+	}
 	dpy = eglGetDisplay(NULL);
 	if (!eglInitialize(dpy, &maj, &min) || !eglChooseConfig(dpy, cfg_attr, &cfg, 1, &n) || n < 1)
 		return note("egl failed"), 1;
+	{
+		EGLint sb = 0, ns = 0;
+
+		eglGetConfigAttrib(dpy, cfg, EGL_SAMPLE_BUFFERS, &sb);
+		eglGetConfigAttrib(dpy, cfg, EGL_SAMPLES, &ns);
+		printf("probe: config sample buffers %d samples %d\n", sb, ns);
+	}
 	if (ints("PROBE_PBUFFER", v, 2, NULL) == 2) {
 		const EGLint pb[] = { EGL_WIDTH, (EGLint)v[0], EGL_HEIGHT, (EGLint)v[1], EGL_NONE };
 
@@ -623,6 +658,13 @@ int main(void)
 		return note("surface/context failed"), 1;
 	eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
 	eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
+	if (getenv("PROBE_EXTS") && atoi(getenv("PROBE_EXTS"))) {
+		printf("probe: GL_VERSION %s\nprobe: GL_RENDERER %s\nprobe: GL_EXTENSIONS %s\n",
+		       (const char *)glGetString(GL_VERSION), (const char *)glGetString(GL_RENDERER),
+		       (const char *)glGetString(GL_EXTENSIONS));
+		eglTerminate(dpy);
+		return 0;
+	}
 
 	note("compile");
 	prog = glCreateProgram();
@@ -723,22 +765,45 @@ int main(void)
 		GLuint tx;
 		GLenum gf, gt;
 		char name[8];
-		long tw = 8, th = 8, filt[2] = { GL_NEAREST, GL_NEAREST }, wrap[2] = { GL_REPEAT, GL_REPEAT };
+		long tw = 8, th = 8, filt[2] = { GL_NEAREST, GL_NEAREST }, wrap[3] = { GL_REPEAT, GL_REPEAT, GL_REPEAT };
 
 		if (ints("PROBE_TEXSIZE", v, 2, NULL) == 2)
 			tw = v[0], th = v[1];
 		ints("PROBE_TEXFILTER", filt, 2, NULL);
-		ints("PROBE_TEXWRAP", wrap, 2, NULL);
+		ints("PROBE_TEXWRAP", wrap, 3, NULL);
 		int cube = getenv("PROBE_TEXCUBE") && atoi(getenv("PROBE_TEXCUBE"));
 		int levels = getenv("PROBE_TEXLEVELS") ? atoi(getenv("PROBE_TEXLEVELS")) : 1;
-		GLenum target = cube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+		int td = getenv("PROBE_TEX3D") ? atoi(getenv("PROBE_TEX3D")) : 0;
+		GLenum target = cube ? GL_TEXTURE_CUBE_MAP : td ? GL_TEXTURE_3D_OES : GL_TEXTURE_2D;
+		void (*teximage3d)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum,
+				   const void *) = NULL;
+
+		if (td) {
+			*(void **)&teximage3d = eglGetProcAddress("glTexImage3DOES");
+			if (!teximage3d || td > 16)
+				return note("no glTexImage3DOES, or PROBE_TEX3D > 16"), 1;
+		}
 
 		if (tw * th > 1024 * 1024)
 			return note("bad texture size"), 1;
 		glActiveTexture(GL_TEXTURE0 + t);
 		glGenTextures(1, &tx);
 		glBindTexture(target, tx);
-		for (int fc = 0; fc < (cube ? 6 : 1); fc++)
+		for (int l = 0; td && l < levels; l++) {
+			GLsizei lw = tw >> l > 0 ? (GLsizei)(tw >> l) : 1, lh = th >> l > 0 ? (GLsizei)(th >> l) : 1;
+			GLsizei ld = td >> l > 0 ? (GLsizei)(td >> l) : 1;
+			size_t layer = 0;
+
+			for (int z = 0; z < ld; z++) {
+				if (!teximage(texfmt, (int)tw, (int)th, l, z, tex + layer * z, &gf, &gt))
+					return note("bad texture format"), 1;
+				layer = (size_t)lw * lh * texbytes(gf, gt);
+				if (layer * ld > sizeof tex)
+					return note("bad texture size"), 1;
+			}
+			teximage3d(GL_TEXTURE_3D_OES, l, gf, lw, lh, ld, 0, gf, gt, tex);
+		}
+		for (int fc = 0; !td && fc < (cube ? 6 : 1); fc++)
 			for (int l = 0; l < levels; l++) {
 				GLsizei lw = tw >> l > 0 ? (GLsizei)(tw >> l) : 1, lh = th >> l > 0 ? (GLsizei)(th >> l) : 1;
 
@@ -753,6 +818,14 @@ int main(void)
 		glTexParameteri(target, GL_TEXTURE_MAG_FILTER, (GLint)filt[1]);
 		glTexParameteri(target, GL_TEXTURE_WRAP_S, (GLint)wrap[0]);
 		glTexParameteri(target, GL_TEXTURE_WRAP_T, (GLint)wrap[1]);
+		if (td)
+			glTexParameteri(target, GL_TEXTURE_WRAP_R_OES, (GLint)wrap[2]);
+		if (floats("PROBE_TEXBORDER", f, 4, "") == 4)
+			glTexParameterfv(target, GL_TEXTURE_BORDER_COLOR, f);
+		if (ints("PROBE_TEXCOMPARE", v, 2, NULL) == 2) {
+			glTexParameteri(target, GL_TEXTURE_COMPARE_MODE, (GLint)v[0]);
+			glTexParameteri(target, GL_TEXTURE_COMPARE_FUNC, (GLint)v[1]);
+		}
 		snprintf(name, sizeof name, "t%d", t);
 		loc = glGetUniformLocation(prog, name);
 		if (loc >= 0)

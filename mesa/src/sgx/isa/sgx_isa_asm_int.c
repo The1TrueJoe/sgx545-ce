@@ -6,6 +6,7 @@
 /* Text notation of the integer / fixed-point / dual-issue classes. */
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,14 +34,14 @@ parse_sel(const char *const *names, unsigned n, const char *s, uint8_t *v,
 {
    int i;
    char *end;
-   long num = strtol(s, &end, 0);
+   long long num = strtoll(s, &end, 0);
    *comp = false;
    if (*s && !*end) {
       /* a number is the stored field value, complement bit included */
       unsigned bits = 0;
       while ((1u << bits) < n)
          bits++;
-      if (num < 0 || num >= (2l << bits))
+      if (num < 0 || num >= (2ll << bits))
          return false;
       *v = num & ((1u << bits) - 1);
       *comp = num >> bits;
@@ -53,7 +54,10 @@ parse_sel(const char *const *names, unsigned n, const char *s, uint8_t *v,
       s += 2;
    }
    if (!strcmp(s, "zero") || (s[0] == 'x' && s[1] >= '0' && s[1] <= '9')) {
-      i = !strcmp(s, "zero") ? lookup(names, n, "zero") : atoi(s + 1);
+      long long x = strcmp(s, "zero") ? strtoll(s + 1, &end, 10) : 0;
+      if (strcmp(s, "zero") && (*end || x >= (long long)n))
+         return false;
+      i = !strcmp(s, "zero") ? lookup(names, n, "zero") : (int)x;
       if (i < 0)
          return false;
    } else {
@@ -145,14 +149,13 @@ static const struct {
 };
 
 bool
-sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
-                            unsigned nparts, unsigned nops, const char **pat)
+sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts, unsigned nparts,
+                         unsigned nops, const char **pat)
 {
    if (!strcmp(parts[0], "fdual")) {
       int p = nparts == 3 ? LOOKUP(fdual_pri, parts[1]) : -1;
       int s = nparts == 3 ? LOOKUP(fdual_sec, parts[2]) : -1;
-      /* sec 3 is fsubflr; fadm and ffrc are other names for it (ISA.md "Dual
-       * issue") */
+      /* sec 3 is fsubflr; fadm and ffrc are other names for it */
       if (nparts == 3 &&
           (!strcmp(parts[2], "fadm") || !strcmp(parts[2], "ffrc")))
          s = 3;
@@ -176,8 +179,8 @@ sgx_isa_asm_mnemonic_int(struct sgx_isa_instr *I, char **parts,
            opc == SGX_ISA_OPC_IMA32)) {
          I->sgn = true;
       } else if (nparts == 2 && fmtx) {
-         /* the format as a suffix: bilin.s8, ssum16.o8, firh.s8 (ISA.md
-          * "hw 16 / 17 / 1a"); ssum16's picks the form */
+         /* the format as a suffix: bilin.s8, ssum16.o8, firh.s8; ssum16's
+          * picks the form */
          static const char *const sfx[] = {"u8", "s8", "o8", "fmt3"};
          int f = LOOKUP(sfx, parts[1]);
          if (f <= 0 || (f == 3 && opc == SGX_ISA_OPC_SSUM16))
@@ -211,9 +214,9 @@ set_enum(const char *const *tbl, unsigned n, const char *v, uint8_t *out)
 {
    char *end;
    if (v && *v) {
-      long num = strtol(v, &end, 0);
+      long long num = strtoll(v, &end, 0);
       if (!*end) {
-         if (num < 0 || num >= (long)n)
+         if (num < 0 || num >= (long long)n)
             return false;
          *out = num;
          return true;
@@ -234,16 +237,16 @@ set_num(const char *v, uint8_t *out)
    char *end;
    if (!v || !*v)
       return false;
-   long n = strtol(v, &end, 0);
-   if (*end)
+   long long n = strtoll(v, &end, 0);
+   if (*end || n < 0 || n > UINT8_MAX)
       return false;
    *out = n;
    return true;
 }
 
 /*
- * efo's i, a and m as dis.py prints them, "i0=m0,i1=m1", into the table's
- * "m0/m1" (ISA.md "Other spellings asm.py takes"); NULL if it isn't that form.
+ * efo's i, a and m in their long spelling, "i0=m0,i1=m1", into the table's
+ * "m0/m1"; NULL if it isn't that form.
  */
 static const char *
 efo_pair(const char *v, char *buf, size_t size)
@@ -260,7 +263,7 @@ efo_pair(const char *v, char *buf, size_t size)
 
 bool
 sgx_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
-                        const char *value)
+                     const char *value)
 {
    enum sgx_isa_opc o = I->opc;
    bool sop2 = o == SGX_ISA_OPC_SOP2, sopwm = o == SGX_ISA_OPC_SOPWM;
@@ -357,7 +360,7 @@ sgx_isa_asm_item_int(struct sgx_isa_instr *I, const char *name,
    if (!strcmp(name, "cs")) {
       if (o == SGX_ISA_OPC_LRP1)
          return SET_ENUM(lrp1_cs, lcs);
-      /* dot's scales: x4, or cx4 / ax2 (ISA.md "Other spellings") */
+      /* dot's scales: x4, or cx4 / ax2 */
       if (dot && value && value[0] == 'c' && value[1] == 'x')
          value++;
       if (dot)

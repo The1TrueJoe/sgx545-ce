@@ -8,7 +8,7 @@
  * to C:
  *  - "custom" fields, printed only when they differ from their default;
  *  - format control, tracked through setfc and handed to the XML's
- *    expressions as ISA_GPU_ID() (bit 0 = C10 enable, bit 1 = F16 enable);
+ *    expressions in ISA_GPU_ID() with the core (sgx_isa_gpu_id());
  *  - tidying the trailing "[...]" (empty brackets, leading spaces).
  */
 
@@ -23,7 +23,7 @@
 static void
 print_custom(struct isa_print_state *print, const char *name, uint64_t v)
 {
-   /* Numbers print in decimal (ISA.md "Text notation and defaults"). */
+   /* Numbers print in decimal. */
    if (!strcmp(name, "NODST")) {
       if (v != 0x280)
          isa_print(print, " nodst=%" PRIu64, v);
@@ -63,8 +63,8 @@ print_custom(struct isa_print_state *print, const char *name, uint64_t v)
 }
 
 /* setfc: hw 1f, MOE control (h20-22 = 1), op 5; a0 = l0, a1 = l8. */
-static bool
-is_setfc(uint64_t w, struct sgx_isa_fc *fc)
+bool
+sgx_isa_setfc(uint64_t w, struct sgx_isa_fc *fc)
 {
    uint32_t hi = w >> 32;
 
@@ -116,7 +116,7 @@ tidy(char *s)
 
 bool
 sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
-                  size_t size)
+               size_t size)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    uint32_t words[2] = {(uint32_t)word, (uint32_t)(word >> 32)};
@@ -128,11 +128,11 @@ sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
       return false;
 
    sgx_isa_disasm(words, sizeof(words), out,
-                     &(struct isa_decode_options){
-                        .gpu_id = (f.c10 ? 1 : 0) | (f.f16 ? 2 : 0),
-                        .show_errors = true,
-                        .field_print_cb = print_custom,
-                     });
+                  &(struct isa_decode_options){
+                     .gpu_id = sgx_isa_gpu_id(&f),
+                     .show_errors = true,
+                     .field_print_cb = print_custom,
+                  });
    fclose(out);
 
    tidy(text);
@@ -145,7 +145,7 @@ sgx_disasm_one(uint64_t word, const struct sgx_isa_fc *fc, char *buf,
 
 void
 sgx_disasm(const uint32_t *words, unsigned n, FILE *out,
-              const struct sgx_isa_fc *fc)
+           const struct sgx_isa_fc *fc)
 {
    struct sgx_isa_fc f = fc ? *fc : SGX_ISA_FC_START;
    char line[512];
@@ -155,6 +155,6 @@ sgx_disasm(const uint32_t *words, unsigned n, FILE *out,
 
       sgx_disasm_one(w, &f, line, sizeof(line));
       fprintf(out, "%08x %08x  %s\n", words[2 * i], words[2 * i + 1], line);
-      is_setfc(w, &f);
+      sgx_isa_setfc(w, &f);
    }
 }

@@ -51,7 +51,6 @@ tests.
 | `pvrsgx_core.c` | the cores the driver knows: ID, revision, features, clock, firmware file |
 | `pvrsgx_fw.c` | the microkernel: load, patch, control blocks, init scripts, start, stop |
 | `pvrsgx_pds.c` | the PDS assembler for the programs that enter the microkernel |
-| `drm/ci/ddk-compat.patch` | out of tree, CE5300 test kernels only: the vendor microkernel for A/B runs (entry programs, patch sites, shared kernel heaps) |
 | `pvrsgx_ccb.c` | kernel CCB writer and completion count |
 | `pvrsgx_mmu.c` | page directories and tables |
 | `pvrsgx_gem.c` | shmem objects |

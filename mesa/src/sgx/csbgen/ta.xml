@@ -4,10 +4,10 @@
 Copyright © 2026 Joseph Telaak
 SPDX-License-Identifier: MIT
 
-The TA state block (docs/STATE.md section 3): a header word, then the groups
-it names, in the header's bit order. For Mesa's csbgen. A field named
-unknown_<bits> holds bits STATE.md gives a value but no meaning; widths
-STATE.md doesn't give are taken up to the next known field.
+The TA state block: a header word, then the groups it names, in the
+header's bit order. For Mesa's csbgen. A field named unknown_<bits> holds
+bits whose meaning is unknown, defaulting to the value they always have. A
+field of unknown width runs up to the next known field.
 -->
 
 <csbgen name="SGX" prefix="TA">
@@ -148,9 +148,15 @@ STATE.md doesn't give are taken up to the next known field.
     <!-- 0 for a VIEWPORT_GENERATE object -->
     <field name="unknown_11_13" start="11" end="13" type="uint">
       <define name="DRAW" value="6"/>   <!-- 0x3000 -->
+      <!-- 0x3800: the first set after the position is the vertex colour,
+           the PDS's colour source (0x20) -->
+      <define name="DRAW_COLOUR" value="7"/>
       <define name="CLEAR" value="3"/>  <!-- 0x1800 -->
     </field>
     <field name="point_size" start="8" end="8" type="bool"/>   <!-- the last output is the size -->
+    <!-- the user clip planes the TA clips against, plane n's result (fdpc
+         into cp<n>) an output after the others -->
+    <field name="clip_planes" start="0" end="5" type="uint"/>
   </struct>
 
   <struct name="STATE_WCLAMP" length="1">

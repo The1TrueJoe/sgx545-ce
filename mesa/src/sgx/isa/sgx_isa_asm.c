@@ -4,7 +4,8 @@
  */
 
 /*
- * A small assembler for ISA.md's text notation, into struct sgx_isa_instr:
+ * A small assembler for the USSE text notation (README.md), into struct
+ * sgx_isa_instr:
  *
  *    [(pred)] mnemonic[.suffix...] operand, operand, ... [item item=value ...]
  *
@@ -14,6 +15,8 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,7 +87,8 @@ static int
 parse_test_alu(const char *s)
 {
    int v = LOOKUP(test_alu, s);
-   if (v < 0 && !strncmp(s, "alu", 3) && strlen(s) == 5)
+   if (v < 0 && !strncmp(s, "alu", 3) && strlen(s) == 5 &&
+       isxdigit((unsigned char)s[3]) && isxdigit((unsigned char)s[4]))
       v = strtol(s + 3, NULL, 16);
    return v;
 }
@@ -121,15 +125,23 @@ trim(char *s)
    return s;
 }
 
+/* A number as wide as a 32-bit field takes, signed or not: -2^31 .. 2^32 - 1. */
 static bool
-parse_int(const char *s, long *v)
+parse_int(const char *s, int64_t *v)
 {
    char *end;
    if (!*s)
       return false;
-   *v = strtol(s, &end, 0);
-   return *end == '\0';
+   errno = 0;
+   long long n = strtoll(s, &end, 0);
+   if (*end || errno || n < INT32_MIN || n > UINT32_MAX)
+      return false;
+   *v = n;
+   return true;
 }
+
+/* Store a parsed number; true if the member holds it unchanged. */
+#define STORE(lv, v) ((lv) = (v), (int64_t)(lv) == (v))
 
 /* Register-like prefixes, longest first. */
 static const struct {
@@ -190,7 +202,7 @@ parse_operand(struct asm_ctx *c, char *s, struct sgx_isa_src *o)
       sfx = next;
    }
 
-   long v;
+   int64_t v;
    if (*base == '#') {
       if (!parse_int(base + 1, &v))
          return fail(c, "bad immediate '%s'", base);
@@ -236,7 +248,7 @@ parse_pn(const char *s)
 }
 
 static bool
-parse_hash(struct asm_ctx *c, const char *s, long *v)
+parse_hash(struct asm_ctx *c, const char *s, int64_t *v)
 {
    s = trim((char *)s);
    if (*s != '#' || !parse_int(s + 1, v))
@@ -263,7 +275,7 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
 {
    char *eq = strchr(item, '=');
    const char *val = NULL;
-   long v = 0;
+   int64_t v = 0;
    if (eq) {
       *eq = '\0';
       val = eq + 1;
@@ -275,7 +287,8 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
 #define FLAG(name, field)                                                     \
    if (!strcmp(item, name) && !eq) { I->field = true; return true; }
 #define VAL(name, field)                                                      \
-   if (!strcmp(item, name) && eq && v >= 0) { I->field = v; return true; }
+   if (!strcmp(item, name) && eq && v >= 0)                                    \
+      return STORE(I->field, v) || fail(c, "%s doesn't fit its field", val);
    FLAG("skipinv", skipinv) FLAG("nosched", nosched) FLAG("syncs", syncs)
    FLAG("end", end) FLAG("fmt", fmt) FLAG("moe", moe)
    FLAG("inc0", inc[0]) FLAG("inc1", inc[1]) FLAG("inc2", inc[2])
@@ -303,13 +316,11 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
       if (!strcmp(item, "unused2") && eq && v >= 0 && I->opc == SGX_ISA_OPC_RLP)
    {
       I->has_unused2 = true;
-      I->unused2 = v;
-      return true;
+      return STORE(I->unused2, v) || fail(c, "%s doesn't fit its field", val);
    }
    if (!strcmp(item, "nodst") && eq && v >= 0) {
       I->has_nodst = true;
-      I->nodst = v;
-      return true;
+      return STORE(I->nodst, v) || fail(c, "%s doesn't fit its field", val);
    }
    /* the classes with h21 rcnt write "rcnt" or "rcnt rpt=n" (checked at the
     * end) */
@@ -317,10 +328,8 @@ parse_item(struct asm_ctx *c, struct sgx_isa_instr *I, char *item)
       I->rcnt = true;
       return true;
    }
-   if (!strcmp(item, "rpt") && eq && v >= 1) {
-      I->rpt = v;
-      return true;
-   }
+   if (!strcmp(item, "rpt") && eq && v >= 1)
+      return STORE(I->rpt, v) || fail(c, "%s doesn't fit its field", val);
    if ((!strcmp(item, "swz0") || !strcmp(item, "swz1") ||
         !strcmp(item, "swz2")) &&
        eq) {
@@ -367,7 +376,7 @@ parse_operands(struct asm_ctx *c, struct sgx_isa_instr *I, const char *pat,
 
    for (unsigned i = 0; i < nops; i++) {
       char *s = trim(ops[i]);
-      long v;
+      int64_t v;
       int p;
       switch (pat[i]) {
       case 'D':
@@ -400,17 +409,21 @@ parse_operands(struct asm_ctx *c, struct sgx_isa_instr *I, const char *pat,
       case 'c':
          if (strncmp(s, "cp", 2) || !parse_int(s + 2, &v))
             return fail(c, "expected cp<n>, got '%s'", s);
-         I->cp[pat[i] == 'c'] = v;
+         if (!STORE(I->cp[pat[i] == 'c'], v))
+            return fail(c, "%s doesn't fit its field", s);
          break;
       case 'T':
          if (!parse_hash(c, s, &v))
             return false;
-         I->target = v;
+         if (!STORE(I->target, v))
+            return fail(c, "%s doesn't fit its field", s);
          break;
       case 'V':
          if (!parse_hash(c, s, &v))
             return false;
-         I->v[vi++] = v;
+         if (!STORE(I->v[vi], v))
+            return fail(c, "%s doesn't fit its field", s);
+         vi++;
          break;
       case 'L':
          if (!strncmp(s, "#0.", 3) && strlen(s) == 7) {
@@ -426,23 +439,29 @@ parse_operands(struct asm_ctx *c, struct sgx_isa_instr *I, const char *pat,
          } else {
             if (!parse_hash(c, s, &v))
                return false;
+            if (v < -128 || v > 255)
+               return fail(c, "%s doesn't fit its field", s);
             I->v[vi++] = v & 0xff;
          }
          break;
       case 'A':
          if (!parse_hash(c, s, &v))
             return false;
-         I->a[ai++] = v;
+         if (!STORE(I->a[ai], v))
+            return fail(c, "%s doesn't fit its field", s);
+         ai++;
          break;
       case 'N':
          if (!parse_hash(c, s, &v))
             return false;
-         I->n = v;
+         if (!STORE(I->n, v))
+            return fail(c, "%s doesn't fit its field", s);
          break;
       case 'U':
          if (!parse_hash(c, s, &v))
             return false;
-         I->temps4 = v;
+         if (!STORE(I->temps4, v))
+            return fail(c, "%s doesn't fit its field", s);
          break;
       case 'M':
       case 'E':
@@ -635,9 +654,8 @@ split_operands(char *s, char **ops, unsigned max)
    return n;
 }
 
-bool
-sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
-                    size_t errsize)
+static bool
+parse_line(const char *line, struct sgx_isa_instr *I, char *err, size_t errsize)
 {
    struct asm_ctx c = {err, errsize};
    char buf[512], *s, *items = NULL;
@@ -822,8 +840,8 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
 
    if (!parse_operands(&c, I, pat, ops, nops))
       return false;
-   /* any format suffix sets format select (ISA.md "Text notation and
-    * defaults"; classes without the field ignore it) */
+   /* any format suffix sets format select (classes without the field
+    * ignore it) */
    for (unsigned k = 0; k < 3; k++)
       I->fmt |= I->src[k].fmt != SGX_ISA_FMT_NONE;
    I->fmt |= I->dst.fmt != SGX_ISA_FMT_NONE;
@@ -844,9 +862,9 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
    } else if (I->rcnt) {
       return fail(&c, "'%s' has no rcnt", mnem);
    }
-   /* a source immediate is 7 bits, unsigned or (in the forms ISA.md says)
-    * two's complement: -64..127; the bitwise classes' src2 takes 16 bits,
-    * ldr/str's address 14 (ISA.md "MOE control", op 6) */
+   /* a source immediate is 7 bits, unsigned or (in the integer forms with
+    * signed immediates) two's complement: -64..127; the bitwise classes'
+    * src2 takes 16 bits, ldr/str's address 14 */
    for (unsigned k = 0; k < 3; k++) {
       bool wide =
          k == 2 && (I->opc == SGX_ISA_OPC_AND || I->opc == SGX_ISA_OPC_OR ||
@@ -864,4 +882,196 @@ sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
       }
    }
    return true;
+}
+
+/*
+ * A flag the form has no field for would be dropped by the encoder, so the
+ * text would claim what the word doesn't do. Each bare item must show in the
+ * word's disassembly, or (another spelling, or implied by an operand) change
+ * the word: the line without it encodes differently.
+ */
+static bool
+has_item(const char *dis, const char *item)
+{
+   const char *lb = strrchr(dis, '[');
+   size_t n = strlen(item);
+
+   if (!lb)
+      return false;
+   for (const char *p = lb + 1; (p = strstr(p, item)); p += n) {
+      if ((p[-1] == '[' || p[-1] == ' ') && (p[n] == ' ' || p[n] == ']'))
+         return true;
+   }
+   return false;
+}
+
+static bool
+check_flags(const char *line, const struct sgx_isa_instr *I, char *err,
+            size_t errsize)
+{
+   struct asm_ctx c = {err, errsize};
+   char buf[512], *s;
+
+   snprintf(buf, sizeof(buf), "%s", line);
+   if ((s = strchr(buf, ';')))
+      *s = '\0';
+   s = trim(buf);
+   char *lb = strrchr(s, '[');
+   if (!lb || lb == s || lb[-1] != ' ' || s[strlen(s) - 1] != ']')
+      return true;
+   *lb = '\0';
+   char *items = lb + 1;
+   items[strlen(items) - 1] = '\0';
+
+   char *tok[32];
+   unsigned n = 0;
+   for (char *t = strtok(items, " \t"); t && n < ARRAY_LEN(tok);
+        t = strtok(NULL, " \t"))
+      tok[n++] = t;
+
+   uint64_t w = sgx_isa_encode(I, NULL);
+   char dis[512];
+   if (!sgx_disasm_one(w, NULL, dis, sizeof(dis)))
+      dis[0] = '\0';
+   for (unsigned i = 0; i < n; i++) {
+      if (strchr(tok[i], '=') || has_item(dis, tok[i]))
+         continue;
+      char without[512], e[128];
+      size_t len = snprintf(without, sizeof(without), "%s [", s);
+      for (unsigned j = 0; j < n && len < sizeof(without); j++) {
+         if (strcmp(tok[j], tok[i]))
+            len +=
+               snprintf(without + len, sizeof(without) - len, "%s ", tok[j]);
+      }
+      if (len < sizeof(without))
+         snprintf(without + len, sizeof(without) - len, "]");
+
+      struct sgx_isa_instr J;
+      if (parse_line(without, &J, e, sizeof(e)) &&
+          sgx_isa_encode(&J, NULL) == w)
+         return fail(&c, "'%s' isn't encoded by this form", tok[i]);
+   }
+   return true;
+}
+
+/*
+ * i<n> in a slot without the i bank reads back as r(124 + n), and a negative
+ * immediate as its two's complement in the field's width.
+ */
+static bool
+same_opnd(const struct sgx_isa_src *a, const struct sgx_isa_src *b)
+{
+   uint32_t num = a->num;
+   if (a->file == SGX_ISA_FILE_I && b->file == SGX_ISA_FILE_R)
+      num += a->fmt != SGX_ISA_FMT_NONE ? 60 : 124;
+   else if (a->file != b->file)
+      return false;
+   if (a->file == SGX_ISA_FILE_IMM && (int32_t)num < 0) {
+      static const unsigned widths[] = {7, 14, 16};
+      for (unsigned i = 0; i < ARRAY_LEN(widths); i++) {
+         if ((num & ((1u << widths[i]) - 1)) == b->num)
+            num = b->num;
+      }
+   }
+   return num == b->num && a->half == b->half && a->ixbank == b->ixbank &&
+          a->ixreg == b->ixreg && a->lane == b->lane;
+}
+
+/*
+ * The encoder keeps only the bits a field has, so a number too wide for its
+ * field would be dropped silently. Every number must read back from the
+ * word's disassembly unchanged.
+ */
+static const char *
+misfit(const struct sgx_isa_instr *I, const struct sgx_isa_fc *fc)
+{
+   struct sgx_isa_instr J;
+   char dis[512];
+
+   if (!sgx_disasm_one(sgx_isa_encode(I, fc), fc, dis, sizeof(dis)) ||
+       !parse_line(dis, &J, NULL, 0))
+      return "the word";
+
+   if (!same_opnd(&I->dst, &J.dst))
+      return "the destination";
+   for (unsigned k = 0; k < 3; k++) {
+      if (!same_opnd(&I->src[k], &J.src[k]))
+         return k == 0 ? "src0" : k == 1 ? "src1" : "src2";
+   }
+   if ((I->has_nodst ? I->nodst : 0x280) != (J.has_nodst ? J.nodst : 0x280))
+      return "nodst";
+   if ((I->has_unused2 ? I->unused2 : 0x300) !=
+       (J.has_unused2 ? J.unused2 : 0x300))
+      return "unused2";
+#define FIT(f)                                                                 \
+   do {                                                                        \
+      if (I->f != J.f)                                                         \
+         return #f;                                                            \
+   } while (0)
+   FIT(mask);
+   FIT(drc);
+   FIT(chan);
+   FIT(a3f);
+   FIT(dmask);
+   FIT(rot);
+   FIT(path);
+   FIT(n);
+   FIT(imm);
+   FIT(rate);
+   FIT(wait);
+   FIT(target);
+   FIT(temps4);
+   FIT(cp[0]);
+   FIT(cp[1]);
+   FIT(a[0]);
+   FIT(a[1]);
+   FIT(f2_15);
+   FIT(x39);
+   FIT(a5);
+   FIT(coef);
+   FIT(shift);
+   FIT(a8);
+   FIT(hi);
+#undef FIT
+   static const char *const vn[] = {"the first value", "the second value",
+                                    "the third value", "the fourth value"};
+   for (unsigned k = 0; k < 4; k++) {
+      if (I->v[k] != J.v[k])
+         return vn[k];
+      if (I->am4[k] != J.am4[k])
+         return "am";
+   }
+   for (unsigned k = 0; k < 3; k++) {
+      if (I->lim[k] != J.lim[k])
+         return "lim";
+   }
+   if ((I->rpt ? I->rpt : 1) != (J.rpt ? J.rpt : 1))
+      return "rpt";
+   return NULL;
+}
+
+/*
+ * Format control isn't in the line, so a number has to fit under one of its
+ * four states.
+ */
+static bool
+check_fit(const struct sgx_isa_instr *I, char *err, size_t errsize)
+{
+   struct asm_ctx c = {err, errsize};
+   const char *what = misfit(I, NULL);
+
+   for (unsigned f = 0; what && f < 4; f++) {
+      struct sgx_isa_fc fc = {.f16 = f & 1, .c10 = f >> 1};
+      if (!misfit(I, &fc))
+         what = NULL;
+   }
+   return !what || fail(&c, "%s doesn't fit its field", what);
+}
+
+bool
+sgx_isa_asm_line(const char *line, struct sgx_isa_instr *I, char *err,
+                 size_t errsize)
+{
+   return parse_line(line, I, err, errsize) &&
+          check_flags(line, I, err, errsize) && check_fit(I, err, errsize);
 }

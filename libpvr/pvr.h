@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* Copyright © 2026 Joseph Telaak */
 /*
  * pvr: a minimal native client of the PVR services kernel driver.
  *

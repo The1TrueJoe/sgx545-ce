@@ -1,10 +1,23 @@
 # Mesa with the sgx driver for Debian 13 (trixie) users: built natively in a
 # trixie container (mesa/build.sh debian) for /opt/sgx, packed with the two files
-# that put it ahead of Debian's Mesa (mesa/debian/etc). docs/INSTALL.md.
+# that put it ahead of Debian's Mesa (mesa/debian/package.sh, etc.<arch>), for
+# amd64 and for i386 (32-bit games; Multi-Arch: same, installed beside amd64's).
+# docs/INSTALL.md.
 name: mesa-debian
 
 on:
   workflow_dispatch:
+  # release.yml builds the release packages through this.
+  workflow_call:
+    inputs:
+      release_version:
+        description: the release's version without the v (0.1.0); empty for a git snapshot
+        type: string
+        default: ''
+    outputs:
+      artifact:
+        description: the name of the artifact holding the packages
+        value: mesa-sgx-trixie
   push:
     branches: [dev, main]
     paths:
@@ -46,57 +59,57 @@ jobs:
           SGX_MESA_BUILD=$PWD/build/mesa sh mesa/build.sh debian
 
       # Cedarview: the display is gma500 (PCI) and powervr_sgx sits on an
-      # auxiliary device of its function. The loader's pick of that render
-      # node, on fake sysfs trees, and the stub an X server's GLX loads.
-      - name: Render-node pick and the gma500 stub
+      # auxiliary device of its function, which libdrm doesn't describe. The
+      # loader's pick of that render node and its description of the device
+      # (fake sysfs trees, one the layout of a real D2500), and the stub an X
+      # server's GLX loads.
+      - name: Render-node pick, the Cedarview device and the gma500 stub
         run: |
           set -eux
           test -e build/mesa/debian/install/opt/sgx/lib/dri/gma500_dri.so
           meson configure build/mesa/debian/build -Dbuild-tests=true
-          ninja -C build/mesa/debian/build src/loader/loader_child_render_node_test
+          ninja -C build/mesa/debian/build src/loader/loader_child_render_node_test \
+            src/loader/loader_cedarview_sysfs_test
           build/mesa/debian/build/src/loader/loader_child_render_node_test
+          build/mesa/debian/build/src/loader/loader_cedarview_sysfs_test
+          # the driver's own tests (compiler gtest, ISA, PDS, csb), as the i386 job runs them
+          LC_ALL=C.UTF-8 meson test -C build/mesa/debian/build --suite sgx --print-errorlogs
 
-      - name: The firmware (the open microkernel, secure mode)
+      - name: The firmware (the open microkernel, secure mode, assembled through sgx-asm)
+        env:
+          RELEASE: ${{ inputs.release_version }}
         run: |
           set -eux
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          [ -z "$RELEASE" ] || v=v$RELEASE
           mkdir -p fw
+          # Shipped firmware is assembled through sgx-asm (built from sgx.xml), the
+          # clean-room path. Reuse the mesa tree the Build
+          # step unpacked (it carries our mesa/src overlays).
+          . mesa/VERSION
+          mesa/tests/isa-standalone/standalone.sh "$PWD/build/mesa/mesa-$MESA_VERSION" "$PWD/isa-build"
+          export SGX_ASM="$PWD/isa-build/sgx-asm"
           python3 ukernel/build.py fw/uk.bin fw/uk.json
+          grep -q '"assembler": "sgx-asm"' fw/uk.json   # the shipped image must come from sgx.xml
           python3 drm/tools/mkukfw.py fw/uk.bin -o sgx545_ukernel.bin --manifest fw/uk.json \
             --core-rev 0 --build-id "ukernel-$v"
           python3 drm/tools/mkukfw.py --check sgx545_ukernel.bin | tee fw/check.txt
-          grep -q 'features 0x2' fw/check.txt
+          # features word <= the in-tree driver's accepted mask (not a hardcoded
+          # literal): the firmware and the kernel in this release move together.
+          python3 drm/tools/ukfw_features_pin.py --image sgx545_ukernel.bin
 
       - name: Packages (.deb)
+        env:
+          RELEASE: ${{ inputs.release_version }}
         run: |
           set -eux
           v=$(git -c safe.directory='*' rev-parse --short HEAD)
           d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
           mv=$(. mesa/VERSION; echo "$MESA_VERSION")
+          # A release names its packages by the release; a snapshot by date and commit.
+          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE fver=$RELEASE; else mver=$mv+sgx$d.$v fver=0~git$d.$v; fi
           # mesa-sgx: /opt/sgx and the two files that put it ahead of Debian's Mesa
-          P=$PWD/deb/mesa-sgx
-          mkdir -p $P/DEBIAN
-          cp -a build/mesa/debian/install/opt $P/
-          cp -a mesa/debian/etc $P/
-          rm -rf $P/opt/sgx/include $P/opt/sgx/lib/pkgconfig
-          cat > $P/DEBIAN/control <<CTL
-          Package: mesa-sgx
-          Version: $mv+sgx$d.$v
-          Architecture: amd64
-          Maintainer: Joseph Telaak <joseph@telaak.dev>
-          Depends: libc6, libllvm19, libelf1t64, libdrm2, libglvnd0, libgl1, libegl1, libgles2, libx11-6, libx11-xcb1, libxcb1, libxcb-dri3-0, libxcb-present0, libxcb-sync1, libxcb-xfixes0, libxcb-randr0, libxshmfence1, libxxf86vm1, libwayland-client0, libwayland-server0, libexpat1, zlib1g, libzstd1
-          Section: libs
-          Priority: optional
-          Description: Mesa with the sgx driver for the PowerVR SGX545
-           OpenGL, OpenGL ES, EGL and GBM for the PowerVR SGX545 of Intel's
-           Cedarview and CE5300 SoCs, under the powervr_sgx kernel driver.
-           Installed in /opt/sgx and used ahead of Debian's Mesa.
-          CTL
-          sed -i 's/^          //' $P/DEBIAN/control
-          printf '#!/bin/sh\nset -e\nldconfig\n' > $P/DEBIAN/postinst
-          printf '#!/bin/sh\nset -e\nldconfig\n' > $P/DEBIAN/postrm
-          chmod 755 $P/DEBIAN/postinst $P/DEBIAN/postrm
-          dpkg-deb --root-owner-group --build $P mesa-sgx_${mv}+sgx${d}.${v}_amd64.deb
+          sh mesa/debian/package.sh build/mesa/debian/install amd64 "$mver"
 
           # sgx545-firmware: the open microkernel
           F=$PWD/deb/fw
@@ -104,7 +117,7 @@ jobs:
           cp sgx545_ukernel.bin $F/lib/firmware/powervr_sgx/
           cat > $F/DEBIAN/control <<CTL
           Package: sgx545-firmware
-          Version: 0~git$d.$v
+          Version: $fver
           Architecture: all
           Maintainer: Joseph Telaak <joseph@telaak.dev>
           Section: kernel
@@ -117,10 +130,150 @@ jobs:
           printf '#!/bin/sh\nset -e\nif command -v update-initramfs >/dev/null; then update-initramfs -u; fi\n' > $F/DEBIAN/postinst
           cp $F/DEBIAN/postinst $F/DEBIAN/postrm
           chmod 755 $F/DEBIAN/postinst $F/DEBIAN/postrm
-          dpkg-deb --root-owner-group --build $F sgx545-firmware_0~git${d}.${v}_all.deb
+          dpkg-deb --root-owner-group --build $F sgx545-firmware_${fver}_all.deb
 
           for f in *.deb; do dpkg-deb -I $f | head -12; dpkg-deb -c $f | head -8; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-sgx-amd64
+          path: '*.deb'
+          retention-days: 7
+
+  # i386, the way Mesa's debian-x86_32 CI builds it: a cross build in an amd64
+  # trixie container (crossbuild-essential-i386, the :i386 multiarch libraries,
+  # a meson env2mfile cross file, llvm-config from llvm-19:i386), -Dwerror=true,
+  # and the sgx tests run on the runner (i386 binaries run on its x86_64 kernel).
+  # It packs mesa-sgx:i386 for 32-bit programs (games, their steam-runtime),
+  # libdir lib/i386-linux-gnu.
+  mesa-i386:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 120
+    steps:
+      - name: Build dependencies (amd64 tools, i386 libraries)
+        run: |
+          set -eux
+          a=i386
+          dpkg --add-architecture $a
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git perl patch xz-utils file python3 python3-mako python3-yaml python3-packaging \
+            meson ninja-build bison flex glslang-tools dpkg-dev crossbuild-essential-$a pkgconf:$a \
+            libdrm-dev:$a libglvnd-dev:$a libx11-dev:$a libxext-dev:$a libxfixes-dev:$a libxdamage-dev:$a \
+            libxrandr-dev:$a libxxf86vm-dev:$a libxshmfence-dev:$a libx11-xcb-dev:$a libxcb1-dev:$a \
+            libxcb-dri2-0-dev:$a libxcb-dri3-dev:$a libxcb-present-dev:$a libxcb-sync-dev:$a libxcb-glx0-dev:$a \
+            libxcb-randr0-dev:$a libxcb-xfixes0-dev:$a libxcb-shm0-dev:$a libxcb-keysyms1-dev:$a \
+            libwayland-dev:$a libwayland-egl-backend-dev:$a wayland-protocols libexpat1-dev:$a zlib1g-dev:$a \
+            libzstd-dev:$a libudev-dev:$a libelf-dev:$a libstdc++6:$a libgcc-s1:$a \
+            llvm-19:$a libclang-cpp19:$a libtinfo-dev:$a libz3-dev:$a
+          # llvm-19-{dev,tools}:i386 conflict with python3:amd64; as Mesa's CI does,
+          # install them past that with dpkg (last: apt refuses work after it)
+          cd /tmp
+          apt-get download llvm-19-dev:$a llvm-19-tools:$a
+          dpkg -i --force-depends llvm-19-*_$a.deb
+          file -L /usr/bin/llvm-config-19 | grep -q 'ELF 32-bit'
+
+      - uses: actions/checkout@v4
+
+      - name: Cross file
+        run: |
+          set -eux
+          meson env2mfile --cross --debarch i386 -o cross-i386.txt
+          sed -i -e '/\[properties\]/a\' -e 'needs_exe_wrapper = false' cross-i386.txt
+          sed -i -e '/\[binaries\]/a\' -e "llvm-config = '/usr/bin/llvm-config-19'" cross-i386.txt
+          cat cross-i386.txt
+
+      # -k 0: every warning-as-error in one run, not only the first. Mesa's
+      # x86_32 CI builds debug; this is the release build we ship, where gcc 14 at
+      # -O3 flags upstream NIR (nir_opt_copy_prop_vars.c, a stringop-overflow false
+      # positive), so that one stays a warning. ld's RWX-segment note is silenced
+      # as Mesa's x86_32 CI does.
+      - name: Build (i386, -Dwerror=true)
+        run: |
+          set -eux
+          SGX_MESA_BUILD=$PWD/build/mesa SGX_MESA_LIBDIR=lib/i386-linux-gnu SGX_NINJA_ARGS="-k 0" \
+          SGX_MESA_MESON_ARGS="--cross-file=$PWD/cross-i386.txt -Dwerror=true -Dbuild-tests=true -Dc_args=-Wno-error=stringop-overflow -Dcpp_args=-Wno-error=deprecated-declarations -Dc_link_args=-Wl,--no-warn-rwx-segments -Dcpp_link_args=-Wl,--no-warn-rwx-segments" \
+            sh mesa/build.sh debian 2>&1 | tee build-i386.log
+          file -L build/mesa/debian/install/opt/sgx/lib/i386-linux-gnu/libgallium-*.so | grep 'ELF 32-bit'
+
+      - name: Tests (i386)
+        run: |
+          set -eux
+          B=build/mesa/debian/build
+          LC_ALL=C.UTF-8 meson test -C $B --suite sgx --print-errorlogs
+          ninja -C $B src/loader/loader_child_render_node_test src/loader/loader_cedarview_sysfs_test
+          $B/src/loader/loader_child_render_node_test
+          $B/src/loader/loader_cedarview_sysfs_test
+
+      - name: Pack (i386)
+        env:
+          RELEASE: ${{ inputs.release_version }}
+        run: |
+          set -eux
+          v=$(git -c safe.directory='*' rev-parse --short HEAD)
+          d=$(git -c safe.directory='*' log -1 --format=%cd --date=format:%Y%m%d)
+          mv=$(. mesa/VERSION; echo "$MESA_VERSION")
+          if [ -n "$RELEASE" ]; then mver=$mv+sgx$RELEASE; else mver=$mv+sgx$d.$v; fi
+          sh mesa/debian/package.sh build/mesa/debian/install i386 "$mver"
+          dpkg-deb -I mesa-sgx_*_i386.deb | head -12
+          dpkg-deb -c mesa-sgx_*_i386.deb | head -12
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mesa-i386-build-log
+          path: build-i386.log
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-sgx-i386
+          path: '*.deb'
+          retention-days: 7
+
+  # Both architectures in one trixie system, as a user installs them for a
+  # 32-bit game, then the checksums and the artifact release.yml takes.
+  packages:
+    needs: [mesa, mesa-i386]
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-sgx-amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-sgx-i386
+
+      - name: Install amd64 and i386 together
+        run: |
+          set -eux
+          ls -l
+          dpkg --add-architecture i386
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ./mesa-sgx_*_amd64.deb ./mesa-sgx_*_i386.deb
+          dpkg -l 'mesa-sgx*' | grep '^ii'
+          [ "$(dpkg -l 'mesa-sgx*' | grep -c '^ii')" = 2 ]
+          # each architecture's driver, and ld.so finding ours ahead of the system's
+          test -e /opt/sgx/lib/dri/gma500_dri.so
+          test -e /opt/sgx/lib/i386-linux-gnu/dri/gma500_dri.so
+          ldconfig -p | grep 'libEGL_mesa.so.0 (libc6,x86-64) => /opt/sgx/lib/libEGL_mesa'
+          ldconfig -p | grep 'libEGL_mesa.so.0 (libc6) => /opt/sgx/lib/i386-linux-gnu/libEGL_mesa'
+          # removing one leaves the other whole, the shared /opt/sgx/share too
+          find /opt/sgx/share -type f | sort > share.txt
+          [ -s share.txt ]
+          apt-get remove -y mesa-sgx:i386
+          test -e /opt/sgx/lib/dri/gma500_dri.so
+          find /opt/sgx/share -type f | sort | diff share.txt -
+          rm share.txt
+
+      - name: Checksums
+        run: |
+          set -eux
           sha256sum *.deb > SHA256SUMS
+          cat SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:

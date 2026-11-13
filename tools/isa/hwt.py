@@ -2,7 +2,7 @@
 
     python3 hwt.py <suite module> [-k substring] [--dry]
 
-Each test is a main pixel program (asm.py syntax) whose result is the raw 32-bit
+Each test is a main pixel program (USSE text, assembled by sgx-asm through asm.py) whose result is the raw 32-bit
 word it moves to o0: the PBE writes o0 unchanged into the BGRA8888 back buffer,
 so a pixel inside the triangle *is* the register (byte 0 = B ... byte 3 = A).
 A suite module defines TESTS = [(name, [insn, ...], expect), ...]; expect is an
@@ -21,17 +21,14 @@ Environment: CAP (dir with ref.bin), REPLAY (static replay binary), CE5300 board
 import argparse
 import importlib
 import os
+import re
 import shutil
 import struct
 import subprocess
 import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
-# tools/isa/dis.py shadows the stdlib `dis` that dataclasses (pvrlog) needs: import that first
-sys.path = [p for p in sys.path if os.path.abspath(p or ".") != HERE]
-import dataclasses  # noqa: E402,F401
 sys.path.insert(0, HERE)
 import asm  # noqa: E402
-import hw  # noqa: E402
 
 PROG = 0x37008388           # main pixel program, after its phas.i header
 DOUTU0 = 0x2e018020         # main program's DOUTU word 0 in the PDS data
@@ -65,19 +62,33 @@ def base(work):
     return s.replace("\nsync\n", "\n{POKES}\nsync\n"), os.path.join(out, "data")
 
 
+def _setfc(text, fc):
+    """format control after `text` (sgx-asm's -F: bit 0 C10, bit 1 F16)"""
+    m = re.match(r"\s*setfc #(\d+), #(\d+)", text)
+    return (int(m.group(2)) & 1) | (int(m.group(1)) & 1) << 1 if m else fc
+
+
 def program(lines):
     """assemble, tracking format control (setfc) the way the hardware does; it starts
     with the colour C10 select on (hwt_p6)"""
-    hw.CTX["fc"] = 2
-    words = []
+    fc, words, run = 1, [], []
+
+    def flush():
+        nonlocal fc
+        for t, (lo, hi) in zip(run, asm.assemble_lines(run, fc=fc)):
+            words.extend((lo, hi))
+            fc = _setfc(t, fc)
+        run.clear()
+
     for t in lines:
         if t.startswith("raw "):            # "raw <hi> <lo>": a word the assembler (rightly) refuses
+            flush()
             hi, lo = (int(x, 16) for x in t.split()[1:3])
+            words += [lo, hi]
+            fc = _setfc(asm.disasm([(lo, hi)], fc=fc)[0], fc)
         else:
-            hi, lo = asm.assemble(t)
-        hw.track(hw.decode(lo, hi))
-        words += [lo, hi]
-    hw.CTX["fc"] = 2
+            run.append(t)
+    flush()
     return words
 
 

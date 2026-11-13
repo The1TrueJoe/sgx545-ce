@@ -1,12 +1,35 @@
-# sgx545-ce
+# powervr_sgx
 
-> **Working on this repo?** Read [AGENTS.md](AGENTS.md) first: the end goal (upstream Linux, Mesa and
-> linux-firmware support for Cedarview), the standards the work must meet, and the milestones.
+> **Status:** this is an out-of-tree driver, maintained for the people who use it on Cedarview
+> and CE5300 hardware. It was written with heavy use of an AI coding assistant. An RFC for the
+> kernel driver and a draft merge request for the Mesa driver were posted in November 2026; Mesa
+> declined the driver over its AI-generated code and provenance, so I withdrew both, and the
+> driver is not headed upstream. Material derived from the vendor's closed drivers has been
+> removed from the tree.
 
-An open graphics driver stack for the PowerVR **SGX545** GPU: the GPU in Intel's Cedarview
-Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the Intel Atom CE5300/CE5310.
-Every part runs from code in this repository. No Intel or Imagination binary is needed, in
-the kernel, the firmware or userspace.
+An open graphics driver stack for the PowerVR **SGX** GPUs. It supports the **SGX545**: the
+GPU in Intel's Cedarview Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the
+Intel Atom CE5300/CE5310. Every part runs from code in this repository. No Intel or
+Imagination binary is needed, in the kernel, the firmware or userspace.
+
+## GPUs
+
+One kernel driver, one Mesa driver and one microkernel source are meant to cover the whole
+SGX family: a new core is added as data in each of them, not as a copy of the code.
+
+| Core | ISA | Example hardware | Status |
+|---|---|---|---|
+| SGX545 | USSE | Intel Cedarview (Atom N2600, N2800, D2500, D2550, D2700); Intel Atom CE5300/CE5310 | **Supported** |
+| SGX530 | USSE | TI OMAP3 (OMAP3430, OMAP3630, DM3730), TI AM335x and AM3517 | **In bring-up** on an OMAP3630 board: the kernel driver finds and powers the core and reads its ID; the microkernel does not start yet |
+| SGX535 | USSE | Intel Poulsbo (GMA 500, Atom Z5xx) | Wanted |
+| SGX540 | USSE | TI OMAP4430/4460, Ingenic JZ4780 | Wanted |
+| SGX544 | USSE2 | TI OMAP4470, OMAP5 and AM57xx, Allwinner A31 and A83T | Wanted; needs USSE2 support in the compiler and assembler |
+| SGX543, SGX554 | USSE2 | Mostly phones and tablets | Wanted, as SGX544 |
+
+The cores marked USSE share an instruction set with the SGX545, so most of a port is that
+core's facts and its platform glue. USSE2 is a different instruction set and a larger
+project. If you have one of these and want to help, see [Contributing](#contributing) and
+the porting guide, [docs/porting/](docs/porting/README.md).
 
 | Part | Where | What it is |
 |---|---|---|
@@ -18,9 +41,8 @@ the kernel, the firmware or userspace.
 | Tools | [`tools/`](tools/) | The ISA assembler and disassembler, the offline microkernel emulator, decoders, frame and blit generators, and hardware tests. |
 | Documentation | [`docs/`](docs/) | The hardware as we understand it ([ISA](docs/ISA.md), [state](docs/STATE.md), [microkernel](docs/UKERNEL.md), [uAPI](docs/UAPI.md)), and the [build log](docs/log/BUILDLOG.md). |
 
-`kernel/`, `srvinit/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver
-(`pvrsrvkm`) ported to modern Linux, with our own bring-up and client library. They stay for
-comparisons against the DDK; the new stack does not use them.
+`kernel/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver (`pvrsrvkm`)
+ported to modern Linux, and our own client library. The new stack does not use them.
 
 ## Status
 
@@ -35,16 +57,17 @@ Tested on two CE5300 boards and, by testers, on Cedarview computers.
 - **Cedarview:** the microkernel starts and draws frames on Cedarview's SGX545 (revision
   1.0.13). Some Cedarview panels stay dark with `gma500`; the test stick records why.
 - **Known issues:** see [docs/MAIN-MERGE.md](docs/MAIN-MERGE.md#known-issues-to-state-with-the-merge).
-  The largest is the parameter-buffer out-of-memory path, which is still in progress; a 16 MiB
-  buffer keeps real workloads clear of it.
+  The parameter-buffer out-of-memory handler, listed there as in progress, is now done and
+  confirmed on the hardware.
 
 The [build log](docs/log/BUILDLOG.md) tells the story so far.
 
 ## Installing
 
 [docs/INSTALL.md](docs/INSTALL.md) installs the packages on Debian 13 and removes them again.
-Debian's own kernel and Mesa stay installed. The packages come from CI runs; there are no
-releases yet.
+Debian's own kernel and Mesa stay installed. The packages come from our apt repository at
+`https://telaak.dev/powervr_sgx`, or as `.deb` files from the
+[releases](https://github.com/The1TrueJoe/powervr_sgx/releases) (the first is v0.1.0).
 
 ## Testing on a Cedarview computer
 
@@ -56,4 +79,10 @@ write it, boot it, attach the results file to the issue.
 - `drm/` (the `powervr_sgx` kernel driver): GPL-2.0-only; its uAPI header is
   GPL-2.0-only WITH Linux-syscall-note, or MIT.
 - `kernel/src/`: GPL-2.0, Imagination Technologies, as published by Intel.
+- `libpvr/`: GPL-2.0-only (built against and generated from `kernel/src`'s headers).
 - Everything else here (the microkernel, the Mesa driver, the tools, the test sticks): MIT.
+
+## Contributing
+
+Contributions are welcome, including support for other PowerVR SGX cores. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/porting/](docs/porting/README.md).

@@ -3,16 +3,21 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdio.h>
+#include <string.h>
 #include <time.h>
 
+#include "util/os_misc.h"
 #include "util/os_time.h"
 #include "util/u_debug.h"
 #include "util/u_debug_cb.h"
+#include "util/format/u_format.h"
 #include "util/u_framebuffer.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 
+#include "util/u_atomic.h"
 #include "sgx_context.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
@@ -60,6 +65,32 @@ sgx_recording(struct sgx_context *ctx)
    return ctx->recording;
 }
 
+/* SGX_DEBUG=zlsdump: the ZLS buffer the render just flushed stored into,
+ * once it is done, as it lies in memory (5 bytes per padded pixel and
+ * sample: the depths, then the stencils).  Called with the lock held. */
+static void
+dump_zls(struct sgx_context *ctx)
+{
+   static unsigned n;
+   struct sgx_resource *zs = ctx->recording_zs;
+   char name[128];
+   FILE *f;
+
+   if (!zs || !sgxws_bo_valid(&zs->zls) || !zs->zls.map)
+      return;
+   sgxws_wait_idle(ctx->hw, 2000);
+   snprintf(name, sizeof(name), "/tmp/sgx-zls-%03u-%ux%u-%s-s%u.bin", n++,
+            zs->zls_w, zs->zls_h, util_format_short_name(zs->base.format),
+            MAX2(zs->base.nr_samples, 1));
+   f = fopen(name, "wb");
+   if (!f)
+      return;
+   fwrite(zs->zls.map, 1, zs->zls_bytes, f);
+   fclose(f);
+   fprintf(stderr, "sgx: ZLS buffer (%u bytes) written to %s\n", zs->zls_bytes,
+           name);
+}
+
 void
 sgx_flush_frame(struct sgx_context *ctx)
 {
@@ -76,6 +107,8 @@ sgx_flush_frame(struct sgx_context *ctx)
     * overlapped) */
    e = sgxws_flush(ctx->hw, (sgx_drv_debug & SGX_DEBUG_SERIAL) ? 2000 : 0);
    sgx_check_reset(ctx);
+   if (sgx_drv_debug & SGX_DEBUG_ZLS_DUMP)
+      dump_zls(ctx);
    simple_mtx_unlock(&screen->lock);
    if (ctx->stats.on) {
       ctx->stats.flush_ns += os_time_get_nano() - t;
@@ -128,12 +161,13 @@ sgx_stats_report(struct sgx_context *ctx)
       ws.ns_sync_wait * ms);
    fprintf(
       stderr,
-      "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u, "
-      "readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
+      "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u "
+      "(%u of clears only), readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to done, renders a wait saw end) %.1f ms over %u, into scanout %.1f ms over %u\n",
       ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch,
-      ctx->stats.fl_read, ctx->stats.fl_deferred, ctx->stats.zc_draws,
-      ctx->stats.vc_hits, ctx->stats.vc_misses, ctx->stats.vc_uncacheable,
-      (unsigned)(ctx->vcache_bytes >> 10), ws.ns_fence_wait * ms,
+      ctx->stats.fl_switch_clear, ctx->stats.fl_read, ctx->stats.fl_deferred,
+      ctx->stats.zc_draws, ctx->stats.vc_hits, ctx->stats.vc_misses,
+      ctx->stats.vc_uncacheable, (unsigned)(ctx->vcache_bytes >> 10),
+      ws.ns_fence_wait * ms,
       ws.n_latency ? ws.ns_latency * ms / ws.n_latency : 0, ws.n_latency,
       ws.n_latency_scanout ? ws.ns_latency_scanout * ms / ws.n_latency_scanout
                            : 0,
@@ -146,17 +180,21 @@ sgx_stats_report(struct sgx_context *ctx)
       ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
    fprintf(
       stderr,
-      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame)\n",
+      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped; "
+      "buffers %u allocated, %u from the cache (%u cached still in use)\n",
       (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
       ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
-      ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0);
+      ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0,
+      ws.state_sent, ws.state_skipped, ws.bo_allocs, ws.bo_cached, ws.bo_busy);
    fprintf(
       stderr,
       "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
-      "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
+      "%u vertices, %u texture writes (spare copies %llu KiB); ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
       dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes,
       ctx->stats.tex_flushes, ws.room_flushes, ctx->stats.draws,
-      ctx->stats.verts, ctx->stats.tex_writes, ctx->stats.draw_ns * ms,
+      ctx->stats.verts, ctx->stats.tex_writes,
+      (unsigned long long)(p_atomic_read(&sgx_screen(ctx->base.screen)->spare_bytes) >> 10),
+      ctx->stats.draw_ns * ms,
       ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
       ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));
@@ -231,18 +269,26 @@ sgx_context_destroy(struct pipe_context *pctx)
    util_unreference_framebuffer_state(&ctx->framebuffer);
    for (unsigned i = 0; i < ctx->num_vertex_buffers; i++)
       pipe_vertex_buffer_unreference(&ctx->vertex_buffers[i]);
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       pipe_resource_reference(&ctx->constants[i].buffer, NULL);
+      for (unsigned n = 0; n < SGX_MAX_UBOS; n++)
+         pipe_resource_reference(&ctx->ubos[i][n].buffer, NULL);
+   }
    for (unsigned i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++)
       pipe_sampler_view_reference(&ctx->views[i], NULL);
    if (pctx->stream_uploader)
       u_upload_destroy(pctx->stream_uploader);
 
+   pipe_resource_reference(&ctx->dummy_cb, NULL);
    simple_mtx_lock(&screen->lock);
    if (ctx->hw) {
       for (unsigned i = 0; i < ctx->num_rts; i++)
          sgxws_rt_destroy(ctx->hw,
                           ctx->rts[i]); /* flushes this context's frame */
+      if (sgxws_bo_valid(&ctx->ms_zls)) {
+         sgxws_wait_idle(ctx->hw, 2000);
+         sgxws_bo_free(screen->dev, &ctx->ms_zls);
+      }
    }
    simple_mtx_unlock(&screen->lock);
 
@@ -320,8 +366,19 @@ sgx_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
       return NULL;
 
    simple_mtx_lock(&screen->lock);
-   if (!screen->hw)
-      screen->hw = sgxws_ctx_create(screen->dev);
+   if (!screen->hw) {
+      /* the screen's one hardware context takes its first context's priority;
+       * SGX_CTX_PRIORITY=high|normal|low overrides it (an X server that
+       * doesn't ask) */
+      const char *env = os_get_option("SGX_CTX_PRIORITY");
+      int prio = flags & PIPE_CONTEXT_HIGH_PRIORITY  ? 1
+                 : flags & PIPE_CONTEXT_LOW_PRIORITY ? -1
+                                                     : 0;
+
+      if (env)
+         prio = !strcmp(env, "high") ? 1 : !strcmp(env, "low") ? -1 : 0;
+      screen->hw = sgxws_ctx_create(screen->dev, prio);
+   }
    ctx->hw = screen->hw;
    if (ctx->hw) {
       sgxws_prog_builtin(ctx->hw, SGXWS_VS_XY, &ctx->vs_xy);

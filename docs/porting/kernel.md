@@ -245,7 +245,9 @@ Traps:
 - An importer may `dma_buf_mmap()` a dumb buffer that was never `MAP_DUMB`ed; the exporter
   must create the mmap offset at export (gma500 0002).
 - A sysfb display (simpledrm, efidrm) copies damage in DIRTYFB with a blocking commit that
-  waits for the render; X's main thread stalled behind deep render queues
+  waits for the render; X's main thread stalled behind deep render queues. Upstream keeps
+  DIRTYFB blocking on purpose (it is the compositor's feedback path) and wants X fixed, so
+  the change that defers the copy is a local patch for test kernels only
   ([drm/sysfb/0001](../../drm/sysfb/0001-drm-sysfb-Copy-damage-outside-the-DIRTYFB-ioctl.patch)).
 
 ## What a new core's entry needs before it is accepted

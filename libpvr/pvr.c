@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* Copyright © 2026 Joseph Telaak */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>

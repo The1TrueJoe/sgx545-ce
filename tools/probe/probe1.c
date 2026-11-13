@@ -12,6 +12,12 @@
  *   PROBE_POINTSIZE=s          glPointSize
  *   PROBE_LINEWIDTH=w          glLineWidth
  *   PROBE_SPRITE=1             glEnable(POINT_SPRITE_OES), COORD_REPLACE on unit 0
+ *   PROBE_CLIPPLANE="a b c d ..."  glClipPlanef + glEnable(CLIP_PLANE0 + i), one plane per 4 floats (up to 6);
+ *                              eye space is clip space here (identity matrices)
+ *   PROBE_SHADEMODEL=e         glShadeModel (0x1D00 FLAT, 0x1D01 SMOOTH)
+ *   PROBE_LOGICOP=op           glEnable(COLOR_LOGIC_OP), glLogicOp (GL enum, 0x1500-0x150F)
+ *   PROBE_ENABLE="e ..."       glEnable of each enum (0x0B20 LINE_SMOOTH, 0x0B10 POINT_SMOOTH, ...)
+ *   PROBE_EXTS=1               print GL_VERSION, GL_RENDERER and GL_EXTENSIONS, then exit
  *   PROBE_OUT=path             raw RGBA readback of the whole surface
  * Marks each phase in the pvrtrace log through pvrtrace_note when the tracer is loaded.
  *   zig cc -target x86-linux-gnu.2.17 -O1 -o probe1 probe1.c -ldl
@@ -62,7 +68,11 @@ typedef unsigned char GLubyte, GLboolean;
 	X(GL, void, glViewport, (GLint, GLint, GLsizei, GLsizei)) \
 	X(GL, void, glFinish, (void)) \
 	X(GL, GLenum, glGetError, (void)) \
-	X(GL, void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *))
+	X(GL, void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *)) \
+	X(GL, void, glClipPlanef, (GLenum, const GLfloat *)) \
+	X(GL, void, glShadeModel, (GLenum)) \
+	X(GL, void, glLogicOp, (GLenum)) \
+	X(GL, const GLubyte *, glGetString, (GLenum))
 
 #define DECL(lib, ret, name, args) static ret(*name) args;
 FNS(DECL)
@@ -96,6 +106,11 @@ FNS(DECL)
 #define GL_NEAREST 0x2600
 #define GL_POINT_SPRITE_OES 0x8861
 #define GL_COORD_REPLACE_OES 0x8862
+#define GL_CLIP_PLANE0 0x3000
+#define GL_COLOR_LOGIC_OP 0x0BF2
+#define GL_RENDERER 0x1F01
+#define GL_VERSION 0x1F02
+#define GL_EXTENSIONS 0x1F03
 
 static void (*mark)(const char *);
 static void (*snapshot)(void);
@@ -156,7 +171,7 @@ int main(void)
 	EGLint cfg_attr[] = { EGL_RED_SIZE, 5, EGL_GREEN_SIZE, 6, EGL_BLUE_SIZE, 5, EGL_SURFACE_TYPE,
 			      EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES_BIT, EGL_NONE };
 	const EGLint ctx_attr[] = { EGL_CONTEXT_CLIENT_VERSION, 1, EGL_NONE };
-	static float verts[2 * 64], col[4 * 64], tc[2 * 64], f[4];
+	static float verts[2 * 64], col[4 * 64], tc[2 * 64], f[4], planes[4 * 6];
 	static unsigned char tex[8 * 8 * 4];
 	const char *out = getenv("PROBE_OUT");
 	GLenum prim = getenv("PROBE_PRIM") ? (GLenum)atoi(getenv("PROBE_PRIM")) : 4;
@@ -190,8 +205,32 @@ int main(void)
 	eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
 	eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
 	glViewport(0, 0, w, h);
+	if (getenv("PROBE_EXTS") && atoi(getenv("PROBE_EXTS"))) {
+		printf("probe1: GL_VERSION %s\nprobe1: GL_RENDERER %s\nprobe1: GL_EXTENSIONS %s\n",
+		       (const char *)glGetString(GL_VERSION), (const char *)glGetString(GL_RENDERER),
+		       (const char *)glGetString(GL_EXTENSIONS));
+		eglTerminate(dpy);
+		return 0;
+	}
 
 	note("state");
+	for (int i = 0, np = floats("PROBE_CLIPPLANE", planes, 4 * 6, "") / 4; i < np; i++) {
+		glClipPlanef(GL_CLIP_PLANE0 + (GLenum)i, planes + 4 * i);
+		glEnable(GL_CLIP_PLANE0 + (GLenum)i);
+	}
+	if (floats("PROBE_SHADEMODEL", f, 1, "") == 1)
+		glShadeModel((GLenum)f[0]);
+	if (getenv("PROBE_LOGICOP")) {
+		glEnable(GL_COLOR_LOGIC_OP);
+		glLogicOp((GLenum)strtol(getenv("PROBE_LOGICOP"), NULL, 0));
+	}
+	if (getenv("PROBE_ENABLE")) {
+		const char *s = getenv("PROBE_ENABLE");
+		char *e;
+
+		for (long x; (x = strtol(s, &e, 0)), e != s; s = e)
+			glEnable((GLenum)x);
+	}
 	if (floats("PROBE_ALPHATEST", f, 2, "") == 2) {
 		glEnable(GL_ALPHA_TEST);
 		glAlphaFunc((GLenum)f[0], f[1]);

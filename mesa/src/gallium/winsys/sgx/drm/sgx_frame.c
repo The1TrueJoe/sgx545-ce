@@ -6,11 +6,12 @@
 /*
  * sgxws: SGX545 frames from GL-level parameters.  See sgx_frame.h.
  *
- * Tags in the comments follow docs/STATE.md: [C] proven by a replay,
- * [D] from a diff of captures, [G] guess (the value the DDK uses, meaning
- * unknown).
+ * Tags in the comments follow docs/STATE.md: [C] hardware (a replay or
+ * this driver on the board), [D] capture (the command streams of another
+ * driver's frames), [G] guess (a value that works, its meaning unknown).
  */
 
+#include <assert.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -21,16 +22,18 @@
 
 #include <xf86drm.h>
 
+#include "util/log.h"
 #include "util/macros.h"
+#include "util/u_debug.h"
+#include "util/u_math.h"
 
 #include "sgx_csb.h"
 #include "sgx_frame.h"
 #include "sgx_pds.h"
-#include "sgx_usse_progs.h"
 
-/* Placement: every PDS program the DDK makes starts on 32 bytes, every USSE
- * program GL allocates on 128, every DMA source on 32 [G: what the hardware
- * needs is untested] */
+/* Placement: PDS programs on 64 bytes, USSE programs on 128, DMA sources on
+ * 32 [D: captured PDS programs start on 32; G: what the hardware needs is
+ * untested] */
 #define PDS_ALIGN  0x40
 #define USSE_ALIGN 0x80
 #define DMA_ALIGN  0x20
@@ -41,7 +44,6 @@
 #define H_PDSPIXEL  SGX_HEAP_PDSPIXEL
 #define H_PDSVERTEX SGX_HEAP_PDSVERTEX
 
-#define ws_err sgxws_err
 #define f32    sgxws_f32
 
 uint32_t
@@ -103,6 +105,33 @@ sgxws_bo_prepare_target(struct sgxws_dev *d, struct sgxws_bo *bo)
       d->kif->bo_prepare_target(d, bo);
 }
 
+bool
+sgxws_target_twiddled(const struct sgxws_target *t)
+{
+   return t->t1_layout == SGX_TEXSTATE_LAYOUT_TWIDDLED;
+}
+
+void
+sgxws_bo_cpu_written(struct sgxws_bo *bo)
+{
+   if (bo->impl)
+      bo->impl->cpu_dirty = true;
+}
+
+/* once a process: what the texture heap couldn't hold goes to the general
+ * heap */
+static void
+texture_heap_full(void)
+{
+   static bool said;
+
+   if (!said) {
+      said = true;
+      mesa_logw("sgx: the texture heap is full; sampled buffers go to the "
+                "general heap");
+   }
+}
+
 int
 sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
                uint32_t size, uint32_t align)
@@ -111,22 +140,29 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
 
    /* Whatever the texture unit samples lives in the texture heap: render
     * targets are sampled too (FBO textures, the back buffer a blit reads).
-    * Sampling from elsewhere hangs some SGX545 revisions (the sample cache
-    * erratum); the general heap only when the texture heap is full. */
+    * Sampling from elsewhere hangs some cores (the sample cache erratum,
+    * sgx_core.sample_texture_heap_only); the general heap only when the
+    * texture heap is full. */
    switch (mem) {
    case SGXWS_MEM_RENDER_TARGET:
-      e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
-                              size, align);
-      if (e)
+      e = d->core->sample_texture_heap_only
+             ? sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
+                                   size, align)
+             : -ENOMEM;
+      if (e) {
+         texture_heap_full();
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
                                  size, align);
+      }
       if (!e)
          sgxws_bo_prepare_target(d, bo);
       return e;
    case SGXWS_MEM_TEXTURE:
       e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, 0x3, size, align);
-      if (e)
+      if (e) {
+         texture_heap_full();
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x3, size, align);
+      }
       return e;
    case SGXWS_MEM_VERTEX:
       return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x1, size, align);
@@ -210,9 +246,13 @@ ring_mark(struct sgxws_ring *r)
 }
 
 /* record into slot k: what the frame there before wrote is done with */
+static void memo_reset(struct sgxws_pds_memo *m);
+
 static void
 ring_use_slot(struct sgxws_ring *r, unsigned k)
 {
+   if (r->memo)
+      memo_reset(r->memo);
    r->used = r->mark + k * r->part;
    r->hi = r->used + r->part;
 }
@@ -237,7 +277,7 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
    if (o + size > (r->hi ? r->hi : r->size)) {
       /* sgxws_draw keeps the frame rings from filling; this is a bug */
-      ws_err("ring at %#x full (%#x + %#x)\n", r->bo.va, o, size);
+      mesa_loge("sgx: ring at %#x full (%#x + %#x)", r->bo.va, o, size);
       abort();
    }
    r->used = o + size;
@@ -248,15 +288,119 @@ ring_alloc(struct sgxws_ring *r, uint32_t size, uint32_t align)
 
 /* ------------------------------------------------------------------ USSE */
 
+/* A USSE heap is cut into 512 KiB code base windows: a task runs from the
+ * window its DOUTU names, and its absolute targets (phas.i, ba) count from
+ * that window's start, not the heap's (ISA.md) */
+#define USSE_WINDOW_SHIFT 19
+#define USSE_WINDOW_MASK ((1u << USSE_WINDOW_SHIFT) - 1)
+
+static uint32_t
+usse_heap_off(const struct sgxws_ctx *c, uint32_t va, bool vertex)
+{
+   return va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
+}
+
+static bool
+code_chunk_init(struct sgxws_dev *d, struct sgxws_code_chunk *k,
+                enum sgx_heap heap, uint32_t size)
+{
+   /* aligned to its size: a chunk never straddles a 512K code base window */
+   uint32_t al = 1u << util_logbase2_ceil(size);
+
+   if (sgxws_bo_alloc_heap(d, &k->r.bo, heap, 0x1, size, al))
+      return false;
+   if ((k->r.bo.va - d->heap_base[heap]) >> USSE_WINDOW_SHIFT) {
+      static bool once;
+
+      if (!once)
+         mesa_logi("sgx: program code past the first 512 KiB window (%s heap)",
+                   heap == H_VTXSHADER ? "vertex" : "pixel");
+      once = true;
+   }
+   k->r.size = size;
+   /* nothing at a heap's first byte: a DOUTU word of 0 would name it */
+   k->r.used = 0x100;
+   return true;
+}
+
+/* empty a chunk no render runs code from any more */
+static void
+code_chunk_reset(struct sgxws_ctx *c, struct sgxws_code_chunk *k)
+{
+   if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &k->r.bo))
+      mesa_loge("sgx: code chunk reset failed");
+   memset(k->r.bo.map, 0, k->r.size);
+   k->r.used = 0x100;
+   k->r.uploaded = 0;
+}
+
+/* room for size bytes of code: the current chunk, an emptied one, a new one,
+ * or one waited for; NULL when the heap is full of live programs */
+static struct sgxws_code_chunk *
+code_room(struct sgxws_ctx *c, struct sgxws_code *code, uint32_t size)
+{
+   uint32_t need = size + USSE_ALIGN;
+   struct sgxws_code_chunk *k, **grown;
+
+   if (code->n) {
+      k = code->chunk[code->cur];
+      if (k->r.size - k->r.used >= need)
+         return k;
+   }
+   sgxws_done_seq(c);
+   for (int pass = 0; pass < 2; pass++) {
+      for (unsigned i = 0; i < code->n; i++) {
+         k = code->chunk[i];
+         if (k->live || k->r.size - 0x100 < need)
+            continue;
+         if (sgxws_seq_after(k->free_seq, c->done_seq)) {
+            /* the second pass waits, the heap being full, for a kick that
+             * was made (not the frame being recorded) */
+            if (!pass || k->free_seq == sgxws_next_seq(c) ||
+                sgxws_wait_seq(c, k->free_seq, 2000))
+               continue;
+         }
+         code_chunk_reset(c, k);
+         code->cur = i;
+         return k;
+      }
+      if (pass)
+         break;
+      k = calloc(1, sizeof(*k));
+      grown = realloc(code->chunk, (code->n + 1) * sizeof(*grown));
+      if (k && grown) {
+         code->chunk = grown;
+         if (code_chunk_init(c->dev, k, code->heap,
+                             MAX2(SGXWS_CODE_CHUNK, align(need, 0x1000)))) {
+            code->chunk[code->n] = k;
+            code->cur = code->n++;
+            return k;
+         }
+      } else if (grown) {
+         code->chunk = grown;
+      }
+      free(k);
+   }
+   return NULL;
+}
+
+/* a program's code, 0 when there is no room for it */
 uint32_t
 sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
                   unsigned n, const uint8_t *reloc, unsigned nreloc)
 {
-   struct sgxws_ring *r = vertex ? &c->usse_vtx : &c->usse_pix;
-   struct sgxws_ptr p = ring_alloc(r, n * 8, USSE_ALIGN);
-   uint32_t pc0 =
-      (p.va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER]) / 8;
+   struct sgxws_code_chunk *k = code_room(c, &c->usse[vertex], n * 8);
+   struct sgxws_ptr p;
+   uint32_t pc0;
 
+   if (!k) {
+      mesa_loge("sgx: %s program code is full", vertex ? "vertex" : "pixel");
+      return 0;
+   }
+   k->live++;
+   p = ring_alloc(&k->r, n * 8, USSE_ALIGN);
+   /* from the start of the program's code base window (doutu_w0) */
+   pc0 = (usse_heap_off(c, p.va, vertex) & USSE_WINDOW_MASK) / 8;
    memcpy(p.p, w, n * 8);
    /* phas.i targets are absolute, in instructions (ISA.md) */
    for (unsigned i = 0; i < nreloc; i++)
@@ -264,8 +408,41 @@ sgxws_usse_upload(struct sgxws_ctx *c, bool vertex, const uint32_t *w,
    return p.va;
 }
 
+void
+sgxws_code_free(struct sgxws_ctx *c, uint32_t va)
+{
+   if (!va)
+      return;
+   for (unsigned v = 0; v < 2; v++) {
+      struct sgxws_code *code = &c->usse[v];
+
+      for (unsigned i = 0; i < code->n; i++) {
+         struct sgxws_code_chunk *k = code->chunk[i];
+
+         if (va >= k->r.bo.va && va < k->r.bo.va + k->r.size) {
+            assert(k->live);
+            k->live--;
+            /* the frame being recorded may still draw with it */
+            k->free_seq = sgxws_next_seq(c);
+            return;
+         }
+      }
+   }
+   mesa_loge("sgx: freeing code at %#x that isn't a program", va);
+}
+
+static void
+code_fini(struct sgxws_ctx *c, struct sgxws_code *code)
+{
+   for (unsigned i = 0; i < code->n; i++) {
+      sgxws_bo_free(c->dev, &code->chunk[i]->r.bo);
+      free(code->chunk[i]);
+   }
+   free(code->chunk);
+}
+
 static uint32_t
-usse_load(struct sgxws_ctx *c, const struct usse_prog *pr, bool vertex)
+usse_load(struct sgxws_ctx *c, const struct sgx_fixed_prog *pr, bool vertex)
 {
    return sgxws_usse_upload(c, vertex, pr->w, pr->n, pr->reloc, pr->nreloc);
 }
@@ -276,11 +453,11 @@ usse_load(struct sgxws_ctx *c, const struct usse_prog *pr, bool vertex)
 static uint32_t
 doutu_w0(struct sgxws_ctx *c, uint32_t va, bool vertex, uint32_t temps)
 {
-   uint32_t off = va - c->dev->heap_base[vertex ? H_VTXSHADER : H_PIXSHADER];
+   uint32_t off = usse_heap_off(c, va, vertex);
 
    return sgx_pds_doutu_w0(&(struct sgx_pds_doutu){
-      .base = (off >> 19) + c->dev->usse_base_index[vertex],
-      .offset = off & 0x7ffff,
+      .base = (off >> USSE_WINDOW_SHIFT) + c->dev->usse_base_index[vertex],
+      .offset = off & USSE_WINDOW_MASK,
       .temps4 = (temps + 3) >> 2,
    });
 }
@@ -294,7 +471,7 @@ doutu_w1_pixel(bool iterations, bool samples)
                                                    .samples = samples});
 }
 
-/* LIMM rN, #v (STATE.md, from the DDK's end-of-tile generator) */
+/* LIMM rN, #v (ISA.md) */
 static void
 usse_limm(uint32_t *w, uint32_t v, uint32_t reg)
 {
@@ -310,6 +487,21 @@ struct pds {
    uint32_t code[64];
    unsigned nc;
 };
+
+#define SGXWS_PDS_MEMO 4
+struct sgxws_pds_memo {
+   struct {
+      struct pds p;
+      uint32_t va, rows;
+   } e[SGXWS_PDS_MEMO];
+   unsigned n, next;
+};
+
+static void
+memo_reset(struct sgxws_pds_memo *m)
+{
+   m->n = m->next = 0;
+}
 
 /* The instructions, through the PDS encoder (src/sgx/pds). */
 #define DOUTI SGX_PDS_DOUTI
@@ -329,8 +521,8 @@ enum {
 /* MOVS (DOUT): r1 = DS0 pair row, r2 = DS1 pair row; selects 0 s1.lo, 1 s1.hi,
  * 2 s2.lo, 3 s2.hi */
 static uint32_t
-pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
-         unsigned c, unsigned d, enum sgx_pds_dout dest)
+pds_movs_encode(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
+                unsigned c, unsigned d, enum sgx_pds_dout dest)
 {
    return sgx_pds_encode(&(struct sgx_pds_instr){
       .opc = SGX_PDS_OPC_MOVS,
@@ -342,6 +534,30 @@ pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
       .r2 = r2,
       .sel = {a, b, c, d},
    });
+}
+
+/* every draw's PDS programs are a few MOVS forms, so each thread keeps the
+ * words it encoded (the encoder walks the instruction description) */
+static uint32_t
+pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
+         unsigned c, unsigned d, enum sgx_pds_dout dest)
+{
+   static _Thread_local struct {
+      uint32_t key, word;
+   } cache[64];
+   uint32_t key;
+
+   if (form > 3 || r1 > 63 || r2 > 63 || (a | b | c | d) > 3 || dest > 15)
+      return pds_movs_encode(form, r1, r2, a, b, c, d, dest);
+   key = 1u << 31 | form << 24 | r1 << 18 | r2 << 12 | a << 10 | b << 8 |
+         c << 6 | d << 4 | dest;
+   unsigned h = (key ^ key >> 7 ^ key >> 13) & 63;
+
+   if (cache[h].key != key) {
+      cache[h].word = pds_movs_encode(form, r1, r2, a, b, c, d, dest);
+      cache[h].key = key;
+   }
+   return cache[h].word;
 }
 
 /* dst = src1 op src2: add, mul16, and, or, xor, op0xd.s1 */
@@ -416,7 +632,26 @@ static uint32_t
 pds_emit(struct sgxws_ring *r, const struct pds *p, uint32_t *rows_out)
 {
    uint32_t rows = ((p->n0 > p->n1 ? p->n0 : p->n1) + 1) / 2;
-   struct sgxws_ptr m = ring_alloc(r, rows * 16 + p->nc * 4, PDS_ALIGN);
+   struct sgxws_pds_memo *mm = r->memo;
+   struct sgxws_ptr m;
+
+   /* a program this slot already holds: its address again (draws that
+    * differ in their vertex data only share one TA state) */
+   if (mm) {
+      for (unsigned i = 0; i < mm->n; i++) {
+         const struct pds *q = &mm->e[i].p;
+
+         if (q->n0 == p->n0 && q->n1 == p->n1 && q->nc == p->nc &&
+             !memcmp(q->ds0, p->ds0, p->n0 * 4) &&
+             !memcmp(q->ds1, p->ds1, p->n1 * 4) &&
+             !memcmp(q->code, p->code, p->nc * 4)) {
+            if (rows_out)
+               *rows_out = mm->e[i].rows;
+            return mm->e[i].va;
+         }
+      }
+   }
+   m = ring_alloc(r, rows * 16 + p->nc * 4, PDS_ALIGN);
 
    for (uint32_t i = 0; i < rows; i++) {
       m.p[4 * i + 0] = p->ds0[2 * i];
@@ -427,6 +662,13 @@ pds_emit(struct sgxws_ring *r, const struct pds *p, uint32_t *rows_out)
    memcpy(m.p + 4 * rows, p->code, p->nc * 4);
    if (rows_out)
       *rows_out = rows;
+   if (mm) {
+      unsigned i = mm->n < SGXWS_PDS_MEMO ? mm->n++ : mm->next++ % SGXWS_PDS_MEMO;
+
+      mm->e[i].p = *p;
+      mm->e[i].va = m.va;
+      mm->e[i].rows = rows;
+   }
    return m.va;
 }
 
@@ -472,7 +714,7 @@ pds_sizeinfo(uint32_t units, uint32_t sec_dwords, uint32_t b25_28)
 }
 
 /*
- * pixel program (PDS.md "What the DDK generates"): DOUTU, then per iterated
+ * pixel program (PDS.md, program forms): DOUTU, then per iterated
  * input a DOUTI, and after a sampling DOUTI the DOUTT with the texture's four
  * words. A DOUTI takes its word from the high half of a DS1 pair (the first
  * shares DS1 pair 0 with the DOUTU) and a zero DS0 pair; a DOUTT takes T0, T1
@@ -481,7 +723,8 @@ pds_sizeinfo(uint32_t units, uint32_t sec_dwords, uint32_t b25_28)
 static uint32_t
 pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1,
           const struct sgx_pds_douti *douti, const uint8_t *douti_tex,
-          unsigned n_douti, const uint32_t (*tex)[4], uint32_t *rows)
+          const uint32_t *t3_clr, const uint32_t *t3_set, unsigned n_douti,
+          const uint32_t (*tex)[4], uint32_t *rows)
 {
    struct pds p = {0};
    unsigned d0 = 1, d1 = 1;
@@ -509,7 +752,7 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1,
          pds_d1(&p, 2 * a, t[0]);
          pds_d1(&p, 2 * a + 1, t[1]);
          pds_d0(&p, 2 * b, t[2]);
-         pds_d0(&p, 2 * b + 1, t[3]);
+         pds_d0(&p, 2 * b + 1, (t[3] & ~t3_clr[i]) | t3_set[i]);
          CODE(&p, pds_movs(MV, b, a, 2, 3, 0, 1, DOUTT));
       }
    }
@@ -517,7 +760,7 @@ pds_pixel(struct sgxws_ctx *c, uint32_t task_w0, uint32_t task_w1,
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
-/* secondary/state program (PDS.md "What the DDK generates"): an optional DOUTD
+/* secondary/state program (PDS.md, program forms): an optional DOUTD
  * of n dwords, then a task */
 static uint32_t
 pds_secondary(struct sgxws_ring *r, uint32_t src, uint32_t dma_ctrl,
@@ -555,23 +798,22 @@ dma_ctrl(uint32_t dwords, uint32_t reg, uint32_t kind, int secondary)
 
 /*
  * A secondary/state program for any amount of constants: one DOUTD per 16
- * dwords into consecutive secondary attributes, then the task.  The DDK
- * never DMAs more than 25 dwords at once, and every b22-23 it writes is
- * (dwords-1) & 3 (10/11/12/25 dwords: 1/2/3/0; 3-frame and uniform-array
- * captures), so the chunks carry that too [D for the values, G for the
+ * dwords into consecutive secondary attributes, then the task.  b22-23 of
+ * the DMA control word is (dwords-1) & 3 (10/11/12/25 dwords: 1/2/3/0), and
+ * no captured DMA moves more than 25 dwords [D for the values, G for the
  * meaning].
  */
-#define DMA_CHUNK 16
-
 static uint32_t
-pds_dma_task(struct sgxws_ring *r, uint32_t src, uint32_t dwords,
-             uint32_t task_w0, uint32_t task_w1, uint32_t *rows)
+pds_dma_task(struct sgxws_ctx *c, struct sgxws_ring *r, uint32_t src,
+             uint32_t dwords, uint32_t task_w0, uint32_t task_w1,
+             uint32_t *rows)
 {
+   const uint32_t chunk = c->dev->core->dma_chunk_dwords;
    struct pds p = {0};
    unsigned row = 0;
 
-   for (uint32_t off = 0; off < dwords; off += DMA_CHUNK, row++) {
-      uint32_t n = dwords - off < DMA_CHUNK ? dwords - off : DMA_CHUNK;
+   for (uint32_t off = 0; off < dwords; off += chunk, row++) {
+      uint32_t n = dwords - off < chunk ? dwords - off : chunk;
 
       pds_d0(&p, 2 * row, src + off * 4);
       pds_d0(&p, 2 * row + 1, dma_ctrl(n, off, (n - 1) & 3, 1));
@@ -599,20 +841,35 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
       opts = &none;
    if (v && !strcmp(v->name, "powervr_sgx"))
       e = sgxws_powervr_sgx_dev_create(fd, opts, &d);
-#ifdef SGX_PVRSRVKM
-   else if (v && !strcmp(v->name, "pvrsrvkm"))
-      e = sgxws_pvr_dev_create(fd, opts, &d);
-#endif
    if (e)
-      ws_err("no SGX545 kernel driver on fd %d (%s): %d\n", fd,
-             v ? v->name : "?", e);
+      mesa_loge("sgx: no SGX kernel driver on fd %d (%s): %d", fd,
+                v ? v->name : "?", e);
    drmFreeVersion(v);
    if (e)
       return NULL;
+   /* a core this winsys has a description of (sgx_core.h), or none */
+   d->core = sgx_core_lookup(d->info.core_id, d->info.core_revision);
+   if (!d->core) {
+      mesa_loge(
+         "sgx: SGX core id %#x revision %#x has no description (sgx_core.c)",
+         d->info.core_id, d->info.core_revision);
+      d->kif->dev_destroy(d);
+      return NULL;
+   }
+   /* render-target limits the kernel didn't report: the core's */
+   if (!d->info.rt_max_width) {
+      d->info.rt_max_width = d->core->rt_max_width;
+      d->info.rt_max_height = d->core->rt_max_height;
+      d->info.rt_max_samples = d->core->rt_max_samples;
+   }
    d->verbose = opts->verbose;
    d->flush_rt = opts->flush_rt;
    d->frame_gap_us = opts->frame_gap_us;
-   d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 3;
+   d->state_always = opts->state_always;
+   /* four: the next frame records while this one renders (a game's frame is
+    * three renders); docs/PERF.md */
+   d->slots = opts->slots ? CLAMP(opts->slots, 2, SGXWS_MAX_SLOTS) : 4;
+   d->ta_split = d->kif->kick_ta ? opts->ta_split : 0;
    d->dry_run = opts->dry_run;
 
    drmDevicePtr dev = NULL;
@@ -647,18 +904,23 @@ static uint32_t clear_pds_masked(struct sgxws_ctx *c, unsigned wmask);
 static void
 ctx_free(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rings[] = {&c->usse_pix,    &c->usse_vtx,   &c->pds_pix,
-                                 &c->pds_vtx,     &c->gen,        &c->vdm,
-                                 &c->eot_pool[0], &c->eot_pool[1]};
+   struct sgxws_ring *rings[] = {&c->pds_pix, &c->pds_vtx,     &c->gen,
+                                 &c->vdm,     &c->eot_pool[0], &c->eot_pool[1]};
 
    for (unsigned i = 0; i < sizeof(rings) / sizeof(rings[0]); i++)
       sgxws_bo_free(c->dev, &rings[i]->bo);
+   code_fini(c, &c->usse[0]);
+   code_fini(c, &c->usse[1]);
+   for (unsigned v = 0; v < 2; v++)
+      sgxws_bo_free(c->dev, &c->code_hold[v]);
+   free(c->pds_pix.memo);
+   free(c->last_u);
    c->dev->kif->ctx_fini(c);
    free(c);
 }
 
 struct sgxws_ctx *
-sgxws_ctx_create(struct sgxws_dev *d)
+sgxws_ctx_create(struct sgxws_dev *d, int priority)
 {
    struct sgxws_ctx *c = calloc(1, sizeof(*c));
    uint32_t rows;
@@ -668,19 +930,18 @@ sgxws_ctx_create(struct sgxws_dev *d)
    if (!c)
       return NULL;
    c->dev = d;
+   c->priority = priority;
    c->slots = d->slots;
    /* the kernel side first: under services, the kernel-data and sync
-    * allocations keep the DDK's order */
+    * allocations come before the rings */
    if (d->kif->ctx_init(c)) {
       free(c);
       return NULL;
    }
 
-   /* pixel programs are never freed (blend variants included): 1 MB of the
-    * 5 MB the ten code base registers reach */
-   if (ring_init(d, &c->usse_pix, H_PIXSHADER, 0x100000) ||
-       ring_init(d, &c->usse_vtx, H_VTXSHADER, 0x40000) ||
-       /* the frame rings hold a whole frame of a game (~1500 draws, ~100K
+   c->usse[0].heap = H_PIXSHADER;
+   c->usse[1].heap = H_VTXSHADER;
+   if (/* the frame rings hold a whole frame of a game (~1500 draws, ~100K
         * vertices): a ring that fills submits the frame so far and waits for
         * it (heaps: PDS pixel 32 MB, PDS vertex 28 MB, general 2.8 GB) */
        ring_init(d, &c->pds_pix, H_PDSPIXEL, 0x40000 + d->slots * 0x200000) ||
@@ -692,29 +953,49 @@ sgxws_ctx_create(struct sgxws_dev *d)
        ring_init(d, &c->eot_pool[1], H_PIXSHADER,
                  SGXWS_EOT_CACHE * 0x80 + 0x100))
       goto fail;
+   /* (without it, every draw's pixel programs anew) */
+   if (!d->state_always)
+      c->pds_pix.memo = calloc(1, sizeof(*c->pds_pix.memo));
+
+   /* SGX_CODE_WINDOW=n: program code starts in window n of each USSE heap,
+    * to test code past the first window (the space below it is held) */
+   unsigned skip = debug_get_num_option("SGX_CODE_WINDOW", 0);
+   for (unsigned v = 0; skip && v < 2; v++) {
+      enum sgx_heap heap = v ? H_VTXSHADER : H_PIXSHADER;
+
+      if (sgxws_bo_alloc_heap(d, &c->code_hold[v], heap, 0x1,
+                              (skip << USSE_WINDOW_SHIFT) - SGXWS_CODE_CHUNK,
+                              SGXWS_CODE_CHUNK))
+         mesa_logw("sgx: SGX_CODE_WINDOW=%u: no room to hold", skip);
+   }
 
    /* fixed USSE programs */
-   c->empty_v = usse_load(c, &usse_empty, true);
-   c->empty_p = usse_load(c, &usse_empty, false);
-   c->copy_fs = usse_load(c, &usse_copy_fs, false);
-   c->clear_vs = usse_load(c, &usse_clear_vs, true);
-   c->vpgen_vs = usse_load(c, &usse_vpgen_vs, true);
-   c->pe_ptoff = usse_load(c, &usse_pe_ptoff, false);
-   c->pe_emit = usse_load(c, &usse_pe_emit, false);
+   char err[160];
+   if (!sgx_fixed_progs_build(&c->fixed, err, sizeof(err))) {
+      mesa_loge("sgx: %s", err);
+      goto fail;
+   }
+   c->empty_v = usse_load(c, &c->fixed.empty, true);
+   c->empty_p = usse_load(c, &c->fixed.empty, false);
+   c->copy_fs = usse_load(c, &c->fixed.copy_fs, false);
+   c->clear_vs = usse_load(c, &c->fixed.clear_vs, true);
+   c->vpgen_vs = usse_load(c, &c->fixed.vpgen_vs, true);
+   c->pe_ptoff = usse_load(c, &c->fixed.pe_ptoff, false);
+   c->pe_emit = usse_load(c, &c->fixed.pe_emit, false);
    {
       /* phas, the secondary programs' prologue up to its wdf, nop [end] */
       uint32_t w[12];
 
       w[0] = 0;
       w[1] = 0xfa440700;
-      memcpy(w + 2, usse_fs_uniform_sec.w + 2, 4 * 8);
+      memcpy(w + 2, c->fixed.fs_uniform_sec.w + 2, 4 * 8);
       w[10] = 0x00000000;
       w[11] = 0xf8040140;
       c->sec_wait = sgxws_usse_upload(c, false, w, 6, NULL, 0);
    }
    /* every state-emit length up front: the code rings are never reset */
    for (int n = 1; n <= 32; n++)
-      c->state_emit[n] = usse_load(c, usse_state_emit[n], true);
+      c->state_emit[n] = usse_load(c, &c->fixed.state_emit[n], true);
 
    /* VDM state programs that every frame ends with */
    c->empty_state = pds_secondary(&c->pds_vtx, 0, 0,
@@ -742,7 +1023,8 @@ sgxws_ctx_create(struct sgxws_dev *d)
     * last [D] */
    c->clear_pds =
       pds_pixel(c, doutu_w0(c, c->copy_fs, false, 0),
-                doutu_w1_pixel(true, false), &clear_douti, NULL, 1, NULL, NULL);
+                doutu_w1_pixel(true, false), &clear_douti, NULL, NULL, NULL, 1,
+                NULL, NULL);
 
    /* identity index buffer: glDrawArrays draws through it (STATE.md section 2) */
    p = ring_alloc(&c->gen, IDX_COUNT * 2, 4);
@@ -751,7 +1033,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    c->idx = p.va;
    c->idx_count = IDX_COUNT;
    /* what a fetch of n dwords leaves out, at + 16 n: (0, 0, 1), (0, 1), (1),
-    * each 16-byte aligned like every DMA source the DDK uses */
+    * each 16-byte aligned like every DMA source */
    p = ring_alloc(&c->gen, 64, DMA_ALIGN);
    memset(p.p, 0, 64);
    p.p[3] = p.p[6] = p.p[9] = p.p[12] = f32(1.0f);
@@ -773,7 +1055,7 @@ sgxws_ctx_create(struct sgxws_dev *d)
    return c;
 
 fail:
-   ws_err("context creation failed\n");
+   mesa_loge("sgx: context creation failed");
    ctx_free(c);
    return NULL;
 }
@@ -827,12 +1109,22 @@ rt_numbers(struct sgxws_rt_numbers *r, uint32_t w, uint32_t h)
 struct sgxws_rt *
 sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
 {
-   struct sgxws_rt *s = calloc(1, sizeof(*s));
+   return sgxws_rt_create_samples(c, w, h, 1);
+}
 
-   if (!s)
+struct sgxws_rt *
+sgxws_rt_create_samples(struct sgxws_ctx *c, uint32_t w, uint32_t h,
+                        unsigned samples)
+{
+   struct sgxws_rt *s;
+
+   if ((samples != 1 && samples != 4) || samples > c->dev->info.rt_max_samples)
+      return NULL;
+   if (!(s = calloc(1, sizeof(*s))))
       return NULL;
    s->w = w;
    s->h = h;
+   s->samples = samples;
    rt_numbers(&s->n, w, h);
    if (c->dev->kif->rt_init(c, s)) {
       free(s);
@@ -876,17 +1168,20 @@ eot_program(struct sgxws_ctx *c)
    uint32_t pbe[4], side;
    struct sgxws_ptr p;
 
-   for (unsigned i = 0; i < c->n_eot; i++) {
+   for (unsigned i = 0; i < c->n_eot && !c->n_eot_override; i++) {
       const struct sgxws_eot *e = &c->eot[i];
 
       if (e->va == t->va && e->stride == t->stride && e->w == s->w &&
           e->h == s->h && e->pbe_format == t->pbe_format &&
-          e->t1_layout == t->t1_layout) {
+          e->t1_layout == t->t1_layout && e->samples == MAX2(t->samples, 1) &&
+          e->raw == t->raw) {
          pool->last_seq = sgxws_next_seq(c);
          return e->code;
       }
    }
-   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < 7 * 8 + USSE_ALIGN) {
+   unsigned bytes = c->n_eot_override ? c->n_eot_override * 4 : 7 * 8;
+
+   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < bytes + USSE_ALIGN) {
       /* the other pool, emptied once the last render that ran code from it is
        * done */
       unsigned other = !c->eot_cur;
@@ -894,9 +1189,10 @@ eot_program(struct sgxws_ctx *c)
       pool = &c->eot_pool[other];
       if (sgxws_seq_after(pool->last_seq, c->done_seq) &&
           sgxws_wait_seq(c, pool->last_seq, 2000))
-         ws_err("a render with the end-of-tile pool's code did not finish\n");
+         mesa_loge(
+            "sgx: a render with the end-of-tile pool's code did not finish");
       if (c->dev->kif->code_reset && c->dev->kif->code_reset(c->dev, &pool->bo))
-         ws_err("end-of-tile pool reset failed\n");
+         mesa_loge("sgx: end-of-tile pool reset failed");
       memset(pool->bo.map, 0, pool->size);
       pool->used = 0x100;
       pool->uploaded = 0;
@@ -904,6 +1200,13 @@ eot_program(struct sgxws_ctx *c)
       c->n_eot = 0;
    }
 
+   if (c->n_eot_override) {
+      /* a hardware test's, not cached: the next test brings its own */
+      p = ring_alloc(pool, c->n_eot_override * 4, USSE_ALIGN);
+      memcpy(p.p, c->eot_override, c->n_eot_override * 4);
+      pool->last_seq = sgxws_next_seq(c);
+      return p.va;
+   }
    p = ring_alloc(pool, 7 * 8, USSE_ALIGN);
    sgx_pack(&pbe[0], PBE_STATE_WORD0, w0)
    { /* clip min [D] */
@@ -916,13 +1219,18 @@ eot_program(struct sgxws_ctx *c)
       w1.y_max = s->h - 1;
    }
    sgx_pack(&pbe[2], PBE_STATE_WORD2, w2) /* b15 [D] */
-      w2.pitch = (t->stride - 1) >> 1;    /* [C] */
+   {
+      w2.pitch = (t->stride - 1) >> 1; /* [C] */
+      /* 4x: the 2x2 samples resolved into the pixel (STATE.md
+       * "Multisampling (4x)", ms4: 016f8000 -> 416f8000) */
+      w2.downscale = t->samples > 1 ? 1 : 0;
+   }
    sgx_pack(&pbe[3], PBE_STATE_WORD3, w3) /* [D] */
       w3.address = SGX_DEV_ADDR(t->va);
    sgx_pack(&side, PBE_SIDEBAND, sb)
    {
       sb.format = t->pbe_format;
-      sb.dither = true;
+      sb.dither = !t->raw;
       sb.twiddled = t->t1_layout == SGX_TEXSTATE_LAYOUT_TWIDDLED;
    }
    p.p[0] = 0; /* phas.i #0, #0 [wait=7] */
@@ -940,72 +1248,85 @@ eot_program(struct sgxws_ctx *c)
       .h = s->h,
       .pbe_format = t->pbe_format,
       .t1_layout = t->t1_layout,
+      .samples = MAX2(t->samples, 1),
+      .raw = t->raw,
       .code = p.va,
    };
    pool->last_seq = sgxws_next_seq(c);
    return p.va;
 }
 
-/* The pixel event program (PDS.md "pixel-event program decoded"):
- *   in1 & 8 -> task ds0[0];  in1 & 2 -> (in1 ^ ds1[0]) & 0x100 ? DOUTA +
- * end-of-tile task : task ds0[2]; in1 & 4 -> task ds0[2]. */
+void
+sgxws_hwt_eot(struct sgxws_ctx *c, const uint32_t *words, unsigned n)
+{
+   c->n_eot_override = words ? MIN2(n, SGXWS_EOT_OVERRIDE_WORDS) : 0;
+   if (words)
+      memcpy(c->eot_override, words, c->n_eot_override * 4);
+}
+
+/* The pixel event program, written for the event word the 3D passes it
+ * (STATE.md "The pixel event program"): in1 holds the event flags, in0 the
+ * tile position, in2 the word DOUTA forwards.
+ *   in1 & 8      -> start the ptoff task, done;
+ *   in1 & 2      -> without in1 & 0x100: DOUTA in2 to attribute 0, then the
+ *                   end-of-tile task, its w1 carrying the tile position
+ *                   (in0 << 3 within 0x3ffff8), b23, and b22 from in1 & 4;
+ *                   with it: the emit task;
+ *   in1 & 4      -> the emit task;
+ *   otherwise    -> done. */
 static uint32_t
 pixel_event(struct sgxws_ctx *c, uint32_t eot, uint32_t *rows)
 {
+   const struct sgx_pds_reg t1 = DS1(0x30), t0 = DS0(0x30);
    struct pds p = {0};
 
+   /* DS0: the two task DOUTUs as pairs, the end-of-tile w1's masks */
    pds_d0(&p, 0, doutu_w0(c, c->pe_ptoff, false, 0));
    pds_d0(&p, 1, 0);
-   pds_d1(&p, 0, 0);
-   pds_d1(&p, 1, doutu_w0(c, eot, false, 4));
    pds_d0(&p, 2, doutu_w0(c, c->pe_emit, false, 4));
    pds_d0(&p, 3,
           sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true, .b23 = true}));
+   pds_d0(&p, 4, 0x3ffff8); /* the tile position field */
+   pds_d0(&p, 5, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true}));
+   /* DS1: the end-of-tile w0, DOUTA's control, the in1 tests, b23 */
+   pds_d1(&p, 0, doutu_w0(c, eot, false, 4));
+   pds_d1(&p, 1, 0);
    pds_d1(&p, 2, 8);
    pds_d1(&p, 3, 2);
-   pds_d0(&p, 4, 0x100);
-   pds_d0(&p, 5, 0xff8);
    pds_d1(&p, 4, 4);
-   pds_d1(&p, 5, 0);
-   pds_d0(&p, 6, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b23 = true}));
-   pds_d0(&p, 7, 0x003ff000);
-   pds_d1(&p, 6, 0);
-   pds_d1(&p, 7, 0);
-   pds_d0(&p, 8, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true}));
-   pds_d0(&p, 9, 0);
-   pds_d1(&p, 8, 0);
-   pds_d1(&p, 9, 0);
-   /*  0 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(2), DS1(0x30)));
-   /*  1 */ CODE(&p, pds_tst(DS1(0x30)));
-   /*  2 */ CODE(&p, pds_bra_p0(5));
-   /*  3 */ CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTU));
+   pds_d1(&p, 5, 0x100);
+   pds_d1(&p, 6, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b23 = true}));
+
+   enum { EOT_TEST = 5, EMIT = 11, EOT = 13, EMIT_TEST = 22, DONE = 27 };
+   /*  0 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(2), t1));
+   /*  1 */ CODE(&p, pds_tst(t1));
+   /*  2 */ CODE(&p, pds_bra_p0(EOT_TEST));
+   /*  3 */ CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTU)); /* ptoff */
    /*  4 */ CODE(&p, pds_halt());
-   /*  5 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(3), DS1(0x30)));
-   /*  6 */ CODE(&p, pds_tst(DS1(0x30)));
-   /*  7 */ CODE(&p, pds_bra_p0(24));
-   /*  8 */ CODE(&p, pds_alu(SGX_PDS_OPC_OP0XD_S1, IN(1), DS1(0), DS1(0x30)));
-   /*  9 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(4), DS1(0x30), DS1(0x30)));
-   /* 10 */ CODE(&p, pds_tst(DS1(0x30)));
-   /* 11 */ CODE(&p, pds_bra_p0(27));
-   /* 12 */ CODE(&p,
-                 pds_movs(MV, 0x21, 0, 0, 2, 0, 0, DOUTA)); /* (in2, ds1[0]) */
-   /* 13 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
-   /* 14 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(5), DS1(0x30), DS1(0x30)));
-   /* 15 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, DS0(6), DS1(0x30), DS0(0x30)));
-   /* 16 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
-   /* 17 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(7), DS1(0x30), DS1(0x30)));
-   /* 18 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
-   /* 19 */ CODE(&p, pds_shl(IN(1), 20, DS1(0x30)));
-   /* 20 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(8), DS1(0x30), DS1(0x30)));
-   /* 21 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
-   /* 22 */ CODE(&p, pds_movs(MV, 0x18, 0, 3, 0, 0, 0,
-                              DOUTU)); /* (ds1[1], ds0[0x30], ...) */
-   /* 23 */ CODE(&p, pds_halt());
-   /* 24 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(4), DS1(0x30)));
-   /* 25 */ CODE(&p, pds_tst(DS1(0x30)));
-   /* 26 */ CODE(&p, pds_bra_p0(28));
-   /* 27 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU));
-   /* 28 */ CODE(&p, pds_halt());
+   /*  5 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(3), t1));
+   /*  6 */ CODE(&p, pds_tst(t1));
+   /*  7 */ CODE(&p, pds_bra_p0(EMIT_TEST));
+   /*  8 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(5), t1));
+   /*  9 */ CODE(&p, pds_tst(t1));
+   /* 10 */ CODE(&p, pds_bra_p0(EOT));
+   /* 11 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU)); /* emit */
+   /* 12 */ CODE(&p, pds_halt());
+   /* 13 */ CODE(&p, pds_movs(MV, 0x21, 0, 0, 3, 0, 0, DOUTA)); /* in2, ds1[1] */
+   /* 14 */ CODE(&p, pds_shl(IN(0), 3, t1));
+   /* 15 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(4), t1, t0));
+   /* 16 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, t0, DS1(6), t0));
+   /* 17 */ CODE(&p, pds_shl(IN(1), 20, t1));
+   /* 18 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(5), t1, t1));
+   /* 19 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, t0, t1, t0));
+   /* 20 */ CODE(&p, pds_movs(MV, 0x18, 0, 2, 0, 0, 0, DOUTU)); /* ds1[0], t0 */
+   /* 21 */ CODE(&p, pds_halt());
+   /* 22 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(4), t1));
+   /* 23 */ CODE(&p, pds_tst(t1));
+   /* 24 */ CODE(&p, pds_bra_p0(DONE));
+   /* 25 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU)); /* emit */
+   /* 26 */ CODE(&p, pds_halt());
+   /* 27 */ CODE(&p, pds_halt());
+   assert(p.nc == 28);
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -1090,8 +1411,15 @@ int
 sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
             const struct sgxws_target *t)
 {
-   if (c->rt == rt && c->target.va == t->va)
+   /* the same memory: the frame goes on.  The caller's buffer is the one
+    * the frame now renders for (sgxws_target_bo): another resource of the
+    * same memory may have begun it, and a readback of this one must find
+    * its render here and end it (fixed-clip-enables under
+    * ARB_framebuffer_object read the frame before, with this left stale) */
+   if (c->rt == rt && c->target.va == t->va) {
+      c->target.bo = t->bo;
       return 0;
+   }
    if (c->rt) {
       int e = sgxws_flush(c, 0);
 
@@ -1102,11 +1430,15 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->target = *t;
    c->vdm_start = c->vdm.bo.va + c->vdm.used;
    c->draws = 0;
+   c->ta_kicks = c->seg_draws = 0;
+   c->last_blk_n = c->last_u_va = 0;
+   c->n_ubo_copy = c->ubo_copy_next = 0;
    c->n_use = 0;
    c->bias_set = false;
    c->bias_units = 0;
    c->bias_factor = 0.0f;
    c->clip = (struct sgxws_rect){0, 0, rt->w, rt->h};
+   c->damage = (struct sgxws_rect){0, 0, 0, 0};
 
    /* the render details are the target's: written at the kick, once its
     * previous render is done */
@@ -1155,7 +1487,7 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n,
    /* (the frame rings' headroom covers an object and its clip objects) */
    memset(b.p, 0, dma_dwords * 4);
    memcpy(b.p, blk, n * 4);
-   /* the DDK's static state program: tst; bra; doutd; tst; bra; doutd; doutu */
+   /* the VDM state program (PDS.md): tst; bra; doutd; tst; bra; doutd; doutu */
    pds_d0(&p, 0, b.va);
    pds_d0(&p, 1, dma_ctrl(dma_dwords, 0, kind, 1));
    pds_d0(&p, 2, 0);
@@ -1174,23 +1506,26 @@ state_block(struct sgxws_ctx *c, const uint32_t *blk, uint32_t n,
    vdm_state(c, SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE, va, rows,
              SGX_VDMCTRL_STATE_KIND_TA_BLOCK, n, c->vdm_counter);
    c->vdm_counter = (c->vdm_counter + 1) & 3;
+   c->last_blk_n = n <= ARRAY_SIZE(c->last_blk) ? n : 0;
+   if (c->last_blk_n)
+      memcpy(c->last_blk, blk, n * 4);
 }
 
-/* Vertices per USSE task: 128 / output dwords, at most 16, as the DDK counts
- * them (captures on the CE5300: 4 and 8 output dwords 16 vertices, 12 10,
- * 16 8, 20 6, 24 5; the input dwords don't count, 16 in still gives 16).
- * Half that (64 / output dwords) hung the GPU at 12 output dwords. The DDK's
- * clear draws 8 per task. */
+/* Vertices per USSE task: 128 / output dwords, at most 16 [D: 4 and 8
+ * output dwords 16 vertices, 12 10, 16 8, 20 6, 24 5; the input dwords don't
+ * count, 16 in still gives 16].  Half that (64 / output dwords) hung the GPU
+ * at 12 output dwords. */
 static uint32_t
-vertices_per_task(uint32_t out_dwords)
+vertices_per_task(const struct sgx_core *core, uint32_t out_dwords)
 {
-   uint32_t o = (out_dwords + 3) & ~3u, v = 128 / (o ? o : 4);
+   uint32_t o = (out_dwords + 3) & ~3u,
+            v = core->vertex_task_dwords / (o ? o : 4);
 
-   return v > 16 ? 16 : v;
+   return v > core->vertex_task_max ? core->vertex_task_max : v;
 }
 
-/* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md
- * "What the DDK generates"): per stride a MUL16 of the index into ds1[0x32],
+/* A draw: index list + vertex fetch program (STATE.md section 2; PDS.md,
+ * program forms): per stride a MUL16 of the index into ds1[0x32],
  * then each DMA adds it to its address; the defaults DMA plainly. */
 static void
 vdm_fetch(struct sgxws_ctx *c, uint32_t prim, uint32_t count, uint32_t idx,
@@ -1284,7 +1619,7 @@ frame_has_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 }
 
 /* make room for one more object, submitting the frame so far if need be (the
- * next render starts from its pixels, as every render does) */
+ * next render starts from its pixels, as every render does, and its depth) */
 static int
 make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
 {
@@ -1297,6 +1632,7 @@ make_room(struct sgxws_ctx *c, uint32_t vertex_bytes)
    c->room_flushes++;
    if ((e = sgxws_flush(c, 0)))
       return e;
+   t.zls_load = t.zls_va != 0; /* and its depth and stencil */
    if ((e = sgxws_begin(c, rt, &t)))
       return e;
    return frame_has_room(c, vertex_bytes) ? 0 : -E2BIG;
@@ -1317,6 +1653,7 @@ depth_bias(struct sgxws_ctx *c, const struct sgxws_state *st)
        (c->bias_units != st->bias_units || c->bias_factor != st->bias_factor)) {
       if ((e = sgxws_flush(c, 0)))
          return e;
+      t.zls_load = t.zls_va != 0;
       if ((e = sgxws_begin(c, rt, &t)))
          return e;
    }
@@ -1379,7 +1716,23 @@ vpgen_object(struct sgxws_ctx *c, bool set, const struct sgxws_rect *tiles,
    }
    state_block(c, blk, 9, 9, 0);
    vdm_draw(c, prim, count, c->idx, v.va, 8, 2, c->vpgen_vs, 2, 4, 0,
-            vertices_per_task(4));
+            vertices_per_task(c->dev->core, 4));
+}
+
+/* the pixels a draw or clear may change: the clip it draws within */
+static void
+add_damage(struct sgxws_ctx *c)
+{
+   struct sgxws_rect *d = &c->damage;
+
+   if (d->x1 <= d->x0) {
+      *d = c->clip;
+      return;
+   }
+   d->x0 = MIN2(d->x0, c->clip.x0);
+   d->y0 = MIN2(d->y0, c->clip.y0);
+   d->x1 = MAX2(d->x1, c->clip.x1);
+   d->y1 = MAX2(d->y1, c->clip.y1);
 }
 
 /* Make r the visible pixels (STATE.md "Scissor and partial viewports"): reset
@@ -1419,9 +1772,11 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
    uint32_t blk[13], n = 0;
    int e;
 
-   bool zwrite = write_depth && (depth != 1.0f || c->draws);
+   /* a render that loads its depth (ZLS) doesn't start at 1.0 */
+   bool zwrite =
+      write_depth && (depth != 1.0f || c->draws || c->target.zls_load);
 
-   /* nothing to write: no colour, and the depth every render starts with */
+   /* nothing to write: no colour, and the depth a fresh render starts with */
    if (!(wmask & 0xf) && !zwrite && stencil < 0)
       return 0;
    if ((e = make_room(c, 3 * 16)))
@@ -1443,7 +1798,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
       h.ispc = stencil >= 0;
    }
    /* always; depth write for a depth clear, except to the background depth
-    * (1.0) before anything was drawn: every render starts there */
+    * (1.0) before anything was drawn in a render that doesn't load depth */
    sgx_pack(&blk[n++], TA_STATE_ISPA, a)
    {
       a.depth_func = SGX_TA_CMP_ALWAYS;
@@ -1490,6 +1845,7 @@ sgxws_clear(struct sgxws_ctx *c, const float rgba[4], float depth,
    vdm_draw(c, SGXWS_TRIANGLES, 3, c->idx, v.va, 16, 4, c->clear_vs, 4, 8, 0,
             8);
    c->draws++;
+   add_damage(c);
    return 0;
 }
 
@@ -1521,8 +1877,8 @@ ispa(const struct sgxws_state *st, uint32_t prim, unsigned face)
 }
 
 /* MTE cull (STATE.md section 3): with gallium's front_ccw (st flips it for a
- * y-down window), 1 culls back faces of a CCW-front draw, 2 front faces;
- * checked against the DDK for cull back, front, and back with a CW front */
+ * y-down window), 1 culls back faces of a CCW-front draw, 2 front faces
+ * [D: cull back, front, and back with a CW front] */
 static uint32_t
 mte_ctrl(const struct sgxws_state *st)
 {
@@ -1540,6 +1896,48 @@ mte_ctrl(const struct sgxws_state *st)
    return w;
 }
 
+static int kick_ta(struct sgxws_ctx *c);
+
+/* uniform block i of a draw in this frame's general ring: a copy of its own,
+ * or the one an earlier draw of the frame made of the same key (sgxws_ubo);
+ * sgxws_draw has made the room (mem_bytes). Its address */
+static uint32_t
+ubo_copy(struct sgxws_ctx *c, const struct sgxws_draw *d, unsigned i,
+         const uint32_t *done)
+{
+   const struct sgxws_ubo *b = &d->ubos[i];
+   struct sgxws_ptr p;
+
+   /* the vertex and fragment programs reading one block */
+   for (unsigned j = 0; j < i; j++)
+      if (d->ubos[j].data == b->data && d->ubos[j].bytes == b->bytes &&
+          d->ubos[j].key == b->key)
+         return done[j];
+   if (b->key)
+      for (unsigned j = 0; j < c->n_ubo_copy; j++)
+         if (c->ubo_copy[j].key == b->key && c->ubo_copy[j].data == b->data &&
+             c->ubo_copy[j].bytes == b->bytes)
+            return c->ubo_copy[j].va;
+   /* whole vec4s, a block cut short padded with zeros (the compiler's loads
+    * read vec4s) */
+   uint32_t room = (b->bytes + 15) & ~15u;
+
+   p = ring_alloc(&c->gen, room ? room : 16, 16);
+   memset(p.p, 0, room ? room : 16);
+   memcpy(p.p, b->data, b->bytes);
+   if (b->key) {
+      unsigned j = c->ubo_copy_next;
+
+      c->ubo_copy_next = (j + 1) % 16;
+      c->n_ubo_copy = MAX2(c->n_ubo_copy, j + 1);
+      c->ubo_copy[j].key = b->key;
+      c->ubo_copy[j].data = b->data;
+      c->ubo_copy[j].bytes = b->bytes;
+      c->ubo_copy[j].va = p.va;
+   }
+   return p.va;
+}
+
 int
 sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 {
@@ -1551,9 +1949,17 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    uint32_t mem_bytes = ((d->vs_mem.dwords * 4 + 15) & ~15u) +
                         ((d->fs_mem.dwords * 4 + 15) & ~15u);
    struct sgxws_ptr v = {0}, u, vsec, vmem = {0}, fmem = {0};
+   uint32_t ubo_va[SGXWS_MAX_UBOS];
+   bool fs_ubos = false;
    struct sgxws_fetch fetch[SGXWS_MAX_FETCH];
    int e;
 
+   if (d->n_ubos > SGXWS_MAX_UBOS)
+      return -E2BIG;
+   for (unsigned i = 0; i < d->n_ubos; i++) {
+      mem_bytes += (d->ubos[i].bytes + 15) & ~15u;
+      fs_ubos |= d->ubos[i].fs && d->ubos[i].sa >= 0;
+   }
    if ((e = depth_bias(c, st)))
       return e;
    if (d->n_fetch) {
@@ -1573,6 +1979,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
             return -E2BIG;
          n_idx = d->n_indices;
          idx_bytes = (n_idx * 2 + 15) & ~15u;
+      } else if (d->idx_va) {
+         /* an index buffer in device memory, as it is */
+         if (d->n_indices > SGXWS_MAX_INDICES)
+            return -E2BIG;
+         n_idx = d->n_indices;
+         idx = d->idx_va;
       } else if (d->count > c->idx_count) {
          return -E2BIG;
       }
@@ -1645,18 +2057,59 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       fmem = ring_alloc(&c->gen, d->fs_mem.dwords * 4, 16);
       memcpy(fmem.p, d->fs_mem.words, d->fs_mem.dwords * 4);
    }
+   /* the uniform blocks, after any submit make_room made (a copy names
+    * this frame's memory), then their addresses in the memory blocks */
+   for (unsigned i = 0; i < d->n_ubos; i++)
+      ubo_va[i] = ubo_copy(c, d, i, ubo_va);
+   for (unsigned i = 0; i < d->n_ubos; i++) {
+      const struct sgxws_ubo *b = &d->ubos[i];
+      struct sgxws_ptr *m = b->fs ? &fmem : &vmem;
+
+      if (b->mem && m->p &&
+          b->mem < (b->fs ? d->fs_mem.dwords : d->vs_mem.dwords))
+         m->p[b->mem] = ubo_va[i];
+   }
 
    /* fragment: the constants and the secondary program that DMAs them, then
     * the primary program that runs the shader */
    if (fs->sec_dwords) {
-      u = ring_alloc(&c->pds_pix, fs->sec_dwords * 4, DMA_ALIGN);
-      memcpy(u.p, d->fs_consts, fs->sec_dwords * 4);
-      for (unsigned j = 0; j < d->fs_mem.n_bases && d->fs_mem.dwords; j++)
-         u.p[d->fs_mem.base[j]] = fmem.va + 512 * j;
+      /* the frame's last block again when the constants are (a memory
+       * block's address is new each draw) */
+      if (!d->fs_mem.dwords && !fs_ubos && c->last_u_va &&
+          !c->dev->state_always &&
+          c->last_u_dwords == fs->sec_dwords &&
+          !memcmp(c->last_u, d->fs_consts, fs->sec_dwords * 4)) {
+         u.va = c->last_u_va;
+      } else {
+         u = ring_alloc(&c->pds_pix, fs->sec_dwords * 4, DMA_ALIGN);
+         memcpy(u.p, d->fs_consts, fs->sec_dwords * 4);
+         for (unsigned j = 0; j < d->fs_mem.n_bases && d->fs_mem.dwords; j++)
+            u.p[d->fs_mem.base[j]] = fmem.va + 512 * j;
+         for (unsigned i = 0; i < d->n_ubos; i++)
+            if (d->ubos[i].fs && d->ubos[i].sa >= 0 &&
+                (unsigned)d->ubos[i].sa < fs->sec_dwords)
+               u.p[d->ubos[i].sa] = ubo_va[i];
+         c->last_u_va = 0;
+         if (!d->fs_mem.dwords && !fs_ubos) {
+            if (c->last_u_cap < fs->sec_dwords) {
+               uint32_t *m = realloc(c->last_u, fs->sec_dwords * 4);
+
+               if (m) {
+                  c->last_u = m;
+                  c->last_u_cap = fs->sec_dwords;
+               }
+            }
+            if (c->last_u_cap >= fs->sec_dwords) {
+               memcpy(c->last_u, d->fs_consts, fs->sec_dwords * 4);
+               c->last_u_dwords = fs->sec_dwords;
+               c->last_u_va = u.va;
+            }
+         }
+      }
       /* a task that waits for the DMA (wdf) before it ends: the empty task
        * here locks the GPU up */
       sec = pds_dma_task(
-         &c->pds_pix, u.va, fs->sec_dwords,
+         c, &c->pds_pix, u.va, fs->sec_dwords,
          doutu_w0(c, fs->sec ? fs->sec : c->sec_wait, false, fs->sec_temps), 4,
          &rows);
    } else {
@@ -1689,10 +2142,9 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    blk[n++] = pds_word(c, sec, rows);
    /* PDS middle word: the fragment program's primary attributes in units
     * of 4 dwords, the secondaries [D]; b25-28 = 12 divided by the units
-    * (DDK captures with 0-5 vec4 varyings: units 1 1 1 2 2 3, b25-28 12 12 6 6
-    * 4; 0xb with one unit, as the DDK's uniform shader and every draw before
-    * had it). A program with more attributes than the word declares locks
-    * the GPU up (two F32 vec4 varyings). */
+    * [D: 0-5 vec4 varyings give units 1 1 1 2 2 3, b25-28 12 12 6 6 4; 0xb
+    * with one unit works too]. A program with more attributes than the word
+    * declares locks the GPU up (two F32 vec4 varyings). */
    {
       unsigned units = fs->pa_dwords > 4 ? (fs->pa_dwords + 3) / 4 : 1,
                per = 12 / units;
@@ -1711,7 +2163,8 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       }
       prim = pds_pixel(c, doutu_w0(c, fs->code, false, fs->temps),
                        doutu_w1_pixel(iter, smp), fs->douti, fs->douti_tex,
-                       fs->n_douti, d->tex, &rows);
+                       fs->douti_t3_clr, fs->douti_t3_set, fs->n_douti, d->tex,
+                       &rows);
    }
    blk[n++] = pds_word(c, prim, rows);
    /* viewport: gallium's transform [C x offset, D rest] */
@@ -1729,13 +2182,16 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    sgx_pack(&blk[n++], TA_STATE_OUTSELECT, os)
    {
       os.out_dwords = vs->out_dwords;
-      os.unknown_11_13 = SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
+      os.unknown_11_13 = vs->colour
+                            ? SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW_COLOUR
+                            : SGX_TA_STATE_OUTSELECT_UNKNOWN_11_13_DRAW;
       os.point_size = vs->point_size;
+      os.clip_planes = vs->clip_planes;
    }
    sgx_pack(&blk[n++], TA_STATE_WCLAMP, wc) wc.value = 1e-5f;
    blk[n++] = mte_ctrl(st);
    blk[n++] = vs->tsp_sizes; /* TSP0, TSP1: the vertex program's */
-   blk[n++] = vs->tsp_prec;
+   blk[n++] = vs->tsp_prec | d->tsp_f16;
    sgx_pack(&blk[0], TA_STATE_HEADER, h)
    {
       h.ispa = h.ispb = h.pds = h.viewport = h.unknown_word = h.outselect =
@@ -1744,14 +2200,23 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       h.ispc = st->stencil;
       h.ispa2 = h.ispb2 = h.ispc2 = st->stencil && st->two_sided;
    }
-   /* the DDK DMAs 25 dwords for a draw's block (kind 0) and 27 (kind 2) for the
-    * 22-word two-sided one; the header says where it ends. 25 for the two-sided
+   /* a draw's block is DMAed as 25 dwords (kind 0), the 22-word two-sided one
+    * as 27 (kind 2) [D]; the header says where it ends. 25 for the two-sided
     * block draws nothing or the wrong colours from run to run (dEQP
     * fragment_ops.random; 27 and 28 draw it, 24 and 25 don't) */
    {
       uint32_t dma = n + 5 > 25 ? n + 5 : 25;
 
-      state_block(c, blk, n, dma, (dma - 1) & 3);
+      /* the MTE has it from the last draw: no new state (a block per draw
+       * costs the TA in every tile the draw touches). SGX_STATE_ALWAYS=1
+       * sends it anyway */
+      if (c->dev->state_always || c->last_blk_n != n ||
+          memcmp(c->last_blk, blk, n * 4)) {
+         state_block(c, blk, n, dma, (dma - 1) & 3);
+         c->state_sent++;
+      } else {
+         c->state_skipped++;
+      }
    }
 
    /* vertex secondary attributes: the block's own address, then the driver
@@ -1768,7 +2233,11 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
    for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
       vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
-   sec = pds_dma_task(&c->pds_vtx, vsec.va, vsec_dwords,
+   for (unsigned i = 0; i < d->n_ubos; i++)
+      if (!d->ubos[i].fs && d->ubos[i].sa >= 0 &&
+          (unsigned)d->ubos[i].sa < vs->const_dwords)
+         vsec.p[10 + d->ubos[i].sa] = ubo_va[i];
+   sec = pds_dma_task(c, &c->pds_vtx, vsec.va, vsec_dwords,
                       doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm_state(c, SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows,
              SGX_VDMCTRL_STATE_KIND_DMA, vsec_dwords, 0);
@@ -1778,12 +2247,16 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    if (d->n_fetch)
       vdm_fetch(c, d->prim, n_idx, idx, fetch, d->n_fetch, vs->code,
                 vs->in_dwords, vs->out_dwords, vs->temps,
-                vertices_per_task(vs->out_dwords));
+                vertices_per_task(c->dev->core, vs->out_dwords));
    else
       vdm_draw(c, d->prim, n_idx, idx, v.va, vw, vs->attr_dwords, vs->code,
                vs->in_dwords, vs->out_dwords, vs->temps,
-               vertices_per_task(vs->out_dwords));
+               vertices_per_task(c->dev->core, vs->out_dwords));
    c->draws++;
+   add_damage(c);
+   /* SGX_TA_SPLIT: the GPU tiles what is recorded while the rest is */
+   if (c->dev->ta_split && ++c->seg_draws >= c->dev->ta_split)
+      return kick_ta(c);
    return 0;
 }
 
@@ -1814,11 +2287,28 @@ sgxws_use_bo(struct sgxws_ctx *c, const struct sgxws_bo *bo, bool write)
          return;
       }
    }
+   /* (the caller made room: sgxws_use_bo_room) */
+   assert(c->n_use < ARRAY_SIZE(c->use));
    if (c->n_use < ARRAY_SIZE(c->use))
       c->use[c->n_use++] = (__typeof__(c->use[0])){bo, write};
-   else
-      ws_err("a frame uses more than %u shared buffers\n",
-             (unsigned)ARRAY_SIZE(c->use));
+}
+
+bool
+sgxws_use_bo_room(const struct sgxws_ctx *c, const struct sgxws_bo *const *bos,
+                  unsigned n)
+{
+   unsigned more = 0;
+
+   for (unsigned k = 0; k < n; k++) {
+      bool listed = false;
+
+      for (unsigned i = 0; i < c->n_use && !listed; i++)
+         listed = c->use[i].bo == bos[k];
+      for (unsigned j = 0; j < k && !listed; j++)
+         listed = bos[j] == bos[k];
+      more += !listed;
+   }
+   return c->n_use + more <= ARRAY_SIZE(c->use);
 }
 
 uint64_t
@@ -1836,13 +2326,19 @@ slot_wait(struct sgxws_ctx *c, unsigned i, unsigned ms)
 {
    uint32_t seq = c->slot_kick[i].seq;
 
+   bool timed = ms && c->slot_kick[i].kicked_ns;
+
    if (!sgxws_seq_after(seq, c->done_seq))
       return 0;
-   if (c->dev->kif->wait_seq(c, seq, ms))
-      return -ETIMEDOUT;
-   if (c->slot_kick[i].kicked_ns) {
-      uint64_t ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
+   /* Render latency times only the renders a wait sees end: one already
+    * done when first looked at ended at some point since its kick that
+    * isn't known (a compositor idle between frames looks seconds later). */
+   if (c->dev->kif->wait_seq(c, seq, timed ? 0 : ms)) {
+      uint64_t ns;
 
+      if (!timed || c->dev->kif->wait_seq(c, seq, ms))
+         return -ETIMEDOUT;
+      ns = sgxws_now_ns() - c->slot_kick[i].kicked_ns;
       c->ns_latency += ns;
       c->n_latency++;
       if (c->slot_kick[i].scanout) {
@@ -1904,31 +2400,43 @@ sgxws_wait_idle(struct sgxws_ctx *c, unsigned timeout_ms)
 
 /* code written since the last kick, to the GPU */
 static int
+ring_sync(struct sgxws_ctx *c, struct sgxws_ring *r)
+{
+   uint32_t end = (r->used + 7) & ~7u;
+   int e;
+
+   if (end <= r->uploaded)
+      return 0;
+   if ((e = c->dev->kif->code_upload(c->dev, &r->bo, r->uploaded,
+                                     end - r->uploaded)))
+      return e;
+   r->uploaded = end;
+   return 0;
+}
+
+static int
 code_sync(struct sgxws_ctx *c)
 {
-   struct sgxws_ring *rs[] = {&c->usse_pix, &c->usse_vtx, &c->eot_pool[0],
-                              &c->eot_pool[1]};
    int e;
 
    if (!c->dev->kif->code_upload)
       return 0;
-   for (unsigned i = 0; i < ARRAY_SIZE(rs); i++) {
-      uint32_t end = (rs[i]->used + 7) & ~7u;
-
-      if (end <= rs[i]->uploaded)
-         continue;
-      if ((e = c->dev->kif->code_upload(c->dev, &rs[i]->bo, rs[i]->uploaded,
-                                        end - rs[i]->uploaded)))
-         return e;
-      rs[i]->uploaded = end;
+   if ((e = ring_sync(c, &c->eot_pool[0])) ||
+       (e = ring_sync(c, &c->eot_pool[1])))
+      return e;
+   for (unsigned v = 0; v < 2; v++) {
+      for (unsigned i = 0; i < c->usse[v].n; i++) {
+         if ((e = ring_sync(c, &c->usse[v].chunk[i]->r)))
+            return e;
+      }
    }
    return 0;
 }
 
 /*
  * Submitting a frame doesn't wait for its render: the next frame records into
- * the next ring slot meanwhile, as the DDK overlaps the CPU's next frame with
- * the GPU's last.  What the CPU must not touch while a render runs:
+ * the next ring slot meanwhile, so the CPU's next frame overlaps the GPU's
+ * last.  What the CPU must not touch while a render runs:
  *  - the ring slot it was recorded in, until it is done (the slot is used
  *    again c->slots submissions later);
  *  - under services, its render target's structures (render details, region
@@ -1938,6 +2446,47 @@ code_sync(struct sgxws_ctx *c)
  * flight together; the microkernel runs them in order.
  */
 static int sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms);
+
+/* under services, the target's last render is done before its next scene's
+ * first kick (the client writes its render details) */
+static void
+target_wait(struct sgxws_ctx *c)
+{
+   struct sgxws_rt *s = c->rt;
+   uint64_t t0 = sgxws_now_ns();
+
+   if (!c->dev->kif->rt_one_in_flight || c->ta_kicks)
+      return;
+   if (sgxws_seq_after(s->seq, c->done_seq) &&
+       c->slot_kick[s->seq_slot].seq == s->seq &&
+       slot_wait(c, s->seq_slot, 2000))
+      mesa_loge("sgx: the target's last render did not finish");
+   c->ns_target_wait += sgxws_now_ns() - t0;
+}
+
+/* a TA kick of what is recorded, the scene going on: the next objects start
+ * a new VDM segment after this one's terminate */
+static int
+kick_ta(struct sgxws_ctx *c)
+{
+   const struct sgxws_kif *kif = c->dev->kif;
+   int e;
+
+   c->seg_draws = 0;
+   /* the frame's kicks that fit in the backend's command ring with c->slots
+    * frames in flight (the last is the frame's own kick) */
+   if (kif->ring_kicks && c->ta_kicks + 2 > kif->ring_kicks / c->slots)
+      return 0;
+   target_wait(c);
+   sgxws_vdm_end(c);
+   if ((e = code_sync(c)) || (e = kif->kick_ta(c)))
+      return e;
+   c->ta_kicks++;
+   c->last_blk_n = 0; /* the next kick's MTE starts without state */
+   c->vdm.used = (c->vdm.used + 3) & ~3u;
+   c->vdm_start = c->vdm.bo.va + c->vdm.used;
+   return 0;
+}
 
 int
 sgxws_flush(struct sgxws_ctx *c, unsigned timeout_ms)
@@ -1961,17 +2510,9 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
       return 0;
 
    sgxws_vdm_end(c);
-   if (kif->rt_one_in_flight) {
-      uint64_t t0 = sgxws_now_ns();
-
-      if (sgxws_seq_after(s->seq, c->done_seq) &&
-          c->slot_kick[s->seq_slot].seq == s->seq &&
-          slot_wait(c, s->seq_slot, 2000))
-         ws_err("the target's last render did not finish\n");
-      c->ns_target_wait += sgxws_now_ns() - t0;
-   }
+   target_wait(c);
    if ((e = code_sync(c)))
-      ws_err("shader upload refused: %d\n", e);
+      mesa_loge("sgx: shader upload refused: %d", e);
    else
       e = kif->kick(c, seq);
    c->kicks = seq;
@@ -1996,8 +2537,11 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
 
       if (kif->frame_info)
          kif->frame_info(c, info, sizeof(info));
-      ws_err("frame %u (target %u): %u objects, %s, rc %d\n", c->frames,
-             s->frames, c->draws, info, e);
+      mesa_logi(
+         "sgx: frame %u (target %#x %ux%u frame %u, kick %u, slot %u, %.3f s): "
+         "%u objects, %s, rc %d",
+         c->frames, (unsigned)c->target.va, s->w, s->h, s->frames, seq, c->slot,
+         sgxws_now_ns() / 1e9, c->draws, info, e);
    }
 
    s->frames++;
@@ -2006,11 +2550,18 @@ sgxws_flush_(struct sgxws_ctx *c, unsigned timeout_ms)
    /* the next frame records into the next slot, once the render there is done */
    c->slot = (c->slot + 1) % c->slots;
    {
-      uint64_t t0 = sgxws_now_ns();
+      uint64_t t0 = sgxws_now_ns(), dt;
+      uint32_t waited = c->slot_kick[c->slot].seq, done = c->done_seq;
 
       if (slot_wait(c, c->slot, 2000) && !e)
          e = -ETIMEDOUT;
-      c->ns_slot_wait += sgxws_now_ns() - t0;
+      dt = sgxws_now_ns() - t0;
+      c->ns_slot_wait += dt;
+      if (c->dev->verbose && dt > 2000000)
+         mesa_logi(
+            "sgx: slot %u: waited %.1f ms for kick %u (last kick %u, done "
+            "%u)",
+            c->slot, dt / 1e6, waited, c->kicks, done);
    }
    ring_use_slot(&c->pds_pix, c->slot);
    ring_use_slot(&c->pds_vtx, c->slot);
@@ -2031,15 +2582,15 @@ sgxws_prog_builtin(struct sgxws_ctx *c, enum sgxws_builtin which,
    case SGXWS_VS_XY:
    case SGXWS_VS_XYZ:
       s->vertex = true;
-      s->code =
-         usse_load(c, which == SGXWS_VS_XY ? &usse_vs_xy : &usse_vs_xyz, true);
+      s->code = usse_load(
+         c, which == SGXWS_VS_XY ? &c->fixed.vs_xy : &c->fixed.vs_xyz, true);
       s->in_dwords = 4;
       s->out_dwords = 4;
       s->attr_dwords = which == SGXWS_VS_XY ? 2 : 3;
       break;
    case SGXWS_FS_UNIFORM:
-      s->sec = usse_load(c, &usse_fs_uniform_sec, false);
-      s->code = usse_load(c, &usse_fs_uniform, false);
+      s->sec = usse_load(c, &c->fixed.fs_uniform_sec, false);
+      s->code = usse_load(c, &c->fixed.fs_uniform, false);
       s->sec_dwords = SGXWS_FS_UNIFORM_DWORDS;
       break;
    }
@@ -2071,9 +2622,9 @@ uint32_t
 sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned temps)
 {
-   /* usse_vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
+   /* fixed.vs_xy: [0] phas.i @p1, [1-4] the prologue, [7] phas.i @p2 [wait=2],
     * [9] emit.t3 r0, #0, #0 [end f12 f10], [10-11] the epilogue phase */
-   const uint32_t *t = usse_vs_xy.w;
+   const uint32_t *t = c->fixed.vs_xy.w;
    uint32_t *w = malloc((count + 12) * 8), va;
    uint8_t reloc[2];
    unsigned n = 0, p1, p2;
@@ -2100,7 +2651,7 @@ sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
    return va;
 }
 
-/* sop2's fields (hw10, tools/isa/hw_int.py): c1 h6-8 (complement h24), c2
+/* sop2's fields (hw10, docs/ISA.md "sop2"): c1 h6-8 (complement h24), c2
  * h3-5 (h15), a1 h20-21 (h11), a2 h9-10 (h2), cop l18-19, aop l16-17, end
  * h18, dst l21-27 (bank h0-1: o 1, pa 2); the base is
  * `sop2 r0, pa0, o0 [skipinv]` with every factor zero, add.  The alpha
@@ -2142,43 +2693,87 @@ sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
  * swap it reads r1, r0 (a reverse subtract).  With atrade the two alpha
  * products go to the other register (r0.a = dst.a * Fda, r1.a = src.a * Fsa),
  * after both whole-colour ones, so alpha subtracts the other way round. */
+/* A GL blend factor as one sopwm factor select (ISA.md "sopwm": 0 zero,
+ * 1 asat, 2 s1, 3 s1a, 6 s2, 7 s2a, and a complement bit) and the operand the
+ * instruction reads for it.  The dst-side product is src1 * 0 + o0 * Fd: src1 is
+ * the operand the factor reads, src2 (o0) the tile.  The src-side product is
+ * pa<c> * Fs + src2 * 0: src1 is the source colour, src2 the operand the factor
+ * reads.  So the source colour is s1 on both sides, the tile s2 on both, and
+ * the constant s1 on the dst side and s2 on the src side. */
+enum blend_reads { BLEND_READS_COLOUR, BLEND_READS_TILE, BLEND_READS_CONSTANT };
+
+struct blend_factor_sel {
+   enum blend_reads reads;
+   unsigned sel;
+   bool inv;
+};
+
+static struct blend_factor_sel
+blend_factor_sel(unsigned factor, bool dst_side)
+{
+   enum { ZERO = 0, ASAT = 1, S1 = 2, S1A = 3, S2 = 6, S2A = 7 };
+   const unsigned k = dst_side ? S1 : S2, ka = dst_side ? S1A : S2A;
+   bool inv = factor == SGXWS_BF_ONE || factor == SGXWS_BF_ONE_MINUS_SRC_COLOR ||
+              factor == SGXWS_BF_ONE_MINUS_SRC_ALPHA ||
+              factor == SGXWS_BF_ONE_MINUS_DST_COLOR ||
+              factor == SGXWS_BF_ONE_MINUS_DST_ALPHA ||
+              factor == SGXWS_BF_ONE_MINUS_CONSTANT_COLOR ||
+              factor == SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA;
+
+   switch (factor) {
+   case SGXWS_BF_SRC_COLOR:
+   case SGXWS_BF_ONE_MINUS_SRC_COLOR:
+      return (struct blend_factor_sel){BLEND_READS_COLOUR, S1, inv};
+   case SGXWS_BF_SRC_ALPHA:
+   case SGXWS_BF_ONE_MINUS_SRC_ALPHA:
+      return (struct blend_factor_sel){BLEND_READS_COLOUR, S1A, inv};
+   case SGXWS_BF_DST_COLOR:
+   case SGXWS_BF_ONE_MINUS_DST_COLOR:
+      return (struct blend_factor_sel){BLEND_READS_TILE, S2, inv};
+   case SGXWS_BF_DST_ALPHA:
+   case SGXWS_BF_ONE_MINUS_DST_ALPHA:
+      return (struct blend_factor_sel){BLEND_READS_TILE, S2A, inv};
+   case SGXWS_BF_SRC_ALPHA_SATURATE:
+      /* min(src1.a, 1 - src2.a) = min(As, 1 - Ad) on the src side, the only
+       * side GLES allows it on */
+      return (struct blend_factor_sel){BLEND_READS_TILE, ASAT, false};
+   case SGXWS_BF_CONSTANT_COLOR:
+   case SGXWS_BF_ONE_MINUS_CONSTANT_COLOR:
+      return (struct blend_factor_sel){BLEND_READS_CONSTANT, k, inv};
+   case SGXWS_BF_CONSTANT_ALPHA:
+   case SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA:
+      return (struct blend_factor_sel){BLEND_READS_CONSTANT, ka, inv};
+   default: /* ZERO, and ONE as its complement */
+      return (struct blend_factor_sel){BLEND_READS_COLOUR, ZERO, inv};
+   }
+}
+
 #define BLEND_CONST_INSTS 5
 
 static void
 blend_const_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
                   uint32_t w[BLEND_CONST_INSTS][2])
 {
-   /* per factor: src1 of the dst side and its selectors; src2 of the src side
-    * and its */
-   enum { COLOUR, TILE, CONSTANT };
-   static const uint8_t reads[15] = {
-      COLOUR, COLOUR, COLOUR, COLOUR,   COLOUR,   COLOUR,   TILE,    TILE,
-      TILE,   TILE,   TILE,   CONSTANT, CONSTANT, CONSTANT, CONSTANT};
-   static const uint32_t d_hi[15] = {0,      0x8000, 0x10,   0x8010, 0x18,
-                                     0x8018, 0x38,   0x8038, 0x30,   0x8030,
-                                     0x8,    0x10,   0x8010, 0x18,   0x8018};
-   static const uint32_t s_hi[15] = {0,         0x1000000, 0x80,     0x1000080,
-                                     0xc0,      0x10000c0, 0x1c0,    0x10001c0,
-                                     0x180,     0x1000180, 0x40,     0x180,
-                                     0x1000180, 0x1c0,     0x10001c0};
    const unsigned f[4] = {b->fd, b->fda, b->fs, b->fsa};
 
    for (unsigned i = 0; i < 4; i++) {
-      unsigned k = f[i] < 15 ? f[i] : 0;
+      struct blend_factor_sel fs = blend_factor_sel(f[i] < 15 ? f[i] : 0, i < 2);
       uint32_t lo, hi;
 
       if (i < 2) { /* src1 at l7-13, bank l30-31: pa 2, o 1, sa 3 */
-         lo = reads[k] == COLOUR ? 0x80000000u | color_pa << 7
-              : reads[k] == TILE ? 0x40000000u
-                                 : 0xc0000000u | SGXWS_BLEND_CONST_SA << 7;
+         lo = fs.reads == BLEND_READS_COLOUR ? 0x80000000u | color_pa << 7
+              : fs.reads == BLEND_READS_TILE ? 0x40000000u
+                                             : 0xc0000000u | SGXWS_BLEND_CONST_SA << 7;
          lo |= 0x10200000; /* r1, src2 o0 */
-         hi = d_hi[k] | (i ? 0x90800800 : 0x90807800);
+         /* the factor is c2: h3-5, complement h15 */
+         hi = fs.sel << 3 | (fs.inv ? 1u << 15 : 0) | (i ? 0x90800800 : 0x90807800);
       } else { /* src2 at l0-6, bank l28-29: pa 2, o 1, sa 3 */
-         lo = reads[k] == COLOUR ? 0x20000000u | color_pa
-              : reads[k] == TILE ? 0x10000000u
-                                 : 0x30000000u | SGXWS_BLEND_CONST_SA;
+         lo = fs.reads == BLEND_READS_COLOUR ? 0x20000000u | color_pa
+              : fs.reads == BLEND_READS_TILE ? 0x10000000u
+                                             : 0x30000000u | SGXWS_BLEND_CONST_SA;
          lo |= color_pa << 7 | 0x80000000; /* r0, src1 pa<c> */
-         hi = s_hi[k] | (i == 3 ? 0x90800800 : 0x90807800);
+         /* the factor is c1: h6-8, complement h24 */
+         hi = fs.sel << 6 | (fs.inv ? 1u << 24 : 0) | (i == 3 ? 0x90800800 : 0x90807800);
       }
       if (b->atrade && (i & 1))
          lo ^= 1u << 21; /* r1 <-> r0 */
@@ -2230,12 +2825,37 @@ wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
           (m & 4 ? 1u << 14 : 0) | (m & 8 ? 1u << 11 : 0);
 }
 
+static uint32_t
+upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
+          const uint64_t *code1, unsigned count1, unsigned color_pa,
+          const struct sgxws_blend *blend, const struct sgxws_fs_feedback *fb,
+          unsigned temps);
+
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned color_pa, const struct sgxws_blend *blend,
-                int discard_pa, unsigned temps)
+                const struct sgxws_fs_feedback *fb, unsigned temps)
 {
-   uint32_t *w = malloc((count + 12) * 8), va, b[2];
+   return upload_fs(c, code, count, NULL, 0, color_pa, blend, fb, temps);
+}
+
+uint32_t
+sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
+                      const uint64_t *code1, unsigned n1, unsigned color_pa1,
+                      const struct sgxws_blend *blend,
+                      const struct sgxws_fs_feedback *fb, unsigned temps)
+{
+   return upload_fs(c, code, n, code1, n1, color_pa1, blend, fb, temps);
+}
+
+static uint32_t
+upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
+          const uint64_t *code1, unsigned count1, unsigned color_pa,
+          const struct sgxws_blend *blend, const struct sgxws_fs_feedback *fb,
+          unsigned temps)
+{
+   int discard_pa = fb ? fb->discard_pa : -1, depth_pa = fb ? fb->depth_pa : -1;
+   uint32_t *w = malloc((count + count1 + 12) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
 
@@ -2244,30 +2864,45 @@ sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
    /* a constant-colour blend works in r0, r1 */
    if (blend && blend->blend && blend->constant && temps < 2)
       temps = 2;
-   if (discard_pa >= 0) {
+   if (discard_pa >= 0 || depth_pa >= 0) {
       /*
        * A program that discards runs in two phases (ISA.md "Phases, visibility
-       * feedback and discard"; the DDK's words for `if (q.x > 0.0) discard`):
+       * feedback and discard"):
        * phase 0 = phas to phase 1, pcoeff (hands the ISP the depth plane
        * the PDS iterated into pa<n>..), the shader with the keep predicate in
        * p1, and atst8 [end] in place of the compiler's feedback nop (its last
        * instruction); phase 1, on an even instruction, = the colour out
        * without end, then phas.i #0, #0 [end].
+       * A gl_FragDepth write puts depthf pa<depth_pa>, sa3, sa4 [end] there
+       * instead ((p1) depthf with a discard), and without a discard a no-op
+       * in pcoeff's slot (sgxws_fs_feedback).
        */
       uint8_t reloc[1] = {0};
 
       put(w, &n, 0,
           0xfa440100u | ((temps + 3) / 4)); /* phas.i #phase1, #t [wait=1] */
-      put(w, &n,
-          0xb0000004u | (uint32_t)discard_pa << 14 |
-             (uint32_t)(discard_pa + 1) << 7,
-          0xf8300004u); /* pcoeff pa<n>, pa<n+1>, sa4 */
+      if (discard_pa >= 0)
+         put(w, &n,
+             0xb0000004u | (uint32_t)discard_pa << 14 |
+                (uint32_t)(discard_pa + 1) << 7,
+             0xf8300004u); /* pcoeff pa<n>, pa<n+1>, sa4 */
+      else
+         put(w, &n, 0xa0000000u, 0x28a10002u); /* mov pa0, pa0 [skipinv rcnt] */
       put_code(w, &n, code, count - 1);
-      put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14,
-          0xf9340406u); /* atst8 [end] */
+      if (depth_pa >= 0)
+         /* (p1) depthf pa<d>, sa3, sa4 [end]: h9-10 = 2 (p1) with a discard,
+          * 0 (every pixel) without (ISA.md, gl_FragDepth, H10) */
+         put(w, &n, 0xf0000184u | (uint32_t)depth_pa << 14,
+             discard_pa >= 0 ? 0xfb340404u : 0xfb340004u);
+      else
+         put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14,
+             0xf9340406u); /* atst8 [end] */
       if (n & 1)
          put(w, &n, 0, 0xf8000140u); /* nop: phase 1 on 16 bytes */
       w[0] = n;                      /* relocated to an absolute pc */
+      /* split: the colour's code runs here, only for the pixels that pass */
+      if (code1)
+         put_code(w, &n, code1, count1);
       if (blend && blend->blend)
          put_blend(w, &n, blend, color_pa, !masked, true); /* without end */
       if (masked) {
@@ -2290,8 +2925,8 @@ sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
       wmask_words(blend->wmask, color_pa, b);
       put(w, &n, b[0], b[1]);
    } else if (!blend || !blend->blend) {
-      /* mov o0, pa<c> [skipinv end mask=1], as the DDK writes it (its uniform
-       * shader's mov o0, sa9); without the mask this mov locks the GPU up */
+      /* mov o0, pa<c> [skipinv end mask=1]; without the mask this mov locks
+       * the GPU up */
       put(w, &n, 0xa0000000u | color_pa << 7, 0x28851001u);
    }
    va = sgxws_usse_upload(c, false, w, n, NULL, 0);
@@ -2331,7 +2966,7 @@ clear_pds_masked(struct sgxws_ctx *c, unsigned wmask)
       fs = sgxws_usse_upload(c, false, w, 2, NULL, 0);
       c->clear_pds_masked[wmask] =
          pds_pixel(c, doutu_w0(c, fs, false, 0), doutu_w1_pixel(true, false),
-                   &clear_douti, NULL, 1, NULL, NULL);
+                   &clear_douti, NULL, NULL, NULL, 1, NULL, NULL);
    }
    return c->clear_pds_masked[wmask];
 }
@@ -2365,7 +3000,14 @@ sgxws_get_stats(struct sgxws_ctx *c, struct sgxws_stats *st, bool reset)
    st->room_flushes = c->room_flushes;
    st->gpu_indices = c->gpu_indices;
    st->gpu_verts = c->gpu_verts;
+   st->state_sent = c->state_sent;
+   st->state_skipped = c->state_skipped;
+   st->bo_allocs = c->dev->bo_allocs;
+   st->bo_cached = c->dev->bo_cached;
+   st->bo_busy = c->dev->bo_busy;
    if (reset) {
+      c->dev->bo_allocs = c->dev->bo_cached = c->dev->bo_busy = 0;
+      c->state_sent = c->state_skipped = 0;
       c->ns_flush = c->ns_cmd = c->ns_kick = c->ns_target_wait =
          c->ns_slot_wait = 0;
       c->ns_sync_wait = c->ns_fence_wait = c->ns_latency =

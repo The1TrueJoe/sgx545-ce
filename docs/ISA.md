@@ -1,91 +1,78 @@
 # SGX545 USSE instruction set (Cedarview DDK 1.7)
 
-The 64-bit USSE instructions the DDK's shader compiler emits for the SGX545,
-decoded from the compiler's own assembler. `dis.py` disassembles USP shader
-binaries with it, `asm.py` assembles the same text, and both run on the
-tables in `hw.py` + `hw_*.py`.
+The 64-bit USSE instructions of the SGX545, as the DDK 1.7 shader compiler emits them
+and the hardware runs them. `dis.py` disassembles USP shader binaries, and `asm.py`
+assembles the same text. Mesa's encoder and disassembler (`mesa/src/sgx/isa/sgx.xml`)
+are written from this page.
 
-## How each fact was established
+## How each fact is established
 
 Every field below carries one of these tags:
 
-- **encoder**: read from libusc's USE assembler (useasm.c, compiled into
-  `libusc.so.1.7.862890`; `UseAssembleInstruction` at libusc + 0x109f50
-  dispatches to one encoder per instruction class) in a Ghidra decompile, and
-  confirmed by running that same encoder: `oracle.py` executes it in an i386
-  emulator (unicorn), bit-exact against 5045 instructions logged from real
-  compiles on the CE5300 board. Each `check_<area>.py` sweeps the encoder over every
-  field value of its forms and checks that `hw.py` decodes the result with
-  no unexplained bit and re-encodes it from text. So an encoder field's
-  *position and values* are facts; its *meaning* is only as good as the
-  USEASM input that drives it (named below where libusc names it: asserts,
-  flag names, its own pseudo-ops).
-- **corpus**: what the GLSL compiler emits for a one-feature shader
-  (`gen.py`, `gen2.py`, `gen3.py`; corpora `corpus/c1..c3`), or what
-  toggling that feature changes.
-- **hardware**: drawn on the CE5300 board (docs/NOTES.md, the replayer). Most of these come from
-  `hwt.py`: a hand-assembled fragment program moves its result to `o0`, which
-  the PBE stores unchanged, so one pixel of the back buffer is the 32-bit
-  register. Each hardware tag names the test (`hwt_<suite>.py` / test name;
-  logs in `hwt_out/`). See "Hardware checks" below.
-- **writer / reader / driver**: read from libusc's USP writer, the GLES
-  driver's USP loader, or the rest of libGLESv2 (finalizer, draw-time
-  program builder, linker) and libglslcompiler, in Ghidra decompiles
-  (USP sections only).
-- **guess**: a name or meaning that fits but isn't backed by the above.
+- **oracle**: a field's position, its values, whether a form is accepted, and what an
+  input encodes to. These come from encoding through the vendor's shader assembler as
+  a black box and decoding the words. The `check_<area>.py` sweeps encode every field
+  value of every form (about 20,000 outputs) and require each word to decode with no
+  unexplained bit and to re-encode from its text. The same encoding is bit-exact
+  against 5045 instructions logged from real compiles on a CE5300 board. A field's position
+  and values are therefore facts. Its meaning is a fact only where corpus or hardware
+  evidence backs it.
+- **corpus**: what the DDK's GLSL compiler emits for a one-feature shader (`gen.py`,
+  `gen2.py`, `gen3.py`; corpora `corpus/c1..c3`), or what toggling that feature
+  changes.
+- **hardware**: run on the CE5300 board. Most of these come from `hwt.py`: a hand-assembled
+  fragment program moves its result to `o0`, which the PBE stores unchanged, so one
+  pixel of the back buffer is the 32-bit register. Each hardware tag names the test
+  (`hwt_<suite>.py` / test name; logs in `hwt_out/`). See "Hardware checks" below.
+  Where a form is in `mesa/src/sgx/isa/tests/gles2.txt`, the open compiler emits it
+  and passes dEQP-GLES2 on the CE5300 board with it; that exercises the form, though not the
+  field values the compiler leaves at their defaults.
+- **capture**: seen in the vendor driver's output: its USP binaries (`usp.py` parses
+  every corpus binary), its finalized programs and state in GPU memory, its traces.
+- **unconfirmed**: stated but not yet backed by any of the above. Each one is listed
+  in "Gaps" at the end with the test that would confirm it. Shipping code must not
+  rely on an unconfirmed fact.
+- **guess**: a name or meaning that fits but has no other backing.
 
-In the terms of docs/CLEANROOM.md: **encoder** is `static` (the decompile)
-plus `oracle` (the same encoder run black-box, which is what makes a
-position or value a fact); **corpus** is `oracle` (the DDK's compiler as a
-behavioral oracle); **hardware** is `hardware`; **writer / reader /
-driver** are `static`. A fact tagged only **guess** or `static` is not
-something shipping code may rely on yet.
+In the terms of docs/CLEANROOM.md: **oracle** and **corpus** are `oracle`, **hardware**
+is `hardware`, and **capture** is `capture`.
 
 What an encoder needs from this page, and where it is:
-- The 64-bit word, bit names and instruction order: above.
-- Which class a word is: "Instruction classes" (h27-31) and, inside each
-  class, the sub-op bits named in its section.
-- Register banks, extension bits, number widths, indexing, constants:
-  "Registers" and "Operands"; slots that differ are listed in their class.
-- Per-class fields: each class's table. A field written `h6-8, h24` or
-  `h13 + h18` is split: the first range holds the low bits.
-- Modal state that the word alone doesn't carry: format select (h22 in the
-  float classes, per instruction), format control (`setfc`, per program;
-  "MOE control"), repeats and increments ("Float classes", "Fields shared by
-  hw 10-19"), and dual issue ("Dual issue").
-- Bank codes, number fields, unused slots and the text notation's defaults:
-  "Encoding conventions" below.
+- The 64-bit word, bit names and instruction order: below.
+- Which class a word is: "Instruction classes" (h27-31) and, inside each class, the
+  sub-op bits named in its section.
+- Register banks, extension bits, number widths, indexing, constants: "Registers" and
+  "Operands". Slots that differ are listed in their class.
+- Per-class fields: each class's table. A field written `h6-8, h24` or `h13 + h18` is
+  split: the first range holds the low bits.
+- Modal state that the word alone doesn't carry:
+  - format select (h22 in the float classes, per instruction);
+  - format control (`setfc`, per program; "MOE control");
+  - repeats and increments ("Float classes", "Fields shared by hw 10-19");
+  - dual issue ("Dual issue").
+- Bank codes, number fields, unused slots and the text notation's defaults: "Encoding
+  conventions" below.
 
-Function names are Ghidra's with its 0x10000 image base: `FUN_001147f0` is
-libusc + 0x1047f0. Bit names: `l<n>` is bit n of the low word, `h<n>` of the
-high word; an instruction is stored low word first.
+Bit names: `l<n>` is bit n of the low word, `h<n>` of the high word. An instruction is
+stored low word first.
 
 ## Tools
 
 | file | what it does |
 |---|---|
-| `oracle.py` | libusc's encoder in an emulator: `Oracle().encode(USE_INST)` |
-| `uinst.py` | build USEASM instructions (`U(op, A(type, n, flags, index), ..., f1=, f2=, test=)`), encode with the oracle |
-| `hw.py`, `hw_*.py` | the instruction forms (framework + one module per group of classes); `decode`, `encode`, `fmt`, `parse` |
-| `dis.py` | disassemble USP binaries (`python3 dis.py corpus/c3`) or hex words (`-x hi lo`) |
-| `asm.py` | assemble dis.py's text; `--check` runs `hwcheck.py`. Also accepts the older fields.json syntax (`asm_fz.py`) for existing callers |
+| `asm.py` | text to words and back through `sgx-asm` / `sgx-disasm` (built from `mesa/src/sgx/isa/sgx.xml`; `sh ukernel/sgx-asm.sh DIR`), and `parse()` of the text |
 | `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the CE5300 board through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
-| `hwcheck.py` | every corpus word: has a form, no unexplained bit, text round-trips |
-| `check_float.py`, `check_pack.py`, `check_int.py`, `check_mem.py` | oracle sweeps per area (run from the scratchpad with `LIBUSC=` and the venv that has unicorn) |
-| `usp.py`, `smpblock.py` | the USP container and its texture-sample blocks |
-| `isadoc_cov.py` | spec side: does this page state every form's identifying bits, field positions, operand slots and enum values (necessary, not sufficient) |
-| `blind.py` | spec side: random valid instructions per form, and the score of an encoder written from this page alone against them (docs/CLEANROOM.md "Validation"). Two blind passes on 2026-11-01, fresh sessions that read only `docs/`: 120/122 words exact before the "Encoding conventions" section and the fixes it prompted (41% marked sure), 120/120 after (88% sure) |
-| `gen3.py` | the texture / flow / int / index / vertex corpus (`corpus/c3`, USEASM log `corpus/encfuzz_c3.log.gz`) |
-| `encfuzz.c`, `fz.py`, `mkfields.py`, `mkisa.py`, `fields.json`, `dis_fz.py`, `asm_fz.py`, `ISA_fz.md` | the first, bit-flip-fuzzing pass (superseded; kept for history) |
+| `gen3.py` | the texture / flow / int / index / vertex corpus (`corpus/c3`) |
 
-Status: all 4154 instructions (1570 distinct) of the three corpora decode
-with no unexplained bit and round-trip (`python3 hwcheck.py`), and the four
-oracle sweeps pass (about 20,000 encoder outputs).
+Oracle input formats for the sweeps are in `tools/isa/oracle-map.md`.
 
+Status: all 4154 instructions (1570 distinct) of the three corpora decode with no
+unexplained bit and round-trip (`python3 hwcheck.py`), and the four oracle sweeps pass
+(about 20,000 encoder outputs).
 ## Encoding conventions (read this first)
 
 These rules hold in every class unless the class's section says otherwise.
-All **encoder** (and every one of them is exercised by the corpora's words);
+All **oracle** (and every one of them is exercised by the corpora's words);
 the bank codes are also **hardware** (every hwt test builds its operands from
 them).
 
@@ -128,8 +115,8 @@ r = 0, pa = 1. A slot with no bank bits takes the one kind its class names.
   whatever number is there. In a slot that can't select the i bank the
   register file's alias is used: i<n> is r(124+n), and the field holds
   124 + n (under format control that is register 60 + n with the format
-  flag set, which is how libusc writes a C10 internal register in sop3's
-  src0: **corpus**, and pixel-identical on hardware in the compiler's A/B
+  flag set, which is how the vendor compiler emits a C10 internal register in
+  sop3's src0: **corpus**, and pixel-identical on hardware in the compiler's A/B
   runs).
 - idx<n> (destination ext bank 2): n as printed.
 - Indexed `bank[idx<k>+off]`: with a field of w bits (7, or 6 under format
@@ -164,12 +151,14 @@ Two different things change how numbers read.
 ### Unused slots and fixed patterns
 
 A slot a form doesn't use is zero, except where the class names a pattern.
-The pattern libusc writes for an unused source is the immediate #0: bank 2
-and the extension bit, number 0: in src2, l29 + h16. mov, rlp, smp without
-a LOD source and ld without a range operand write it in src2.
+The pattern the vendor assembler writes for an unused source is the
+immediate #0: bank 2 and the extension bit, number 0: in src2, l29 + h16.
+mov, rlp, smp without a LOD source and ld without a range operand write it
+in src2 (**oracle**, **corpus**).
 
 A bit that no field, operand slot or fixed value of the form names is 0:
-libusc never sets one, and no corpus word has one (**encoder**, **corpus**).
+the vendor assembler never sets one, and no corpus word has one (**oracle**,
+**corpus**).
 That covers, for example, hw 1's h22, hw 3/4's h10 beside the one-bit sub-op,
 h7 (|src0|) in the forms without a src0, mov/movc's h3-6, smp's h19,
 testmask's h2-3 and h6, and every bit the special class's forms don't list.
@@ -215,7 +204,7 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
   is `pa4.c10` (a whole register), and for efo an F16 one is `r3.f16.lo` /
   `.hi` (an internal register only takes the flag: `i1.f16`, as under format
   select). The destination follows format control like the sources, for efo's
-  F16 enable as well as the C10 one (**encoder**). Either is accepted only while the enable is on.
+  F16 enable as well as the C10 one (**oracle**). Either is accepted only while the enable is on.
   hw 1's source format is not an operand suffix: its operand is plain and the
   brackets carry `f16` (h7), `c10` (h8), `chan=n` (h3-4) and `f16d` (h2,
   F16 destination).
@@ -268,9 +257,9 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
 - **Format control** is program state. A text check starts at the program-start
   state (C10 on, efo F16 off) and applies each `setfc #efo_f16, #c10` line in
   the order the lines come.
-- Field widths are the word's; ranges a section quotes from libusc (imo
-  -32..31, op0xfd n 0..8, the sizes and modes libusc rejects) are limits of
-  its encoder. A value outside them still has the encoding the field gives;
+- Field widths are the word's; ranges a section quotes from the vendor
+  assembler (imo -32..31, op0xfd n 0..8, the sizes and modes it rejects) are
+  limits of that assembler (**oracle**). A value outside them still has the encoding the field gives;
   what the hardware does with it is not known.
 - In the trailing brackets a bare name is a one-bit field that is set, and
   `name=v` is the field's value, except `rpt=n`, which is the repeat count:
@@ -293,12 +282,12 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
 - smlsi's `#0.zyxw` is a swizzle: the operand's flag bit set and the value
   `x | y << 2 | z << 4 | w << 6` with x = 0, y = 1, z = 2, w = 3 for the
   channel each position reads (`#0.zyxw` = 0xc6).
-- Values the encoder takes divided by 4 (smlsi `lim0-2`, phas.i `temps4`)
-  print as the stored field.
-- `syncend` is h23 and `xsyncend` h12, two separate bits. libusc's extended
-  sync-end sets both.
+- Values the vendor assembler takes as a multiple of 4 and stores divided
+  by 4 (smlsi `lim0-2`, phas.i `temps4`) print as the stored field.
+- `syncend` is h23 and `xsyncend` h12, two separate bits. The vendor
+  assembler's extended sync-end sets both (**oracle**).
 
-## Hardware checks (hwt.py, CE5300 board, 2026-10-28)
+## Hardware checks (hwt.py, CE5300, 2026-10-28)
 
     python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, BOARD_SH set; see hwt.py)
 
@@ -308,6 +297,8 @@ program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN
 triangle are rN (all 32 checked pixels equal; the background is the clear
 color). Inputs come from `limm`. About 400 draws, no GPU hang or recovery.
 Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
+On the open stack (`tools/isa/hwt_open.py`, 2026-11-11), hwt_p1-p4, p6-p8 and p10-p12
+reproduced all 650 recorded values exactly; open-stack logs are in `hwt_out/open/`.
 
 | suite | what | result |
 |---|---|---|
@@ -318,11 +309,15 @@ Logs: `hwt_out/<suite>.txt` (a second full run, identical to the first).
 | hwt_p4 | fminmax/fmaxmin (all orders); fmad16 swizzles x 3 sources; pck dmask lanes, u8/s16/f16 rounding, rint rnd 0-3, u8 unpack lanes | confirmed; swizzle 0-3 = lohi, lolo, hihi, f32; rnd = nearest-even, down, up, zero; **f32 -> f16 truncates** |
 | hwt_p5 | fadm/fmsa on new inputs; h2 partial write; C10 chan 3 and range | as above |
 | hwt_ba | ba absolute target | instruction index from the code base |
+| hwt_window | code base windows 0-2; ba from bases 0-2; DOUTU offset and ba target past 512 KiB | base n runs heap + n·512K + offset; **ba, and phas.i, count from the task's code base, not the heap**; both fields reach past the window |
 | hwt_p6 | sop2 U8 select/add/sub/mul; C10 operands with each setfc | **setfc's 2nd argument is the C10 enable, on at start** |
 | hwt_p7 | efo F16 numbering; fmad fused?/rounding; fmad16 rounding; C10 alpha; testmask byte/word; call + lapc; fdp; bitwise | efo F16 counts halves; **fmad rounds the product (not fused)**; fmad16 rounds to nearest; fdp writes only the last iteration's dst |
 | hwt_p8 | setfc's first argument; C10 alpha source; C10 -> U8 byte order | **setfc's 1st argument is the efo F16 enable, off at start**; C10 alpha reads channel 0 |
 | hwt_p10 | test with format select: F16 numbering, chan on F16 and C10 compares | **test's F16 operands count halves too**; C10 operands are whole registers; chan table |
 | hwt_p11 | a repeat over an F16 operand | moe / inc step it by one half |
+| hwt_p13 | pck.u8.u8 lane picks per dmask (3, 12, 6, 9) and RGBA8 -> BGRA8 in two; and / or of 0 and 0xffffffff test masks; test.and.eq into p0 on a mask | an 8-bit source's lane picks its byte, the first source filling the lowest dmask lane; and / or are bitwise on masks; test.and.eq is true for a zero mask, false for 0xffffffff (2026-11-09, all 11 ok) |
+| hwt_gaps (open stack) | ld.a.d/w/b offsets and sizes; i0 across loads and a wdf, with and without nosched; test with a dest and with mask=15; fddp's i<n>; ima32 hi | see "hw 1d: ld", "Dual issue", "test vs testmask", fddp, ima32 (2026-11-11, `tools/isa/hwt_open.py` through `sgx_hwt`: powervr_sgx and the open microkernel, nothing from the vendor stack) |
+| hwt_int (open stack) | ima32 add/sub/multiply low words, immediates, `-a` as `a * c56`, high words unsigned and `.sgn`; testmask.xor eq/ne and testmask.or neg/pos/gt/le dwords; test.xor / test.and into p0; and.inv with a register src2, xor.inv #0, asr / shl by a register; pck.f32.s16/u16 lanes, pck.u16.f32 pairs and clamping; frcp | all 50 expected words (the integer forms the compiler's native_integers path emits: COMPILER-GL3.md); frcp exactly rounded on 3, 7, 1000003, 4294967040, 1.5 (2026-11-11, pvrsrvkm normal boot, `sgx_hwt` services backend) |
 | hwt_p12 | efo's m/a/i/d modes, wi, negates, chaining; fdual's every secondary and primary, i0s0, slot sharing, negates, rpt=2, same-word timing | all units as tabled; secondary sources settled (sd = 1st, sb, sc); sec 3 is fsubflr; neg1/neg2 primary only; same-word read of an internal register being written is a **race** (efo d, fdual primary) |
 
 hwt_p7-p9's `test` lines with `.f16` / `.c10` were drawn before the assembler
@@ -337,59 +332,56 @@ F16 format control), dis.py prints and asm.py takes the register and the half:
 `r0.f16.lo` = encoded number 0, `r0.f16.hi` = 1, `pa3.f16.lo` = 6. A bare
 `.f16` there is an error, as is a `.f16` / `.c10` an instruction can't encode
 (it used to be dropped); asm.py sets `fmt` itself when an operand has a format
-suffix, as USEASM does. C10 operands stay whole registers (`pa4.c10`).
+suffix. C10 operands stay whole registers (`pa4.c10`).
 
 ## Instruction classes
 
-h27-31 is the hardware opcode. One encoder per class:
+h27-31 is the hardware opcode:
 
-| hw | class | forms | encoder | section |
-|---|---|---|---|---|
-| 00 | float 3-src | fmad fadm fmsa fsubflr | FUN_001147f0 | Float |
-| 01 | float scalar | frcp frsq flog2 fexp2 fsqrt fsin fcos | FUN_001147f0 | Float |
-| 02 | dot products | fdp fdpc fddp fddpc | FUN_001147f0, FUN_001159f0, FUN_00115d10, FUN_00115540 | Float |
-| 03 | min/max | fmaxmin fminmax | FUN_001147f0 | Float |
-| 04 | derivatives | fdsx fdsy | FUN_001147f0 | Float |
-| 05 | moves | mov movc op0xf3 | FUN_00112370, FUN_0010ba40, FUN_00119b00 | Moves |
-| 06 | f16 | fmad16 | FUN_001147f0 | Float |
-| 07 | efo | efo | FUN_00116100 | Integer |
-| 08 | pack | pck.<dst>.<src> | FUN_001165c0 | Pack |
-| 09, 0f | test | test testmask | FUN_00112770 | Pack |
-| 0a-0e | bitwise | and or xor shl rol shr asr rlp | FUN_00117270 | Pack |
-| 10-1a | integer / fixed point | sop2 sop3 sopwm ima8 ima16 imae fpma dot3/dot4 ... | see Integer | Integer |
-| 1b | dual issue | fdual | FUN_00113620 | Dual issue |
-| 1c | sample | smp | FUN_0010a3f0 | Memory |
-| 1d, 1e | memory | ld eld st | FUN_0010b190, FUN_0010ace0 | Memory |
-| 1f | special | branches, MOE setup, wdf, nop, limm, ... | dispatcher + several | Memory |
+| hw | class | forms | section |
+|---|---|---|---|
+| 00 | float 3-src | fmad fadm fmsa fsubflr | Float |
+| 01 | float scalar | frcp frsq flog2 fexp2 fsqrt fsin fcos | Float |
+| 02 | dot products | fdp fdpc fddp fddpc | Float |
+| 03 | min/max | fmaxmin fminmax | Float |
+| 04 | derivatives | fdsx fdsy | Float |
+| 05 | moves | mov movc op0xf3 | Moves |
+| 06 | f16 | fmad16 | Float |
+| 07 | efo | efo | Integer |
+| 08 | pack | pck.<dst>.<src> | Pack |
+| 09, 0f | test | test testmask | Pack |
+| 0a-0e | bitwise | and or xor shl rol shr asr rlp | Pack |
+| 10-1a | integer / fixed point | sop2 sop3 sopwm ima8 ima16 imae fpma dot3/dot4 ... | Integer |
+| 1b | dual issue | fdual | Dual issue |
+| 1c | sample | smp | Memory |
+| 1d, 1e | memory | ld eld st | Memory |
+| 1f | special | branches, MOE setup, wdf, nop, limm, ... | Memory |
 
 ## Registers
 
 | prefix | file | encoding | notes |
 |---|---|---|---|
-| r | temporaries | 7-bit number | r124-r127 are the internal registers i0-i3: the encoder writes i<n> as r(124+n) in any slot that can't name the internal bank (**encoder**); under format select, numbers are 6 bits |
-| pa | primary attributes | 7-bit | fragment: iterated varyings and non-dependent texture results; vertex: the vertex attributes; the fragment color is assembled here (**corpus**). The budget is 0x80 minus USP header +0x3c (notes from the finalizer) |
+| r | temporaries | 7-bit number | r124-r127 are the internal registers i0-i3: the vendor assembler encodes i<n> as r(124+n) in any slot that can't name the internal bank (**oracle**); under format select, numbers are 6 bits |
+| pa | primary attributes | 7-bit | fragment: iterated varyings and non-dependent texture results; vertex: the vertex attributes; the fragment color is assembled here (**corpus**). The budget is 0x80 minus USP header +0x3c (**unconfirmed**) |
 | sa | secondary attributes | 7-bit | uniforms, texture state, results of the secondary update program (**corpus**) |
 | o | outputs | 7-bit | vertex outputs; the finalized fragment color (**hardware**) |
-| c | hardware constants | number < 64 on the c/g bank | table below (**encoder**: libusc's regpack.c) |
-| g | special registers | number + 0x40 on the c/g bank | g0-g45 (**encoder**: range); the corpus uses g17 as the per-instance stride when addressing temp arrays |
+| c | hardware constants | number < 64 on the c/g bank | table below (**hardware**, hwt_p3) |
+| g | special registers | number + 0x40 on the c/g bank | g0-g45 (**oracle**: range); the corpus uses g17 as the per-instance stride when addressing temp arrays |
 | i | internal | i0-i3 | bank 3 + ext in dst/src1/src2; fdual's secondary op works in i0-i2 |
-| idx | index registers | idx1, idx2 (USEASM type 4, 1-3) | set by an integer op (ima16/imae into idx), then `bank[idxN+off]` (**encoder**, **corpus**) |
+| idx | index registers | idx1, idx2 | set by an integer op (ima16/imae into idx), then `bank[idxN+off]` (**oracle**, **corpus**) |
 | p | predicates | p0-p3 | written by `test`, read by every instruction's predicate field |
 | # | immediate | 7 bits in a source slot | bigger constants: `limm` (special class) or sa |
 
-Indexed operands (**encoder**): any of r, o, pa, sa as `bank[idxN+off]`; the
+Indexed operands (**oracle**): any of r, o, pa, sa as `bank[idxN+off]`; the
 7-bit number field holds bank(2) | index register(1) | offset(4) (offset 3
 bits under format select). The destination's indexed bank is bank 3; a
 source's is bank 0 + extension. src0 can't be indexed.
 
 ### Hardware constants (c<n>)
 
-libusc's table of the hardware's special constants
-(`USEASM_NUM_HW_SPECIAL_CONSTS`, regpack.c; **encoder**), every entry read
-back on the CE5300 board (**hardware**, hwt_p3 `c0`..`c63`: `mov o0, cN`). The table
-below is the hardware's; two rows differ from libusc's: **c46 and c47 are the
-F16 pair (1.0, 1.0) = 0x3c003c00 like c45** (libusc says 0.5 and 1.0), and
-c57-c63 exist (libusc stops at c56). c28-c44 are the correctly rounded f32
+The hardware's special constants, every entry read back on the CE5300 board
+(**hardware**, hwt_p3 `c0`..`c63`: `mov o0, cN`). **c46 and c47 are the
+F16 pair (1.0, 1.0) = 0x3c003c00 like c45**, and c57-c63 exist. c28-c44 are the correctly rounded f32
 values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
 0x35d00d01, c44 = 0x3caaaaab).
 
@@ -400,10 +392,10 @@ values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
 | 30 | √2 | 31 | 1/√2 | 32 | π/4 |
 | 33 | π/2 | 34 | π | 35 | 1/π |
 | 36 | 2/π | 37 | 4/π | 38 | 2π |
-| 39 | 2^-16 | 40-44 | sin/cos series coefficients (1.55e-6, 2.17e-5, 2.60e-4, 2.60e-3, 0.0208) | 45 | F16 pair (1.0, 1.0) (EURASIA_USE_SPECIAL_CONSTANT_FLOAT16ONE) |
-| 46 | F16 pair (1.0, 1.0) (hardware; libusc: 0.5) | 47 | F16 pair (1.0, 1.0) (hardware; libusc: 1.0) | 48-51 | 0.0 (four, for vec4 repeats) |
-| 52-55 | 1.0 (four) | 56 | 0xffffffff (EURASIA_USE_SPECIAL_CONSTANT_INT32ONE) | 57-59 | 0xffffffff (hardware) |
-| 60-63 | 0x7fff7fff (hardware; F16 NaN pair, or two s16 maxima) | | | | |
+| 39 | 2^-16 | 40-44 | sin/cos series coefficients (1.55e-6, 2.17e-5, 2.60e-4, 2.60e-3, 0.0208) | 45 | F16 pair (1.0, 1.0) |
+| 46 | F16 pair (1.0, 1.0) | 47 | F16 pair (1.0, 1.0) | 48-51 | 0.0 (four, for vec4 repeats) |
+| 52-55 | 1.0 (four) | 56 | 0xffffffff | 57-59 | 0xffffffff |
+| 60-63 | 0x7fff7fff (F16 NaN pair, or two s16 maxima) | | | | |
 
 ## Float, moves and dual issue (hw 00-06, 1b)
 
@@ -411,15 +403,15 @@ values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
 
 | bits | field | meaning | evidence |
 |---|---|---|---|
-| h27-31 | opcode | hardware class | encoder |
-| h24-26 | pred | 0 always, 1 p0, 2 p1, 3 p2, 4 p3, 5 !p0, 6 !p1, 7 pn (per-instance predicate) | encoder (FUN_00106f30 maps USEASM 0-7 to these codes); the pn name is a **guess** |
-| h24-25 | pred (short form, fdual and some special ops) | 0 always, 1 p0, 2 p1, 3 !p0 | encoder |
-| h23 | skipinv | skip invalid instances (libusc INST_SKIPINV; set on nearly every compiled instruction) | encoder; name from libusc's flag name |
-| h20 | syncs | sync start (libusc INST_SYNCSTART) | encoder; name from libusc's flag name |
-| h11 | nosched | no scheduling (libusc INST_NOSCHED, named in an asm.c assert) | encoder |
-| h18 | end | last instruction of the program | encoder; hardware (the finalized probe programs end with it) |
+| h27-31 | opcode | hardware class | oracle |
+| h24-26 | pred | 0 always, 1 p0, 2 p1, 3 p2, 4 p3, 5 !p0, 6 !p1, 7 pn (per-instance predicate) | oracle; hardware (hwt_p2: p1-p3 and `!p0` / `!p1`); the pn name is a **guess** |
+| h24-25 | pred (short form, fdual and some special ops) | 0 always, 1 p0, 2 p1, 3 !p0 | oracle |
+| h23 | skipinv | skip invalid instances (set on nearly every compiled instruction) | oracle for the bit; corpus for how often it is set; the meaning is **unconfirmed** |
+| h20 | syncs | sync start | oracle for the bit; the meaning is **unconfirmed** |
+| h11 | nosched | no scheduling | oracle for the bit; the meaning is **unconfirmed** |
+| h18 | end | last instruction of the program | oracle; hardware (the finalized probe programs end with it) |
 
-### Operands (generic encoder FUN_00107830)
+### Operands
 
 | slot | number | bank | ext | values |
 |---|---|---|---|---|
@@ -428,43 +420,44 @@ values (c28 = 0x402df854, c32 = 0x3f490fdb, c35 = 0x3ea2f983, c40 =
 | src1 | l7-13 | l30-31 | h17 | r, o, pa, sa; with ext: indexed, c/g, #imm, i |
 | src2 | l0-6 | l28-29 | h16 | same as src1 |
 
-All **encoder**. Indexed: number = bank(2) idx(1) offset(4): `pa[idx1+3]`; under
+All **oracle**. Indexed: number = bank(2) idx(1) offset(4): `pa[idx1+3]`; under
 format select the offset has 3 bits. g (special registers) = number | 0x40
 on the c/g bank; numbers 0-0x2d. Immediates 0-127. Internal registers in a
-slot that can't hold them (src0; dst/src without ext) are r124+n: hardware
-aliases i0-i3 onto r124-r127 (the encoder relies on it).
+slot that can't hold them (src0; dst/src without ext) are r124+n (oracle):
+hardware aliases i0-i3 onto r124-r127 (hardware, hwt_p12: fdual words that
+name r124 / r125 read and write i0 / i1).
 
-### Float classes (FUN_001147f0, hw 0-4, 6)
+### Float classes (hw 0-4, 6)
 
 | class | sub-op | forms |
 |---|---|---|
-| hw0 | h9-10 | 0 fmad (s0*s1+s2), 1 fadm, 2 fmsa, 3 fsubflr (USEASM 0xcf "ffrc" = fsubflr(a, a) = fract) |
+| hw0 | h9-10 | 0 fmad (s0*s1+s2), 1 fadm, 2 fmsa, 3 fsubflr (fsubflr(a, a) = fract(a)) |
 | hw1 | h9-10 + h16 | 0 frcp, 1 frsq, 2 flog2, 3 fexp2, 4 fsqrt, 5 fsin, 6 fcos |
 | hw2 | h9-10 | 0 fdp (l14 clear) / fdpc (l14 set), 1 fddp, 2 fddpc |
 | hw3 | h9 | 0 fmaxmin, 1 fminmax (three sources) |
 | hw4 | h9 | 0 fdsx, 1 fdsy |
 | hw6 | - | fmad16 |
 
-All sub-op values **encoder**; hw1 names **corpus** (one-op shaders); hw0
-fmad/fsubflr **corpus**. Semantics **hardware** (hwt_p1, hwt_p5): fmad =
-s0*s1 + s2; **fadm = (s0 + s1) * s2**; **fmsa = s0*s0 + s1*s2**; fsubflr(a,
-b) = a - floor(b) (2.75, 1.5 -> 1.75; -2.75, -2.75 -> 0.25). Each checked on
-two or three operand sets (fadm (-3, 5, 7.5) -> 15, (2, 3, 4) -> 20,
-(0.5, -6, 3) -> -16.5; fmsa -> 46.5, 16, -17.75); the names stay IMG's enum
-order.
-fminmax/fmaxmin: libusc writes fmin(a, b) as hw3 sub 1 on (a, a, b) and
-fmax(a, b) as sub 0 on (a, b, a) (**encoder**: USEASM 0xc/0xd are rewritten
-to 0x11/0x12). **hardware** (hwt_p4, all six orderings of (1, 2, 3)):
-**fminmax (sub 1) = min(max(s0, s1), s2)**, **fmaxmin (sub 0) = max(min(s0,
-s2), s1)**: a clamp is one instruction, `fminmax d, x, lo, hi`.
+All sub-op values **oracle**; hw1 names **corpus** (one-op shaders), values
+**hardware** (hwt_p3); hw0 fmad/fsubflr **corpus**. Semantics **hardware**
+(hwt_p1, hwt_p5): fmad = s0*s1 + s2; **fadm = (s0 + s1) * s2**; **fmsa =
+s0*s0 + s1*s2**; fsubflr(a, b) = a - floor(b) (2.75, 1.5 -> 1.75; -2.75,
+-2.75 -> 0.25). Each checked on two or three operand sets (fadm (-3, 5,
+7.5) -> 15, (2, 3, 4) -> 20, (0.5, -6, 3) -> -16.5; fmsa -> 46.5, 16,
+-17.75).
+fminmax/fmaxmin: the vendor assembler encodes fmin(a, b) as hw3 sub 1 on
+(a, a, b) and fmax(a, b) as sub 0 on (a, b, a) (**oracle**). **hardware**
+(hwt_p4, all six orderings of (1, 2, 3)): **fminmax (sub 1) = min(max(s0,
+s1), s2)**, **fmaxmin (sub 0) = max(min(s0, s2), s1)**: a clamp is one
+instruction, `fminmax d, x, lo, hi`.
 
-Modifiers, 3-source ops (**encoder**; each bit **hardware**, hwt_p1 `fmad_*`:
+Modifiers, 3-source ops (**oracle**; each bit **hardware**, hwt_p1 `fmad_*`:
 -|src1| and -|src2| combine as expected): h7 = |src0|; src0 negate has no bit
-(libusc folds it into src1's negate for fmad/fmad16/fddp and into src1 and
-src2 for fadm; fmsa rejects it); h5/h6 = -src1 / |src1|; h3/h4 = -src2 /
-|src2|. Two-source ops: src1 h5/h6, src2 h3/h4.
+(the vendor assembler folds it into src1's negate for fmad/fmad16/fddp and
+into src1 and src2 for fadm; fmsa rejects it); h5/h6 = -src1 / |src1|; h3/h4
+= -src2 / |src2|. Two-source ops: src1 h5/h6, src2 h3/h4.
 
-Which slots each form uses (**encoder**). The destination is the generic
+Which slots each form uses (**oracle**). The destination is the generic
 dst slot in all of them except fddp/fddpc (no extension bit). A slot not
 listed is zero.
 
@@ -484,11 +477,11 @@ rest) are in every hw 0/2/3/4 form, including those with no src0; fddpc's
 second clip plane (h6-8) shares h8 with inc2: the word holds the OR of
 the two, so a decoder can't tell them apart.
 
-Repeat (FUN_00107080, SGX545 path, **encoder**): hw0/2/3/4: h12-13 =
-repeat count - 1 (a write mask is turned into a count; at most 4). h21 = moe
-(operands step by the MOE increments; libusc INST_MOE). With h21 clear,
-h15/h14/h8 say whether the first/second/third source steps (USEASM flags2
-bits 29/30/31). **hardware** (hwt_p1 `rpt_*`, fmad rpt=4 on r0-3/r4-7/r8-11):
+Repeat (SGX545, **oracle**): hw0/2/3/4: h12-13 = repeat count - 1 (the
+vendor assembler turns a write mask into a count; at most 4). h21 = moe
+(operands step by the MOE increments). With h21 clear, h15/h14/h8 say
+whether the first/second/third source steps. **hardware** (hwt_p1 `rpt_*`,
+fmad rpt=4 on r0-3/r4-7/r8-11):
 `moe` steps all three sources by 1 (the MOE state at program start is
 increment 1); `inc0`/`inc1`/`inc2` step src0/src1/src2 and nothing else; the
 destination steps on every iteration in all cases (no inc bit: four copies of
@@ -499,9 +492,9 @@ on r0-r3 writes 1/r0..1/r3 to r4-r7; mask=5 writes r4 = 1/r0 and r6 = 1/r2
 only (bit n enables iteration n; source and destination step over all four);
 mask=0 writes nothing.
 
-h22 = fmt (format select, **encoder**): set when any source has USEASM
-argument flag 22; every source number then has 6 bits and number bit 6
-marks that source as F16 (`pa1.f16.lo`). The destination is unaffected.
+h22 = fmt (format select, **oracle**): set when any source is F16; every
+source number then has 6 bits and number bit 6 marks that source as F16
+(`pa1.f16.lo`). The destination is unaffected.
 **hardware correction** (hwt_p1 `f16_*`): **an F16 source's 6-bit number
 counts 16-bit halves, not registers**: encoded number N is register N>>1,
 half N&1 (0 = bits 0-15). With r0 = (lo 3.0, hi 2.0) and r1 = (5.0, 4.0),
@@ -525,9 +518,9 @@ fmad16 rounds to nearest in F16 ((1 + 23*2^-10)^2 -> 0x3c2f, truncation
 would give 0x3c2e), and so does its f32 -> F16 swizzle (1 + 3*2^-12 ->
 0x3c01), unlike `pck.f16.f32`, which truncates.
 
-hw1 source format (**encoder**): h7 = F16 source (h3 picks the high half);
-h8 = packed source with h3-4 picking one of four channels (USEASM argument
-flag 24). h2 = USEASM flags2 bit 22. **hardware** (hwt_p3, hwt_p5):
+hw1 source format (**oracle**): h7 = F16 source (h3 picks the high half);
+h8 = packed source with h3-4 picking one of four channels. h2 is a
+separate flag. **hardware** (hwt_p3, hwt_p5):
 - F16 (h7): h3 = 0 low half, 1 high half; h4 is ignored (chan 2/3 read the
   high half like chan 1). The register number is a whole register here.
 - h8 is **C10**: the channel is a signed 10-bit value v at bits 10*chan, read
@@ -543,12 +536,10 @@ flag 24). h2 = USEASM flags2 bit 22. **hardware** (hwt_p3, hwt_p5):
   This is how the corpus's mediump scalar code (`frcp pa9, pa9 [f16 chan=1
   f16d]`) works in place. dis.py prints h2 as `f16d`.
 
-fmad16 (**encoder**): per-source swizzle (USEASM argument flags 25-26):
+fmad16 (**oracle**): per-source swizzle:
 src0 h9-10, src1 h13 + h18, src2 h21-22 (so fmad16 has no end bit); repeat
-1-2 in h12 (needs explicit increments h15/h14/h8). The swizzle value is
-libusc's FMAD16_SWIZZLE enum, passed through unchanged by asm.c (f16opt.c
-asserts compare against LOWLOW = 1, HIGHHIGH = 2, CVTFROMF32 = 3), written
-`swz<n>=` in brackets, no field / `ll` / `hh` / `f32`: **hardware** (hwt_p4 `fmad16_swz*`, the
+1-2 in h12 (needs explicit increments h15/h14/h8). The swizzle is
+written `swz<n>=` in brackets, no field / `ll` / `hh` / `f32`: **hardware** (hwt_p4 `fmad16_swz*`, the
 same for all three sources): 0 = (lo, hi) as stored, 1 = (lo, lo), 2 = (hi,
 hi), 3 = the register read as one f32 and converted to F16 for both lanes
 (r0 = f32 1.5 -> 1.5 in both; r0 = H(2, 3) = f32 32.06 -> 32.06). fmad16
@@ -559,31 +550,32 @@ n-component dot product, written only to the last iteration's destination
 (r12 + n - 1: rpt=3 -> r14 = 3210, rpt=4 -> r15 = 43210 for (1, 2, 3, 4) .
 (10, 100, 1000, 10000)); the other destinations keep their values.
 
-fdpc (**encoder**): fdp + clip-plane result cp0-7 (USEASM register type
-0xd) in l15-17, l14 set. Needs a multi-channel repeat or mask.
-fddp/fddpc (**encoder**): two dot products; the second result goes to i0/i1
-(h19), so the destination has no extension bit. fddpc: clip planes in h3-5
-(the first cp operand) and h6-8 (the second), no source modifiers.
+fdpc (**oracle**): fdp + a clip-plane operand cp0-7 in l15-17, l14 set.
+Needs a multi-channel repeat or mask (oracle). That it writes a clip-plane
+result to cp<n> is **unconfirmed**.
+fddp/fddpc (**oracle** for the fields): the i<n> operand is in h19, so the
+destination has no extension bit; fddpc's clip planes are in h3-5 (the
+first cp operand) and h6-8 (the second), no source modifiers. That fddp
+computes two dot products is **unconfirmed**. **hardware** (hwt_gaps
+`fddp_*`, open stack, 2026-11-11): the second result goes to the i<n> in
+h19. With r0, r1, r2 = 1, 2, 3, `fddp r3, i1, r0, r1, r2` gave r3 = 2.0 and
+i1 = 3.0; what each product sums over a repeat is not settled by that. The
+fdual primary fddp also leaves a second product in i0 (hwt_p12, below).
 
 ### Moves (hw 5)
 
 | h8-10 | form |
 |---|---|
-| 0 | mov d, s (src1 slot; src0's field is 0; src2 is the unused-source pattern: bank 2 + ext = #0, written by useasm's EncodeUnusedSource) |
+| 0 | mov d, s (src1 slot; src0's field is 0; src2 is the unused-source pattern: bank 2 + ext = #0) |
 | 1-5 | movc.<cond>.<type> d, s0, s1, s2: d = test(s0) ? s1 : s2 |
-| 6, 7 | `op0xf3.s6 d, s1, s2` / `op0xf3.s7 d, s0, s1, s2` (USEASM 0xf3, target feature 0x2000; never emitted by libusc's compiler): writes an output. Operand slots as `movc`; 6 has no src0 (its field is 0). Flags: `f1_1` = h7 and `f1_26` = h22 (the USEASM flags that pick movc's u8 / f32 types), `a3f` = h5-6 (the third source's argument flags 5-6, 0-3). Common fields, repeat and mask as below |
+| 6, 7 | `op0xf3.s6 d, s1, s2` / `op0xf3.s7 d, s0, s1, s2` (oracle; the vendor compiler never emits it, corpus): writes an output (**unconfirmed**). Operand slots as `movc`; 6 has no src0 (its field is 0). Flags: `f1_1` = h7 and `f1_26` = h22 (the bits that hold movc's type), `a3f` = h5-6 (0-3). Common fields, repeat and mask as below |
 
-Repeat: h21 rcnt, h12-15 count-1 or write mask (**encoder**).
-movc type (**encoder** for the bits; names from libusc's IMOVC variants in
-asm.c): 1 u8, 2 i16 (**guess**: the fifth variant), 3 i32 (IMOVC_I32), 4
-f32 (IMOVC), 5 c10. Condition h7 + h22 (**encoder**): 0 `z` (s0 == 0), 1
-`nz`, 2 `ltz` (< 0), 3 `gez` (>= 0); these are the only USEASM test specs
-movc accepts. USEASM test spec: bits 0-1 sign test (1 sign set, 2 sign
-clear), bits 2-3 zero test (1 zero, 2 nonzero), bit 4 AND instead of OR
-(libusc's own compare pseudo-ops pin the sign values; the "Pack/unpack, test, testmask, bitwise" section).
-libusc's test types (asm.c g_auEncodeTest) are, in order: always, >0, >=0,
-==0, <0, <=0, !=0, sign clear, sign set (specs 0x10, 0x1a, 0x6, 0x14, 0x19,
-0x5, 0x18, 0x12, 0x11).
+Repeat: h21 rcnt, h12-15 count-1 or write mask (**oracle**).
+movc type (**oracle** for the bits; behavior **hardware**, hwt_p2, below):
+1 u8, 2 i16, 3 i32, 4 f32, 5 c10. Condition h7 + h22 (**oracle**): 0 `z`
+(s0 == 0), 1 `nz`, 2 `ltz` (< 0), 3 `gez` (>= 0); these are the only
+conditions the vendor assembler accepts for movc. The test class's
+conditions are in the "Pack/unpack, test, testmask, bitwise" section.
 
 **hardware** (hwt_p2 `movc_*`, s1 = 0x11111111, s2 = 0x22222222):
 - **f32**: `z` true for +0, -0 and a denormal (0x00000001: denormals are
@@ -593,39 +585,41 @@ libusc's test types (asm.c g_auEncodeTest) are, in order: always, >0, >=0,
 - **i32**: two's complement on the whole word (0x80000000 and 0xffffffff
   are ltz).
 - **u8**: **per byte**, signed (bit 7 is the sign): s0 = 0x00ff8001 with
-  `ltz` takes bytes 1 and 2 from s1 (0x22111122). The name u8 is libusc's.
+  `ltz` takes bytes 1 and 2 from s1 (0x22111122).
 - **i16**: per 16-bit half, signed.
 - **c10**: per 10-bit channel (bits 0-9, 10-19, 20-29), signed: s0 =
   0x3ff00200 with `ltz` takes channels 0 and 2 from s1 (0x11122111). (Bits
   30-31 were equal in s1 and s2, so not seen.)
 
-USEASM mov with a register-type-9 operand encodes on hw 1f (`f80000c0`:
-type 9 <- src1; `f8000100`: dst <- type 9); see the "smp, ld/st, and the special class" section.
+A move to or from one special register type is a hw 1f word (`f80000c0`:
+it <- src1; `f8000100`: dst <- it) (oracle); see the "smp, ld/st, and the
+special class" section.
 
-### Dual issue (hw 1b, FUN_00113620, **encoder**)
+### Dual issue (hw 1b, **oracle**)
 
-USEASM flags1 bit 25 pairs an instruction with the next (target feature
-0x100). The primary op uses dst/src0/src1/src2 (dst has no ext bit); the
-secondary computes into internal registers.
+The vendor assembler pairs an instruction with the next into one hw 1b word;
+the SGX545 target accepts it (oracle; the corpus has fdual words). The
+primary op uses dst/src0/src1/src2 (dst has no ext bit); the secondary
+computes into internal registers.
 
 | bits | field | values |
 |---|---|---|
 | h24-25 | pred | short predicate |
-| h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 ima32 (USEASM 0x65), 7 fssq (USEASM 0xa7) |
-| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fsubflr (USEASM fadm and ffrc encode as it too), 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32 (USEASM 0x65), 15 mov |
+| h18, h19, h26 | pri | 0 fmad, 1 mov, 2 fadm, 3 fmsa, 4 fddp, 5 fminmax, 6 ima32, 7 fssq |
+| h6-9 | sec | 0 fmad, 1 fmad16, 2 fmsa, 3 fsubflr (a fadm or fract secondary encodes as it too), 4 fmaxmin, 5 frcp, 6 frsq, 7 fexp2, 8 flog2, 9 fsin, 10 fcos, 11 fadd, 12 fsub, 13 fmul, 14 ima32, 15 mov |
 | h5, h13 | sd | secondary destination (and its first source): 0 i0, 1 i1, 2 i2, 3 `i0s0`: i0 with the first source taken from the src0 slot |
 | h14-15 | sb | secondary second source: i0, i1, i2, or 3 = the primary's src1 |
 | h10, h21 | sc | secondary third source: i0, i1, i2, or 3 = the src2 slot |
-| h14, h15, h21 | msrc | instead of sb/sc when the secondary is mov: 0 i0, 1 i1, 2 i2, 4 the src0 slot, 5 the src1 slot, 6 the src2 slot (USEASM int-source-selects 4/5/6; a register operand goes into whichever of src0/src2 the primary leaves free) |
+| h14, h15, h21 | msrc | instead of sb/sc when the secondary is mov: 0 i0, 1 i1, 2 i2, 4 the src0 slot, 5 the src1 slot, 6 the src2 slot (the vendor assembler puts a register operand into whichever of src0/src2 the primary leaves free) |
 | h12 | rpt | 1-2 |
 | h22 | fmt | format select as in the float classes |
 | h4, h3 | neg1, neg2 | negate the src1 / src2 slot |
 | h23, h11, h20 | skipinv, nosched, syncs | as in the other ALU classes; fdual has no end bit (h18 is part of `pri`) |
 
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
-msrc. All **encoder**.
+msrc. All **oracle**.
 
-**hardware** (hwt_p12, CE5300 board, 2026-11-08): 113 draws, every one ran with no
+**hardware** (hwt_p12, 2026-11-08): 113 draws, every one ran with no
 recovery. Inputs were s0 = 2, s1 = 3, s2 = 5 and i0 = 7, i1 = 17, i2 = 19;
 the logs are in `hwt_out/hwt_p12.txt`. The encodings were already settled:
 every corpus fdual word assembles from its text to the same bits
@@ -641,7 +635,7 @@ Its sources, by **hardware** (hwt_p12):
 |---|---|---|
 | 0 fmad | `sd * sb + sc` | 7 * 17 + 19 = 138 |
 | 2 fmsa | `sd * sd + sb * sc` | 49 + 323 = 372 |
-| 3 | `sb - floor(sc)` (fsubflr; ffrc is it with sb = sc; not fadm) | 17 - 19 = -2 |
+| 3 | `sb - floor(sc)` (fsubflr; fract is it with sb = sc; not fadm) | 17 - 19 = -2 |
 | 4 fmaxmin | 17 from (7, 17, 19): `min(sb, sc)` or `min(max(sd, sb), sc)`, not yet told apart | 17 |
 | 5-10 frcp, frsq, fexp2, flog2, fsin, fcos | `op(sb)` (sin/cos in quarter turns, as in the float class) | 1/17, 2^17, ... |
 | 11 fadd, 12 fsub, 13 fmul | `sb op sc` | 36, -2, 323 |
@@ -668,9 +662,9 @@ i0 = 7 * 3 + 5 = 26). **`neg1`/`neg2` (-src1 / -src2) apply to the primary
 only**: the same word with `-r1, -r2` gives r3 = -11 and still i0 = 26.
 
 **Where a mov secondary's register source goes.** Any slot works: msrc=src0
-reads src0 even while an fmad primary reads it too. libusc's habit is to
-put it in a slot the primary doesn't read (src0 beside mov or fssq, src2
-otherwise). That is a choice, not a rule.
+reads src0 even while an fmad primary reads it too. The vendor compiler's
+habit (corpus) is to put it in a slot the primary doesn't read (src0 beside
+mov or fssq, src2 otherwise). That is a choice, not a rule.
 
 **Pairings.** Every secondary under a mov primary, and every primary under a
 mov secondary, ran cleanly. Nothing seen forbids a pairing.
@@ -689,86 +683,86 @@ The secondary's internal registers don't step: `sd` holds the one result
 - **The other way round is a hazard.** The primary reading the internal
   register the same word's secondary writes (`fdual.mov.fexp2 r3, r0, r124,
   r2 [sd=i0 ...]`) gave the old value on some pixels of the row and the new
-  one on others. A compiler must not do it. (libusc's fl_big has
-  `fdual.fmad.fsin pa1, r126, ... [sd=i2]`; don't copy it.)
-- Internal registers don't survive a deschedule. libusc puts `nosched` on
-  the words between an internal register's write and its last read.
+  one on others. A compiler must not do it. (The vendor compiler's fl_big
+  corpus shader has `fdual.fmad.fsin pa1, r126, ... [sd=i2]`; don't copy it.)
+- Internal registers don't survive a deschedule (**unconfirmed**). The vendor
+  compiler puts `nosched` on the words between an internal register's write
+  and its last read (corpus). Not reproduced on hardware (hwt_gaps `i0_*`,
+  open stack, 2026-11-11): an i0 written with `mov i0, r2 [mask=1]` read back
+  unchanged across one and four `ld.a.d` plus a `wdf`, with and without
+  `nosched`, on every checked pixel of a 720x480 triangle. The loss may need a
+  sample or other work between the write and the read.
 
-`fssq` = USEASM 0xa7, libusc internal op 0x8e, exists only as a dual-issue
-primary: two sources in the src1/src2 slots, each source channel feeding the
-same destination channel (libusc's channel-use code treats it like a
-two-source mov). The corpus uses it once, in `v_norm`
+`fssq` exists only as a dual-issue primary (oracle): two sources in the
+src1/src2 slots, each source channel feeding the same destination channel
+(**unconfirmed**). The corpus uses it once, in `v_norm`
 (`normalize(p.xyz)`): `fdual.fssq.mov o0, pa2, pa0, pa1 [sd=i2 msrc=src0]`
 then `fdual.mov.fmad o3, r0, c52, o0 [sd=i2 sb=i2 sc=src2]` and
 `frsq o1, i2`: i2 = p.z, o0 = fssq(p.x, p.y), i2 = i2 * i2 + o0, so
-fssq(a, b) = a*a + b*b (**corpus**; the name is a **guess**). ima32 (0x65) is
-described in the "Integer, fixed-point and multi-unit ops" section.
+fssq(a, b) = a*a + b*b (**corpus**; **hardware**, hwt_p12, above; the name
+is a **guess**). ima32 is described in the "Integer, fixed-point and
+multi-unit ops" section.
 
 Checked: `check_float.py` (3340 oracle encodings over every operand type,
 modifier, repeat/mask/increment, predicate, flag, swizzle, movc type and
 condition and fdual pairing) and `hwcheck.py` (all corpus words of these
-classes): no unexplained bit, every word round-trips.
+classes): no unexplained bit, every word round-trips. The float and move
+forms in mesa/src/sgx/isa/tests/gles2.txt are emitted by the open compiler
+and exercised by the open stack (dEQP-GLES2).
 
 ## Pack/unpack, test, testmask, bitwise (hw 08, 09, 0a-0e, 0f)
 
 Forms: `hw_pack.py`. Checks: `check_pack.py` (oracle sweep, 1579 encodings,
 0 failures) and `hwcheck.py` (all 281 pack, 107 test, 34 testmask corpus words
-decode with no unexplained bits and round-trip).
+decode with no unexplained bits and round-trip). The pack, test, testmask
+and bitwise forms in mesa/src/sgx/isa/tests/gles2.txt are emitted by the
+open compiler and exercised by the open stack (dEQP-GLES2).
 
-Encoders (Ghidra addresses = libusc vaddr + 0x10000):
+Operand slots are the generic ones: src1 l7-13, bank l30-31, ext h17; src2
+l0-6, bank l28-29, ext h16; dest l21-27, bank h0-1, ext h19. None of these
+classes has a src0 slot. Predicate h24-26 as in the float classes.
 
-| function | what | USEASM ops |
+Evidence tags as in the rest of this document: **oracle**, **corpus**,
+**hardware**, **guess** (name/meaning not backed).
+
+### Shared ALU control bits (all three classes)
+
+| bits | field | tag |
 |---|---|---|
-| FUN_001165c0 | pack/unpack, hw 08 | 0x14-0x4e, 0x16f, 0x170 |
-| FUN_00112770 | test (hw 09) / testmask (hw 0f) | any ALU op with flags1 b30 (TEST); the dispatcher FUN_00119f50 sends it there before anything else |
-| FUN_00117270 | bitwise, hw 0a-0e | 0x4f-0x56 |
+| h24-26 | pred | oracle |
+| h23 | skipinv | oracle |
+| h22 | nosched (h22 here, not h11 as in the float classes) | oracle |
+| h20 | syncs | oracle |
+| h18 | end (pck, bitwise only; test rejects it) | oracle |
+| h21 | rcnt (pck, bitwise): set for a repeat count | oracle |
+| h12-15 | rpt = n (stored n-1) when rcnt; else write mask | oracle; per-iteration write enable: **hardware** for the scalar class (hwt_p3 `frcp_mask5_*`), assumed the same here |
 
-Operand slots come from the generic encoder FUN_00107830: src1 via
-FUN_001080b0 (l7-13, bank l30-31, ext h17), src2 via FUN_00108040 (l0-6, bank
-l28-29, ext h16), dest via FUN_0010b9d0 (l21-27, bank h0-1, ext h19). None of
-these classes has a src0 slot. Predicate h24-26 via FUN_00106f30 (PRED3).
-
-Evidence tags: **encoder** = read from the decompile and confirmed with the
-oracle; **corpus** = what GLSL produces it; **guess** = name/meaning not backed.
-
-### Shared ALU control bits (all three encoders)
-
-| bits | field | USEASM source | tag |
-|---|---|---|---|
-| h24-26 | pred | flags1 b13-16 | encoder |
-| h23 | skipinv | flags1 b0 | encoder |
-| h22 | nosched | flags1 b3 (h22 here, not h11 as in the float classes) | encoder |
-| h20 | syncs | flags1 b2 | encoder |
-| h18 | end (pck, bitwise only) | flags1 b17 (test rejects it) | encoder |
-| h21 | rcnt (pck, bitwise) | set when flags1 repeat count n>0 | encoder |
-| h12-15 | rpt = n (stored n-1) when rcnt; else mask = flags1 b9-12 verbatim | flags1 b4-8 / b9-12 | encoder; per-iteration write enable: **hardware** for the scalar class (hwt_p3 `frcp_mask5_*`), assumed the same here |
-
-### hw 08: `pck.<dst>.<src>` (FUN_001165c0)
+### hw 08: `pck.<dst>.<src>`
 
 Format codes (both fields): 0 u8, 1 s8, 2 o8, 3 u16, 4 s16, 5 f16, 6 f32,
-7 c10. The code -> name map is **encoder** (it follows the USEASM op enum,
-whose order PCK<dst><src> is fixed by the corpus: 0x20 = F32->U8 color
-writes, 0x4e = C10 lowp, 0x14 = F32->F16 for mediump); "o8" as an
-offset/biased 8-bit format is a **guess**.
+7 c10. The code -> name map is **oracle**; the u8, s16, f16 and f32
+conversions are **hardware** (hwt_p4), and the corpus uses c10 for lowp
+(`pck.c10.c10`), f16 for mediump (`pck.f16.f32`) and u8 for color writes
+(`pck.u8.f32`); "o8" as an offset/biased 8-bit format is a **guess**.
 
 | bits | field | values | tag |
 |---|---|---|---|
-| h27-31 | opcode | 8 | encoder |
-| h9-11 | source format | as above | encoder |
-| h6-8 | destination format | as above | encoder |
-| h2-5 | dmask | destination byte write mask, USEASM arg0 flags b7-10. Encoder limits: dst u16/s16/f16 only 3, 0xc, 0xf; f32 only 0xf; 8-bit and c10 any. A partial mask needs a non-indexed dest, and on an `i` dest only c10 takes one | encoder; corpus (`pck.u8.f32 … dmask=6/9` pairs build RGBA8 two bytes at a time) |
-| l16-17 | src1 lane (`.l<n>`) | USEASM arg1 flags b5-6 | encoder; meaning by source format is corpus: 8-bit sources pick a byte (`pck.u8.u8 pa9, pa9.l3`), 16-bit sources use 0/2 = low/high half (`pck.f16.f16 pa9, r0, pa9.l2`), c10 picks the 10-bit channel (`pck.f16.c10 pa11, i2.l2, i2.l1`) |
-| l14-15 | src2 lane | USEASM arg2 flags b5-6 | encoder, as above |
-| l18 | `scale` (pairs with one float side): flags2 b8. `rint` (float->float pairs): flags1 b24. Int->int pairs: encoder never sets it | encoder for the sources. scale = normalize (corpus: every F32->U8 color write has it). rint: libusc's own trunc (intermediate op 0x96, the fast path of icvt_i32.c's TRC, `psTrcSrc` assert) is `pck.f32.f32 [rint rnd=zero]` -> round to integral with `rnd` (**encoder**+compiler code; the name is ours) |
-| l19-20 | rnd | arg3 must be type 0x10: USEASM 0x3a -> 0, 0x39 -> 1, 0x3b -> 2, 0 -> 3. Required for float->float pairs; with `scale` on float<->int pairs; otherwise not encoded | encoder for the mapping. **hardware** (hwt_p4 `rint_*`, `pck.f32.f32 [rint]` on ±2.5, ±1.7, 3.5, 0.5): **0 = nearest-even, 1 = down (floor), 2 = up (ceil), 3 = toward zero**. It does **not** affect `pck.f16.f32` (always truncates, below) or `pck.u8.f32 [scale]` (always nearest) |
-| l21-27, h0-1, h19 | dst | r o pa sa g i ix | encoder |
-| l7-13, l30-31, h17 | src1 | r o pa sa c g # i ix | encoder |
-| l0-6, l28-29, h16 | src2 | same | encoder |
+| h27-31 | opcode | 8 | oracle |
+| h9-11 | source format | as above | oracle |
+| h6-8 | destination format | as above | oracle |
+| h2-5 | dmask | destination byte write mask. Assembler limits: dst u16/s16/f16 only 3, 0xc, 0xf; f32 only 0xf; 8-bit and c10 any. A partial mask needs a non-indexed dest, and on an `i` dest only c10 takes one | oracle; corpus (`pck.u8.f32 … dmask=6/9` pairs build RGBA8 two bytes at a time); hardware (hwt_p4 `pck_u8_dmask*`, hwt_p13) |
+| l16-17 | src1 lane (`.l<n>`) | 0-3 | oracle; meaning by source format is corpus: 8-bit sources pick a byte (`pck.u8.u8 pa9, pa9.l3`), 16-bit sources use 0/2 = low/high half (`pck.f16.f16 pa9, r0, pa9.l2`), c10 picks the 10-bit channel (`pck.f16.c10 pa11, i2.l2, i2.l1`); hardware for 8-bit sources (hwt_p4 u8 unpack lanes, hwt_p13 `pck.u8.u8` lane picks) |
+| l14-15 | src2 lane | 0-3 | oracle, as above |
+| l18 | `scale` (pairs with one float side). `rint` (float->float pairs). Int->int pairs: the assembler never sets it | oracle for when it is set. scale = normalize (corpus: every F32->U8 color write has it; hardware, hwt_p4, below). rint = round to an integral value in mode `rnd` (**hardware**, hwt_p4 `rint_*`), so a trunc is `pck.f32.f32 [rint rnd=zero]` (the name is ours) |
+| l19-20 | rnd | 0-3. Required for float->float pairs; with `scale` on float<->int pairs; otherwise not encoded | oracle for when it is encoded. **hardware** (hwt_p4 `rint_*`, `pck.f32.f32 [rint]` on ±2.5, ±1.7, 3.5, 0.5): **0 = nearest-even, 1 = down (floor), 2 = up (ceil), 3 = toward zero**. It does **not** affect `pck.f16.f32` (always truncates, below) or `pck.u8.f32 [scale]` (always nearest) |
+| l21-27, h0-1, h19 | dst | r o pa sa g i ix | oracle |
+| l7-13, l30-31, h17 | src1 | r o pa sa c g # i ix | oracle |
+| l0-6, l28-29, h16 | src2 | same | oracle |
 
 Both bits exist in every pck form, whatever the pair: the rules above say
-when libusc sets them, not when they can be encoded. The text calls l18
-`rint` when both formats are f16 or f32 and `scale` otherwise (c10 counts as
-"otherwise"), and shows l19-20 as `rnd=`.
+when the vendor assembler sets them, not when they can be encoded. The text
+calls l18 `rint` when both formats are f16 or f32 and `scale` otherwise (c10
+counts as "otherwise"), and shows l19-20 as `rnd=`.
 
 Notes:
 - Two sources: the compiler packs two values per instruction (corpus:
@@ -779,6 +773,11 @@ Notes:
   src2; dmask 9 -> byte 0 src1, byte 3 src2; dmask 15 -> bytes 0/2 src1,
   1/3 src2; a single enabled byte takes src1). Disabled bytes keep the old
   value. `pck.s16.f32 d, a, b` puts a in bits 0-15, b in 16-31.
+- 16-bit integer halves, **hardware** (hwt_int): `pck.f32.s16 d, r.l2, #0`
+  converts r's signed high half (0xfffe0003 -> -2.0), `.l0` the low one;
+  `pck.f32.u16` the same unsigned (low 3.0, high 65534.0). `pck.u16.f32 d,
+  a, b` puts a in bits 0-15 and b in 16-31, each rounded and clamped to
+  0-65535 (-5.0 -> 0, 70000.0 -> 0xffff; `#0` as b leaves 0).
 - Conversions, **hardware** (hwt_p4): f32 -> u8 `scale` is x*255 rounded to
   nearest and clamped to 0-255 (-0.1 -> 0, 1.5 -> 255, 0.7 -> 178, 1/510 ->
   1), whatever rnd says. f32 -> s16 rounds to nearest-even (2.5 -> 2, 1.7 ->
@@ -787,81 +786,61 @@ Notes:
   value, so a compiler wanting round-to-nearest F16 has to do it some other
   way (fmad16's own rounding was not tested). u8 -> f32: `.l<n>` is byte n;
   with `scale` the result is b/255 (0x99 -> 0.6), without it the integer.
-- Immediates are 7 bits. The encoder range-checks them as signed for USEASM
-  ops that unpack from s8/o8/c10/s16 (local_44 = 1: 0x35-0x37, 0x3a, 0x3c-0x3e,
-  0x41, 0x43-0x45, 0x48, 0x4a-0x4c) and unsigned otherwise; the bits are the
-  same, so the text shows the raw 7-bit value.
-- USEASM ops -> form (several USEASM ops share a format pair; the 0x34-0x4c
-  "unpack" half only differs from the pack half in that immediate check):
+- Immediates are 7 bits. The vendor assembler range-checks them as signed for
+  some forms whose source is s8/o8/c10/s16 and unsigned otherwise (oracle);
+  the bits are the same, so the text shows the raw 7-bit value.
+- The corpus uses `pck.f16.f32`, `pck.f16.f16`, `pck.s16.f32`, `pck.u8.f32`,
+  `pck.u8.f16`, `pck.c10.f32`, `pck.f32.f16`, `pck.f16.c10`, `pck.u8.u8` and
+  `pck.c10.c10`. The other format pairs are oracle only.
 
-0x14 `pck.f16.f32` (corpus), 0x15 `pck.f16.f16` (corpus), 0x16 `pck.f16.u16`,
-0x17 `pck.f16.s16`, 0x18 `pck.u16.f32`, 0x19 `pck.u16.f16`, 0x1a `pck.u16.u16`,
-0x1b `pck.u16.s16`, 0x1c `pck.s16.f32` (corpus), 0x1d `pck.s16.f16`,
-0x1e `pck.s16.u16`, 0x1f `pck.s16.s16`, 0x20 `pck.u8.f32` (corpus),
-0x21 `pck.u8.f16` (corpus), 0x22 `pck.u8.u16`, 0x23 `pck.u8.s16`,
-0x24 `pck.s8.f32`, 0x25 `pck.s8.f16`, 0x26 `pck.s8.u16`, 0x27 `pck.s8.s16`,
-0x28 `pck.o8.f32`, 0x29 `pck.o8.f16`, 0x2a `pck.o8.u16`, 0x2b `pck.o8.s16`,
-0x2c `pck.c10.f32` (corpus), 0x2d `pck.c10.f16`, 0x2e `pck.c10.u16`,
-0x2f `pck.c10.s16`, 0x30 `pck.f32.f32`, 0x31 `pck.f32.f16` (corpus),
-0x32 `pck.f32.u16`, 0x33 `pck.f32.s16`, 0x34 `pck.f32.u8`, 0x35 `pck.f32.s8`,
-0x36 `pck.f32.o8`, 0x37 `pck.f32.c10`, 0x38 `pck.f16.f16`, 0x39 `pck.f16.u16`,
-0x3a `pck.f16.s16`, 0x3b `pck.f16.u8`, 0x3c `pck.f16.s8`, 0x3d `pck.f16.o8`,
-0x3e `pck.f16.c10` (corpus), 0x3f `pck.u16.f16`, 0x40 `pck.u16.u16`,
-0x41 `pck.u16.s16`, 0x42 `pck.u16.u8`, 0x43 `pck.u16.s8`, 0x44 `pck.u16.o8`,
-0x45 `pck.u16.c10`, 0x46 `pck.s16.f16`, 0x47 `pck.s16.u16`, 0x48 `pck.s16.s16`,
-0x49 `pck.s16.u8`, 0x4a `pck.s16.s8`, 0x4b `pck.s16.o8`, 0x4c `pck.s16.c10`,
-0x4d `pck.u8.u8` (corpus), 0x4e `pck.c10.c10` (corpus), 0x16f `pck.u8.s8`,
-0x170 `pck.s8.u8`. (ISA.md's `op0x14` etc. are these; its 0xef also lands here
-via the dispatcher's rewrite to 0x40.)
+### hw 09 `test`, hw 0f `testmask`
 
-### hw 09 `test`, hw 0f `testmask` (FUN_00112770)
-
-Any ALU USEASM op with flags1 b30 goes here; dw4 (the test spec) picks the
-condition and test vs testmask. Text:
+Any ALU op can be a test; the fields below pick the condition and test vs
+testmask (oracle). Text:
 
     test.<alu>.<cond> pN, [dst,] src1, src2      [chan= mask= fmt f2_0 ...]
     testmask.<alu>.<cond>.<type> dst, src1, src2
 
 | bits | field | values | tag |
 |---|---|---|---|
-| h27-31 | opcode | 9 = test (spec b9-11 = 0), 0xf = testmask (spec b9-11 != 0) | encoder |
-| l14-19 | alu | ALU op = the op the USEASM instruction names; l18-19 = group (0 float, 1 int16/32, 2 8-bit/fixed, 3 bitwise), l14-17 the op in the group. Table below | encoder |
-| h10-11 | cond: sign test | spec b0-1: 0 none, 1 sign bit set, 2 sign bit clear, 3 never emitted | encoder; meaning corpus |
-| h8-9 | cond: zero test | spec b2-3: 0 none, 1 zero, 2 nonzero, 3 never emitted | encoder; meaning corpus |
-| h7 | cond: combine | spec b4: 0 OR, 1 AND | encoder; meaning corpus |
-| h4-6 | chan (test only) | spec b5-8 (0-7, 8+ rejected); which channel's result is tested | encoder; corpus uses 0, and 2 for lowp c10 compares. **hardware** (hwt_p10, `test.fpsub8.lt` with fmt on three C10 channels): 0, 1, 2 = channel 0, 1, 2; 5 = any of them; 6 = all three; 7 = channel 0 or channel 2 (seen: true for TFF, FFT, TFT-like patterns, false for FTF); 3 and 4 never true here (3 is probably the alpha channel, equal in both operands). On an F16 compare only chan 0 tested the value (1-3 were false); on an f32 compare (hwt_p9, no fmt) chan 0, 5 and 7 gave the result and the others false |
-| h2-3 | pdst (test only) | USEASM arg1, type 0xc, p0-p3 | encoder |
-| h4-5 | type (testmask only) | spec b9-11: 1 -> 0 `byte`, 2 -> 1 `word`, 3 -> 2 `dword`; others rejected by libusc's encoder. The field's value 3 has no name and is written `.tm3`; it encodes as 3 | encoder; 3 = USEASM_TEST_MASK_DWORD (libusc assert string) and the only one the corpus uses. **hardware** (hwt_p7): a passing f32 test writes 0x000000ff / 0x0000ffff / 0xffffffff for byte / word / dword, a failing one 0 |
-| h12-15 | mask | flags1 write mask verbatim (fdp: USEASM 0xc2 -> 7, 0xc3 -> 0xf). testmask also takes a repeat count n -> mask (1<<n)-1 (n <= 4); test rejects a repeat. A test with mask != 1 must write p0 | encoder; corpus: testmask mask=15 for bvec4 compares |
-| l20 | dest written | set when the instruction has a destination (the generic dst slot), clear when USEASM arg0 has flag b16; then the dest field holds h0 + h19. The text shows that field as `nodst=v` when it isn't the default 0x280: v's bits 0-6 go to l21-27, 7-8 to h0-1, 9 to h19 | encoder; corpus: every `test` has no dest |
-| h18 | fmt | set when a source has arg flag b22 (float group, F16) or b24 (group 2 ops 0xf7-0xf9, C10; the dest flag counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16.lo/.hi` / `.c10` | encoder; corpus (`test.fsub.ge p1, sa10.f16.lo, sa12.f16.lo`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`). **hardware** (hwt_p10): an F16 operand's number counts halves like the float classes' (r0 = (3, 10), r1 = (5, 1), r2 = (7, 0.5): numbers 1 < 0 false, 2 < 1 true = 10 < 3, 5 < 10); a C10 operand is a whole register. The destination's numbering under fmt (testmask) was not drawn; the tools treat it like the sources |
-| h21 | f2_0 | USEASM flags2 b0 | encoder; libusc's asm.c (FUN_00018050, ITESTPRED only) copies it from bit 5 of its internal instruction flags, which no assert names; the corpus has it only on the counter test of fixed-count loops (loop4, lp_s4/s32/s100, lp_nest, tx_dep_loop): meaning unknown |
-| h22, h23, h20, h24-26 | nosched, skipinv, syncs, pred | as above | encoder |
-| dst / src1 / src2 | dst l21-27 h0-1 h19 (USEASM arg0), src1 = arg1 (testmask) / arg2 (test), src2 = next arg. One-source ops (frcp ... fexp2, fadd from 0xa4) get src2 = #0; fsubflr from 0x3 repeats src1 | encoder |
+| h27-31 | opcode | 9 = test, 0xf = testmask | oracle |
+| l14-19 | alu | ALU op; l18-19 = group (0 float, 1 int16/32, 2 8-bit/fixed, 3 bitwise), l14-17 the op in the group. Table below | oracle |
+| h10-11 | cond: sign test | 0 none, 1 sign bit set, 2 sign bit clear, 3 never emitted | oracle; meaning corpus; hardware (hwt_p2) |
+| h8-9 | cond: zero test | 0 none, 1 zero, 2 nonzero, 3 never emitted | oracle; meaning corpus; hardware (hwt_p2) |
+| h7 | cond: combine | 0 OR, 1 AND | oracle; meaning corpus; hardware (hwt_p2) |
+| h4-6 | chan (test only) | 0-7 (8+ rejected); which channel's result is tested | oracle; corpus uses 0, and 2 for lowp c10 compares. **hardware** (hwt_p10, `test.fpsub8.lt` with fmt on three C10 channels): 0, 1, 2 = channel 0, 1, 2; 5 = any of them; 6 = all three; 7 = channel 0 or channel 2 (seen: true for TFF, FFT, TFT-like patterns, false for FTF); 3 and 4 never true here (3 is probably the alpha channel, equal in both operands). On an F16 compare only chan 0 tested the value (1-3 were false); on an f32 compare (hwt_p9, no fmt) chan 0, 5 and 7 gave the result and the others false |
+| h2-3 | pdst (test only) | p0-p3 | oracle; hardware (hwt_p2) |
+| h4-5 | type (testmask only) | 0 `byte`, 1 `word`, 2 `dword`; the vendor assembler produces no other value. The field's value 3 has no name and is written `.tm3`; it encodes as 3 | oracle; dword is the only one the corpus uses. **hardware** (hwt_p7): a passing f32 test writes 0x000000ff / 0x0000ffff / 0xffffffff for byte / word / dword, a failing one 0 |
+| h12-15 | mask | write mask (the 3- and 4-component fdp tests set 7 and 0xf). The vendor assembler turns a testmask repeat count n into mask (1<<n)-1 (n <= 4); test rejects a repeat. A test with mask != 1 must write p0 | oracle; corpus: testmask mask=15 for bvec4 compares |
+| l20 | dest written | set when the instruction has a destination (the generic dst slot), clear when it has none; then the dest field holds h0 + h19. The text shows that field as `nodst=v` when it isn't the default 0x280: v's bits 0-6 go to l21-27, 7-8 to h0-1, 9 to h19 | oracle; corpus: every `test` has no dest |
+| h18 | fmt | set when a source is F16 (float group) or C10 (group-2 ops i8op5, fpadd8, fpsub8; a C10 dest counts there too). Sources and dest then have 6-bit numbers + bit 6 = per-operand format, printed `.f16.lo/.hi` / `.c10` | oracle; corpus (`test.fsub.ge p1, sa10.f16.lo, sa12.f16.lo`, `test.fpsub8.lt p0, pa4.c10, pa5.c10`). **hardware** (hwt_p10): an F16 operand's number counts halves like the float classes' (r0 = (3, 10), r1 = (5, 1), r2 = (7, 0.5): numbers 1 < 0 false, 2 < 1 true = 10 < 3, 5 < 10); a C10 operand is a whole register. The destination's numbering under fmt (testmask) was not drawn; the tools treat it like the sources |
+| h21 | f2_0 | 1 bit | oracle; the corpus has it only on the counter test of fixed-count loops (loop4, lp_s4/s32/s100, lp_nest, tx_dep_loop): meaning unknown |
+| h22, h23, h20, h24-26 | nosched, skipinv, syncs, pred | as above | oracle |
+| dst / src1 / src2 | dst l21-27 h0-1 h19, src1, src2 in the generic slots. One-source ops (frcp ... fexp2, a plain move as fadd) get src2 = #0; fsubflr from a fract repeats src1 | oracle |
 
-No negate/abs bits: the only source flags accepted are the format bits; a
-subtract is the `fsub` ALU op (USEASM 0xa9 = 0xa6 with src2's negate flag).
+No negate/abs bits: the vendor assembler accepts only the format suffixes on
+test sources (oracle); a subtract is the `fsub` ALU op.
 
 #### ALU op field (l14-19)
 
-| value | group | sub | mnemonic | USEASM ops | tag |
-|---|---|---|---|---|---|
-| 0x00 | 0 | 0 | `fadd` | 0xa6 (a+b), 0xa4 (fmov: a + #0) | encoder (dispatcher rewrites 0xa4/0xa5/0xa6/0xa9 to fmad with 1.0/0.0, giving the names) |
-| 0x03 | 0 | 3 | `fsubflr` | 0x3, 0xcf (ffrc) | encoder |
-| 0x04-0x07 | 0 | 4-7 | `frcp frsq flog2 fexp2` | 0x4-0x7 | encoder |
-| 0x08 | 0 | 8 | `fdp` | 0xb, 0xc2, 0xc3 | encoder |
-| 0x09, 0x0a | 0 | 9, 10 | `fmin fmax` | 0xc, 0xd | encoder |
-| 0x0b, 0x0c | 0 | 11, 12 | `fdsx fdsy` | 0xe, 0xf | encoder |
-| 0x0d | 0 | 13 | `fmul` | 0xa5 | encoder |
-| 0x0e | 0 | 14 | `fsub` | 0xa9; also 0xaa-0xaf (below) | encoder, corpus |
-| 0x16-0x1b | 1 | 6-11 | `iadd16 isub16 imul16 iaddu16 isubu16 imulu16` | 0xe4-0xe9 | encoder: outside TEST these become ima16 a*1+b, a*1-b, a*b+0 with flags2 0x1000 (0xe4-0xe6) or 0x800 (0xe7-0xe9); signed/unsigned from the signed-immediate check is a **guess** |
-| 0x1c, 0x1d | 1 | 12, 13 | `iadd32 iaddu32` | 0xea, 0xf0 | encoder (imae a*1+b); names **guess** |
-| 0x20-0x26 | 2 | 0-6 | `i8op0`..`i8op6` | 0xeb 0xec 0xf5 0xf6 0xed 0xf7 0xee | encoder; 0xeb/0xec/0xf5/0xf6 become ima8 (add / swapped-negated sub, 0xf5/0xf6 with flags2 0x400); 0xed/0xee are TEST-only. Names unknown |
-| 0x27 | 2 | 7 | `fpadd8` | 0xf8 | **guess** (TEST-only, C10-capable; libusc has an IFPADD8) |
-| 0x28 | 2 | 8 | `fpsub8` | 0xf9 | corpus: every lowp compare (fl_*_l) is 0xf9 with C10 sources; name **guess** after libusc's IFPSUB8 |
-| 0x30-0x35, 0x37 | 3 | 0-5, 7 | `and or xor shl shr rol asr` | 0x4f 0x50 0x51 0x52 0x53 0x55 0x54 | encoder; corpus (`test.and.ne p0, #0, #0` clears p0; `test.shl.pos/neg p2, x, #31` in step_l) |
+| value | group | sub | mnemonic | tag |
+|---|---|---|---|---|
+| 0x00 | 0 | 0 | `fadd` | oracle (a + b; a plain move is a + #0); hardware (hwt_p2 `test.fadd.neg/pos`) |
+| 0x03 | 0 | 3 | `fsubflr` | oracle |
+| 0x04-0x07 | 0 | 4-7 | `frcp frsq flog2 fexp2` | oracle |
+| 0x08 | 0 | 8 | `fdp` | oracle |
+| 0x09, 0x0a | 0 | 9, 10 | `fmin fmax` | oracle |
+| 0x0b, 0x0c | 0 | 11, 12 | `fdsx fdsy` | oracle |
+| 0x0d | 0 | 13 | `fmul` | oracle |
+| 0x0e | 0 | 14 | `fsub` | oracle, corpus; hardware (hwt_p2) |
+| 0x16-0x1b | 1 | 6-11 | `iadd16 isub16 imul16 iaddu16 isubu16 imulu16` | oracle: outside a test the vendor assembler encodes these as ima16 a*1+b, a*1-b, a*b+0; signed/unsigned from the signed-immediate check is a **guess** |
+| 0x1c, 0x1d | 1 | 12, 13 | `iadd32 iaddu32` | oracle (outside a test: imae a*1+b); names **guess** |
+| 0x20-0x26 | 2 | 0-6 | `i8op0`..`i8op6` | oracle; outside a test i8op0-i8op3 encode as ima8 (add, or swapped-negated sub); i8op4 and i8op6 exist only as tests. Names unknown |
+| 0x27 | 2 | 7 | `fpadd8` | oracle (test only, takes C10 operands); name **guess** |
+| 0x28 | 2 | 8 | `fpsub8` | corpus: every lowp compare (fl_*_l) is fpsub8 with C10 sources; hardware (hwt_p10); name **guess** |
+| 0x30-0x35, 0x37 | 3 | 0-5, 7 | `and or xor shl shr rol asr` | oracle; corpus (`test.and.ne p0, #0, #0` clears p0; `test.shl.pos/neg p2, x, #31` in step_l); hardware (hwt_p13 `test.and.eq` on a mask; hwt_int: `testmask.xor.eq/ne.dword`, `testmask.or.neg/pos/gt/le.dword` on the whole 32-bit result, its sign bit 31, register and `#0` sources; `test.xor.ne` into p0) |
 
-Other values print as `alu<hex>`; the encoder never produces them.
+Other values print as `alu<hex>`; the vendor assembler never produces them.
 
 #### Conditions, and what GLSL produces
 
@@ -869,15 +848,15 @@ Other values print as `alu<hex>`; the encoder never produces them.
 tests, else as `s<sign>z<zero><a|o>` (e.g. `s1z0o`). The test applies to the
 ALU result, so for `fsub a, b` it compares a with b.
 
-| spec / cond | sign | zero | comb | name | meaning on a-b | corpus |
-|---|---|---|---|---|---|---|
-| 0x19 | set | nonzero | AND | `lt` | a < b | fl_lt, ic_lt, if_lt, loop counters; `testmask` in lt, ic_ltv |
-| 0x05 | set | zero | OR | `le` | a <= b | fl_le, ic_le, dc_gt (discard if a > b writes p1 = a <= b) |
-| 0x14 | none | zero | AND | `eq` | a == b | fl_eq, ic_eq, if_eq, ic_eqv (testmask) |
-| 0x18 | none | nonzero | AND | `ne` | a != b | fl_ne, ic_ne, dc_eq; `fadd.ne x, c48` = x != 0 (fl_ne0, cv_ftob, bool tests) |
-| 0x1a | clear | nonzero | AND | `gt` | a > b | fl_gt, ic_gt, if_gt, bo_* (`greaterThan` via testmask) |
-| 0x06 | clear | zero | OR | `ge` | a >= b | fl_ge, ic_ge, step (testmask) |
-| 0x11 / 0x12 | set / clear | none | AND | `neg` / `pos` | sign bit | step_l (`shl` by 31 then sign test) |
+| sign | zero | comb | name | meaning on a-b | corpus |
+|---|---|---|---|---|---|
+| set | nonzero | AND | `lt` | a < b | fl_lt, ic_lt, if_lt, loop counters; `testmask` in lt, ic_ltv |
+| set | zero | OR | `le` | a <= b | fl_le, ic_le, dc_gt (discard if a > b writes p1 = a <= b) |
+| none | zero | AND | `eq` | a == b | fl_eq, ic_eq, if_eq, ic_eqv (testmask) |
+| none | nonzero | AND | `ne` | a != b | fl_ne, ic_ne, dc_eq; `fadd.ne x, c48` = x != 0 (fl_ne0, cv_ftob, bool tests) |
+| clear | nonzero | AND | `gt` | a > b | fl_gt, ic_gt, if_gt, bo_* (`greaterThan` via testmask) |
+| clear | zero | OR | `ge` | a >= b | fl_ge, ic_ge, step (testmask) |
+| set / clear | none | AND | `neg` / `pos` | sign bit | step_l (`shl` by 31 then sign test) |
 
 **hardware** (hwt_p2 `test_*`, `pred_*`): all six comparisons give the
 expected predicate on (1, 2), (2, 2), (2, 1) with `test.fsub.<cond> p0`
@@ -886,20 +865,24 @@ true); p1, p2, p3 are written and read by the predicate field, and `!p0` /
 `!p1` invert.
 
 So "sign clear" includes +0 (gt needs the extra nonzero), and "none" passes
-under AND. libusc's own compare pseudo-ops confirm the table: USEASM 0xaa gt,
-0xab ge, 0xac eq, 0xad lt, 0xae le, 0xaf ne are rewritten by FUN_00119f50 to
-TEST fsub with spec 0x1a, 6, 0x14, 0x19, 5, 0x18 (and arg0 flag b16, no
-dest); 0xb8/0xb9 to TEST fadd x, #0 with eq/ne. `if`/`discard`: the compiler
-writes p0 (branch) or p1 (discard, with the inverted condition: keep the
-pixel when the test passes), e.g. dc_lt0 `test.fadd.ge p1, pa4, c48`,
-dc_always `test.fadd.ne p1, c48, c48` (always false).
+under AND. The vendor assembler's own compare forms (gt, ge, eq, lt, le, ne)
+encode as `test.fsub` with these conditions and no dest, and its compares
+with zero as `test.fadd x, #0` with eq/ne (oracle). `if`/`discard`: the
+vendor compiler writes p0 (branch) or p1 (discard, with the inverted
+condition: keep the pixel when the test passes) (corpus), e.g. dc_lt0
+`test.fadd.ge p1, pa4, c48`, dc_always `test.fadd.ne p1, c48, c48` (always
+false).
 
 #### test vs testmask
 
 `test` writes predicate pdst from one channel (chan) of the ALU result, or
-with mask > 1 one predicate per channel starting at p0 (the encoder forces
-pdst = p0 then; guess that channel n writes pn). The ALU result itself is
-also written when there is a dest (l20).
+with mask > 1 one predicate per channel starting at p0. The vendor assembler
+forces pdst = p0 then (oracle). **hardware** (hwt_gaps `test_mask15_p*`, open
+stack, 2026-11-11): `test.fsub.lt p0, r0, r4 [mask=15]` set pn from channel n,
+r0+n against r4+n (1, 5, 1, 5 < 3: p0, p2 set, p1, p3 clear). The ALU result
+itself is also written when there is a dest (l20): **hardware** (hwt_gaps
+`test_dst_alu_result`: `test.fsub.lt p0, r2, r0, r1` with 2.0, 3.0 left -1.0
+in r2).
 
 `testmask` has no predicate: it writes into dst, per enabled channel (mask), a
 mask of the given width that is all ones when the test passes and zero
@@ -908,47 +891,49 @@ otherwise (corpus: every testmask is followed by `movc.nz.i32 d, d, c52, c48`
 select). **hardware** (hwt_p2 `testmask_*`): `testmask.fsub.lt.dword`
 writes 0xffffffff when the test passes and 0 when it fails.
 
-### hw 0a-0e: bitwise (FUN_00117270)
+### hw 0a-0e: bitwise
 
-| hw | h3 | mnemonic | USEASM |
-|---|---|---|---|
-| 0a | 0 / 1 | `and` / `or` | 0x4f / 0x50 |
-| 0b | 0 | `xor` | 0x51 |
-| 0c | 0 / 1 | `shl` / `rol` | 0x52 / 0x55 |
-| 0d | 0 / 1 | `shr` / `asr` | 0x53 / 0x54 |
-| 0e | - | `rlp` | 0x56 |
+| hw | h3 | mnemonic |
+|---|---|---|
+| 0a | 0 / 1 | `and` / `or` |
+| 0b | 0 | `xor` |
+| 0c | 0 / 1 | `shl` / `rol` |
+| 0d | 0 / 1 | `shr` / `asr` |
+| 0e | - | `rlp` |
 
 **hardware** (hwt_p7 `bit_*`, r0 = 0xf0f0ff00, r1 = 0x3c3c0ff0): and, or,
 xor, shl, shr (logical), asr (arithmetic), rol by an immediate, shr by a
 register, `and #0xff00 [rot=16]` = & 0xff000000 and `and.inv #1` = &
 ~1 all give the expected words; a register shift by 33 gives 0 (the count
-is not taken mod 32).
+is not taken mod 32). hwt_int adds asr and shl by a register (0x80000010
+asr 4 = 0xf8000001, 0x11 shl 31 = 0x80000000) and `and #0x3f80 [rot=16]`
+on ~0 = 0x3f800000.
 
-All encoder; no corpus instance (the compiler only uses these ALU ops under
-TEST). Mnemonic names follow the USEASM op order and the TEST ALU codes
-(**guess** for the exact semantics of rol/asr/rlp).
+All **oracle**; no corpus instance (the vendor compiler uses these ALU ops
+only under test). Mnemonic names are ours and match the test ALU codes;
+rol and asr are **hardware** (above), rlp's semantics a **guess**.
 
 | bits | field | values | tag |
 |---|---|---|---|
-| h27-31, h3 | opcode, sub-op | table above | encoder |
-| h11 | inv (`.inv`) | src2 inverted: USEASM arg2 flag 0x800 (src1 takes no flags) | encoder |
-| h2 | partial | USEASM flags1 b20; also stops the immediate compression | encoder; "16-bit/partial operation" meaning **guess** |
-| h6-10 | rot | immediate rotate-left count. The field exists whatever src2 is; with a register src2, libusc leaves it 0 | encoder |
-| l0-6, l14-20, h4-5 | src2 immediate | when src2's bank is `#` (l28-29 = 2, h16): a 16-bit value, bits 0-6 / 7-13 / 14-15 | encoder |
-| h21, h12-15 | rcnt, rpt/mask | as above | encoder |
-| h18, h20, h22, h23, h24-26 | end, syncs, nosched, skipinv, pred | as above | encoder |
-| dst / src1 / src2 | arg0 / arg1 / arg2, generic slots | encoder |
+| h27-31, h3 | opcode, sub-op | table above | oracle |
+| h11 | inv (`.inv`) | src2 inverted (src1 takes no modifier) | oracle; hardware (hwt_p7 `and.inv #1`; hwt_int `and.inv` with a register src2, `xor.inv #0` = not) |
+| h2 | partial | stops the immediate compression | oracle; "16-bit/partial operation" meaning **guess** |
+| h6-10 | rot | immediate rotate-left count. The field exists whatever src2 is; with a register src2, the vendor assembler leaves it 0 | oracle; hardware (hwt_p7 `and #0xff00 [rot=16]`) |
+| l0-6, l14-20, h4-5 | src2 immediate | when src2's bank is `#` (l28-29 = 2, h16): a 16-bit value, bits 0-6 / 7-13 / 14-15 | oracle |
+| h21, h12-15 | rcnt, rpt/mask | as above | oracle |
+| h18, h20, h22, h23, h24-26 | end, syncs, nosched, skipinv, pred | as above | oracle |
+| dst / src1 / src2 | generic slots | oracle |
 
-Immediate compression (encoder, oracle-checked for 32 values): a 32-bit
-USEASM immediate v (not rlp, not partial) is stored as (n, rot, inv) with
+Immediate compression (oracle, checked for 32 values): the vendor assembler
+stores a 32-bit immediate v (not rlp, not partial) as (n, rot, inv) with
 v = rol(n, rot), n < 0x10000, smallest rot; if no rotation fits, the same
 search runs on ~v and inv is toggled (so `and r, r, #0xfffffffe` is
-`and.inv … #1`). Not representable -> encoder error. With partial, n = v & 0xffff,
+`and.inv … #1`). Not representable -> assembler error. With partial, n = v & 0xffff,
 no rotate. The text shows n, rot and inv separately (lossless):
 `and r5, r8, #0xff00  [rot=16]` = r8 & 0xff000000.
 
-`rlp dst, src1, pN` (hw 0e): USEASM arg2 must be a predicate (type 0xc, p0-p3)
--> l14-15; src2's slot is encoded as unused (#0: l28-29 = 2, h16 = 1; field
+`rlp dst, src1, pN` (hw 0e): the third operand must be a predicate (p0-p3)
+-> l14-15 (oracle); src2's slot is encoded as unused (#0: l28-29 = 2, h16 = 1; field
 `unused2` = 0x300: the src2 slot's number, bank and extension read as one
 10-bit value, number in bits 0-6, bank in 7-8, extension in 9; the text
 shows it only when it isn't 0x300, as `unused2=v`); h3, h4-11 never set. Rotate-left-through-predicate is a
@@ -956,18 +941,18 @@ shows it only when it isn't 0x300, as `unused2=v`); h3, h4-11 never set. Rotate-
 
 ### Open questions
 
-- f2_0 (test h21, USEASM flags2 b0): only on fixed-trip-count loop counter
-  tests; libusc internal instruction flag bit 5 (unnamed). Meaning unknown.
-- partial (bitwise h2, USEASM flags1 b20): compiler never sets it.
+- f2_0 (test h21): only on fixed-trip-count loop counter tests (corpus).
+  Meaning unknown.
+- partial (bitwise h2): the vendor compiler never sets it (corpus).
 - test chan 3, 4 and 7 (see the chan row: drawn, not explained); testmask
   type value 3; the sign/zero test value 3 (never emitted).
-- group-2 ALU ops (0x20-0x26) names; whether 0xf8/0xf9 are FPADD8/FPSUB8.
+- group-2 ALU ops (0x20-0x26) names; whether the ops we call fpadd8/fpsub8
+  are packed 8-bit add/subtract.
 - rnd 1/2 = down/up is now hardware (hwt_p4); the pck `scale`/`rnd` bits on
-  int->int pairs are decoded but the encoder never sets them. Why rnd has no
-  effect on f32 -> f16 (truncation) is open: maybe the F16 rounding mode
-  lives elsewhere (format control?).
+  int->int pairs are decoded but the vendor assembler never sets them. Why
+  rnd has no effect on f32 -> f16 (truncation) is open: maybe the F16
+  rounding mode lives elsewhere (format control?).
 - Immediate sign for pck sources is an assembler range check only.
-
 ## Integer, fixed-point and multi-unit ops: hw 07, 10-19, 1a
 
 Forms: `hw_int.py`. Checks:
@@ -977,93 +962,68 @@ Forms: `hw_int.py`. Checks:
 A crossover fuzz of the check cases also passed: 30000 encodes, 0 unexplained bits, 0 round-trip failures.
 
 Evidence tags:
-- **encoder**: read from the decompile and confirmed with the oracle.
+- **oracle**: a field's position and values, or a form's legality, from encoding through the vendor assembler and decoding the words.
+- **oracle (not emitted for SGX545)**: the vendor assembler rejects the form for the SGX545 target but accepts it for other cores of the family. These forms were swept with the target's feature checks altered. The SGX545 has not been tested with them.
 - **corpus**: a GLSL shader in c1/c2/c3 produces it.
-- **usc**: libusc's own compiler (usc.c, `tools/intern/usc2/asm.c`) names it or builds it that way.
+- **hardware**: an hwt suite on the CE5300 board (see "Hardware checks").
+- **capture**: seen in the vendor driver's programs in GPU memory.
+- **unconfirmed**: not yet backed by any of the above.
 - **guess**: not backed.
 
-Function names are Ghidra addresses (libusc vaddr + 0x10000).
+### Forms by class
 
-### USEASM opcode -> form
+| hw | forms |
+|---|---|
+| 07 | efo |
+| 10 | sop2 |
+| 11 | sop3 (h21=0, h10=0), sop3l (h21=0, h10=1), lrp1 (h21=1, h10=0), sop3x (h21=1, h10=1) |
+| 12 | sopwm |
+| 13 | ima8 |
+| 19 | fpma |
+| 14 | ima16 |
+| 15 | imae |
+| 18 | dot3 / dot4 / dot3s / dot4s |
+| 16 | adif adifsum ssum16 ssum16i bilin op16s1 |
+| 17 | firv; firh |
+| 1a | ima32; op1adrc |
 
-| USEASM | encoder | hw | form |
-|---|---|---|---|
-| 0x13 | FUN_00116100 | 07 | efo |
-| 0xb0-0xb6 | dispatcher rewrites to 0x13 + a fixed control word | 07 | rejected on SGX545 (FUN_0011e020 = word0 & 0x400 is set) |
-| 0x57 + coissued 0xe3 | FUN_0010bea0 | 10 | sop2 |
-| 0x59 + 0xde / 0xdf | FUN_001178e0 | 11 (h21=0, h10=0) | sop3 |
-| 0x59 + 0xe0 | FUN_001178e0 | 11 (h21=0, h10=1) | sop3l |
-| 0xe1 + 0xde | FUN_0010db30 | 11 (h21=1, h10=0) | lrp1 |
-| 0xe2 + 0xe0 | FUN_0010d120 | 11 (h21=1, h10=1) | sop3x |
-| 0x58; 0xfa | FUN_0010c9e0 | 12 | sopwm (0xfa = 0x58 with c1=s1a, c2=1-s1a, add, add) |
-| 0x62; 0xeb 0xec 0xf5 0xf6 | FUN_0010f1a0 | 13 | ima8 (0xeb: a*#1+b; 0xec: -b*#1+a; 0xf5/0xf6 the same plus flags2 b10) |
-| 0xf4 | FUN_0010f1a0 | 19 | fpma |
-| 0x63; 0xe4-0xe9 | FUN_0010f960 | 14 | ima16 (0xe4/0xe7 a*#1+b, 0xe5/0xe8 a*#1-b, 0xe6/0xe9 a*b+#0; 0xe4-0xe6 signed via flags2 0x1000, 0xe7-0xe9 0x800) |
-| 0x64; 0xea 0xf0 | FUN_00110060 | 15 | imae (0xea/0xf0 = a*#1+b with src2 u32, signed/unsigned) |
-| 0x5a-0x61 | FUN_0010e460 | 18 | dot3 / dot4 / dot3s / dot4s |
-| 0x67 0x68 0x69 0x6a 0x6b 0x6e | see hw 16 below | 16 | adif adifsum ssum16 ssum16i bilin op16s1 |
-| 0x6c; 0x6d (inline) | FUN_00111850; FUN_00119f50 | 17 | firv; firh |
-| 0x65; 0x167/0x168 | FUN_00118650 | 1a | ima32 (0x167/0x168 = a*#1 + -b, signed/unsigned) |
-| 0x66 (inline) | FUN_00119f50 | 1a | op1adrc |
+sop2, sop3, sop3l, lrp1, sop3x and the dot "s" forms carry an alpha operation (the coissue) in the same 64-bit word. The sop2, sop3, lrp1, sop3x and dot "s" forms require the coissue: the assembler rejects them without it. For dot it is optional (**oracle**).
 
-The coissued second instruction is a separate USE_INST. It hangs off dw61 (+0xf4) and is flagged by flags1 b25. The two encode into one 64-bit word.
+The assembler rejects ssum16i, firh, op16s1 and op1adrc for the SGX545. They are tagged **oracle (not emitted for SGX545)**.
 
-The sop2, sop3, lrp1, sop3x and dot "s" forms require the coissue: the encoder rejects them without it. For dot it is optional.
-
-Libusc never emits 0x6a, 0x6d, 0x6e or 0x66 for SGX545: the feature checks reject them. They were swept with the emulated target patched (feature word0 |= 2, core flags &= ~0x14000), and are tagged **encoder (patched)**.
-
-### Fields shared by hw 10-19 and 1a (encoder)
+### Fields shared by hw 10-19 and 1a (oracle)
 
 | bits | field | source |
 |---|---|---|
 | h27-31 | opcode | constant |
-| h25-26 | pred, short form (none, p0, p1, !p0) | FUN_00106f30(flags1, 1) << 25; USEASM preds 4-7 rejected |
-| h23 | skipinv | flags1 b0 |
-| h22 | nosched | flags1 b3 << 19 |
-| h18 | end | flags1 b17 << 1 |
-| h12-14 | rpt - 1 (1..8) | flags1 b4-8; sop3 / sopwm have no repeat |
+| h25-26 | pred, short form (none, p0, p1, !p0) | the other predicates are rejected |
+| h23 | skipinv | |
+| h22 | nosched | |
+| h18 | end | |
+| h12-14 | rpt - 1 (1..8) | sop3 / sopwm have no repeat |
 
-flags1 b2 (sync) is rejected. With flags2 b1 the dispatcher emits nothing, for every class.
+The assembler rejects sync on these classes. It takes sop3 and sopwm only with a one-channel instruction mask; the other forms ignore the mask.
 
-The sop3 and sopwm encoders insist on flags1 mask = 0x200 (one channel); the others ignore the mask.
-
-Operand slots come from the generic encoder FUN_00107830:
-- dst: l21-27, bank h0-1, ext h19 (BANK_DST).
-- src0: l14-20, bank h2. FUN_00109550 with ext disallowed takes r/pa only; an internal register becomes r124+n.
-- src1: l7-13, bank l30-31, ext h17 (BANK_SRC: r o pa sa, ix, c/g, #, i).
+Operand slots are the generic ones ("Operands"):
+- dst: l21-27, bank h0-1, ext h19.
+- src0: l14-20, bank h2. With no ext it takes r/pa only; an internal register becomes r124+n.
+- src1: l7-13, bank l30-31, ext h17 (r o pa sa, ix, c/g, #, i).
 - src2: l0-6, bank l28-29, ext h16.
 - An index operand number is [bank 2][idx 1][offset 4].
 
-**Operand bit 6.** In sop2/sop3/sopwm/dot/ima8/fpma, USEASM flags2 b24 makes every number 6 bits. Bit 6 is then the per-operand format flag (USEASM arg flag b24, C10 vs U8). This covers r, o, pa, sa and i operands only; indexed, c/g, immediate and idx operands keep their 7-bit fields ("Encoding conventions"). The integer classes not named here (ima16, imae, hw 16, 17, 1a) never read format control.
+**Operand bit 6.** In sop2/sop3/sopwm/dot/ima8/fpma, while format control's C10 enable is on (`setfc`'s second argument, on at program start; **hardware**, hwt_p6), every number is 6 bits. Bit 6 is then the per-operand format flag (C10 vs U8). This covers r, o, pa, sa and i operands only; indexed, c/g, immediate and idx operands keep their 7-bit fields ("Encoding conventions"). The integer classes not named here (ima16, imae, hw 16, 17, 1a) never read format control.
 
-In efo the same happens for F16 sources (arg flag b22). There is no instruction bit that records this; dis.py tracks `setfc` per code block (hw.CTX). **hardware** (hwt_p7, hwt_p8): efo's F16 select is `setfc`'s **first** argument and is **off at program start**; with it on, an F16 operand's number counts halves like the float classes' (`efo r3, r0.f16.hi, r1, c52 [d=a0 a=a0=s0+s2]` with r0 = (3, 2) gives 3.0 = 2 + 1), and the result is f32. With it off the same word reads r64 (per-pixel garbage).
+In efo the same happens for F16 sources. There is no instruction bit that records this; dis.py tracks `setfc` per code block (hw.CTX). **hardware** (hwt_p7, hwt_p8): efo's F16 select is `setfc`'s **first** argument and is **off at program start**; with it on, an F16 operand's number counts halves like the float classes' (`efo r3, r0.f16.hi, r1, c52 [d=a0 a=a0=s0+s2]` with r0 = (3, 2) gives 3.0 = 2 + 1), and the result is f32. With it off the same word reads r64 (per-pixel garbage).
 
-All corpus sop/dot/fpma words come from programs with flags2 b24. So a backend that wants r64-r127 in these classes cannot also use per-operand C10/F16. Whether the hardware takes a global mode from somewhere (the program header?) is **unknown**.
+All corpus sop/dot/fpma words come from programs with the C10 enable on. So a backend that wants r64-r127 in these classes must turn the enable off with `setfc`, and then can't use per-operand C10 in them.
 
-INTSRCSEL (USEASM register type 0x10) values met here. The numbers are **encoder**. The names marked * are named in libusc asserts; the rest are **guess**.
-
-| value | name | value | name |
-|---|---|---|---|
-| 0 | zero* | 1 | one (= complement of zero) |
-| 2 | asat (src alpha saturate) | 3 | complement of 2 |
-| 4 | src0* | 5 | src1 |
-| 6 | src2 | 7 | src0alpha* |
-| 8 | src1alpha | 9 | src2alpha* |
-| 0xa-0xd | cx1..cx8 (dot color scale) | 0xe-0x11 | ax1..ax8 (dot alpha scale) |
-| 0x12 | add* | 0x13 | sub |
-| 0x14 | neg | 0x15 | none |
-| 0x16 | min | 0x17 | max |
-| 0x18 / 0x19 | k18 / k19 (sop2 extra c1/c2 select) | 0x1a | complement |
-| 0x1e / 0x1f / 0x20 | u8 / s8 / o8 | 0x27 / 0x28 / 0x29 | u16 / s16* / u32* |
-| 0x2a / 0x2b | carry in / carry out | 0x2c | 16-bit format (ima16) |
-
-Arg flag b15 (0x8000) is the complement of a select. The encoder folds it in as select ^ complement, so ONE = complement of ZERO.
+Select names (zero, one, asat, s0-s2, s0a-s2a, k18/k19, the x1..x8 scales, add/sub/min/max, u8/s8/o8, u16/s16/u32) are our labels. Each form's table gives the stored values. `one` is stored as `zero` with the complement bit set (**oracle**).
 
 In the forms, a select field's spec ends with its complement bit. Complemented values print as `1-x` (`one`/`zero` for 1-zero/1-one).
 
-### efo (hw 07, USEASM 0x13, FUN_00116100)
+### efo (hw 07)
 
-The encoder ORs USEASM arg4 (an immediate) straight into the high word. usc's asm.c builds that immediate from psEfo (usc.c ~1926-2400; SGX545 takes the `bNewEfoFeature` branch). The field meanings below are asm.c's.
+The control fields' meanings are from hardware (hwt_p12, below) except where tagged otherwise.
 
 Units:
 - M0, M1: multipliers.
@@ -1072,23 +1032,23 @@ Units:
 
 | bits | field | values | tag |
 |---|---|---|---|
-| h24-25 | pred (short form) | | encoder |
-| h23 | skipinv | flags1 b0 | encoder |
-| h11 | nosched | flags1 b3 << 8 | encoder |
-| h12-13 | rpt-1 (1..4) | | encoder |
-| h20-21 | d: what the dest gets | 0 i0, 1 i1, 2 a0, 3 a1 | usc + corpus |
-| h18-19 | i: internal writes | 0 i0=a0 i1=a1; 1 i0=a1 i1=a0; 2 i0=m0 i1=m1; 3 i0=a0 i1=m1 | usc |
-| h16-17 | a: adder inputs | 0 a0=m0+m1 a1=i1+i0; 1 a0=m0+s0 a1=i1+i0; 2 a0=m0+i0 a1=i1+m1; 3 a0=s0+s2 a1=s1+s2 | usc |
-| h14-15 | m: multiplier inputs | 0 m0=s0*s2 m1=s1*s2; 1 m0=s2*s1 m1=s2*s2; 2 m0=s1*s0 m1=s2*(s2?); 3 m0=s1*i0 m1=s2*i1 | usc (mode 2 m1 only asserted to involve s2) |
-| h10 / h9 | wi0 / wi1: write I0 / I1 | | usc |
-| h26 | a0rneg: negate A0's right input | | usc assert `bA0RightNeg`; corpus `mix`: m0=-x*a, a0=m0-(-x) = x(1-a) |
-| h22 | a0lneg | usc copies an add's other source negate here | **guess** (name) |
-| h8 | f3_10 | USEASM flags3 b10 | encoder; meaning unknown |
-| h5 h4 h3 | src0/src1/src2 negate | arg flag b0 | encoder |
+| h24-25 | pred (short form) | | oracle |
+| h23 | skipinv | | oracle |
+| h11 | nosched | | oracle |
+| h12-13 | rpt-1 (1..4) | | oracle |
+| h20-21 | d: what the dest gets | 0 i0, 1 i1, 2 a0, 3 a1 | oracle; corpus; hardware (hwt_p12) |
+| h18-19 | i: internal writes | 0 i0=a0 i1=a1; 1 i0=a1 i1=a0; 2 i0=m0 i1=m1; 3 i0=a0 i1=m1 | oracle; hardware (hwt_p12) |
+| h16-17 | a: adder inputs | 0 a0=m0+m1 a1=i1+i0; 1 a0=m0+s0 a1=i1+i0; 2 a0=m0+i0 a1=i1+m1; 3 a0=s0+s2 a1=s1+s2 | oracle; hardware (hwt_p12) |
+| h14-15 | m: multiplier inputs | 0 m0=s0*s2 m1=s1*s2; 1 m0=s2*s1 m1=s2*s2; 2 m0=s1*s0 m1=s2*s2; 3 m0=s1*i0 m1=s2*i1 | oracle; hardware (hwt_p12) |
+| h10 / h9 | wi0 / wi1: write I0 / I1 | | oracle; hardware (hwt_p12) |
+| h26 | a0rneg: negate A0's right input | | oracle; corpus `mix`: m0=-x*a, a0=m0-(-x) = x(1-a); hardware (hwt_p12) |
+| h22 | a0lneg | set for an add's other source negate (**unconfirmed**) | oracle; name **guess**; hardware (hwt_p12): no effect with `a=a0=s0+s2` |
+| h8 | f3_10 | | oracle; meaning unknown |
+| h5 h4 h3 | src0/src1/src2 negate | | oracle; corpus (`not()`) |
 
 efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
 
-**hardware** (hwt_p12, CE5300 board, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
+**hardware** (hwt_p12, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
 I0 = 7, I1 = 17 beforehand. The unit wiring in the table above holds:
 - every `m` mode: mode 2's m1 is `s2 * s2`, and mode 3 reads I0/I1 as they
   were before the word;
@@ -1099,18 +1059,24 @@ I0 = 7, I1 = 17 beforehand. The unit wiring in the table above holds:
 - Chaining works as v_mvp's does: an efo with `a=a0=m0+i0` reads the I0 the
   previous efo wrote (10 + 10 = 20).
 - **Hazard:** `d=i0` while the same word writes I0 (`wi0`) gave the old value
-  on some pixels and the new one on others. `d=i1` with `wi1` read the old
-  value uniformly in this one draw. Don't make `d` name an internal register
-  the word writes.
+  on some pixels and the new one on others: don't make `d` name I0 while the
+  word writes it.
+- `d=i1` with `wi1` read the old I1 uniformly. The vendor driver's programs
+  rely on it (capture): in the DDK's Minecraft terrain vertex program
+  (`mc-ddk-vertex.md`) the first efo of each `mat4 * v` chain stores the
+  previous chain's second result with `d=i1` while its `i=i0=m0,i1=m1` starts
+  the new chain, so a chain needs no trailing `mov oN, i1` except the last.
+  The previous chain's last efo is then `nosched` too (I1 must survive to the
+  next word).
 
-Operands:
+Operands (**oracle**):
 - dst: l21-27, bank h0-1 (r o pa ix), no ext.
 - src0: l14-20, bank h2, ext h6 (r pa o sa).
 - src1: l7-13, bank l30-31, no ext (r o pa sa).
 - src2: l0-6, bank l28-29, ext h7 (all kinds).
 - Internal registers in the dest, src0 and src1 slots become r124+n.
 
-The pre-SGX545 EFO uses h3-8 as three 2-bit source modifiers; this core uses the h5/h4/h3 + ext layout. The usc control-word mapping is two-variant as well.
+Earlier cores' EFO use h3-8 as three 2-bit source modifiers, and their control fields differ too (**unconfirmed**). This core uses the h5/h4/h3 + ext layout.
 
 Corpus control words and their GLSL:
 
@@ -1123,21 +1089,21 @@ Corpus control words and their GLSL:
 | 0x200000 | d=a0, a0=m0+m1, no I writes | ix_loop, vix_loop |
 | 0x2b8600 | m mode 2 | rv_aa |
 
-### sop2 (hw 10, USEASM 0x57 + 0xe3, FUN_0010bea0)
+### sop2 (hw 10)
 
-The encoder requires the coissue. `dst.rgb = (src1 * c1) cop (src2 * c2)` and `dst.a = (src1.a * a1) aop (src2.a * a2)` (Eurasia SOP2, **guess**). Operands are dst, src1 and src2; there is no src0.
+The assembler requires the coissue. `dst.rgb = (src1 * c1) cop (src2 * c2)` and `dst.a = (src1.a * a1) aop (src2.a * a2)` (**hardware**, hwt_p6, below). Operands are dst, src1 and src2; there is no src0.
 
 | bits | field | source | tag |
 |---|---|---|---|
-| h6-8, h24 | c1: 0 zero 1 s1 2 s2 3 s1a 4 s2a 5 asat 6 k18; h24 complement | arg4 | encoder |
-| h3-5, h15 | c2: same, 6 = k19 | arg5 | encoder |
-| l18-19 | cop: 0 add, 1 sub, 2 min, 3 max | arg6 | encoder |
-| l20 | cs1c: complement src1 (color) | arg3 0x1a (else none 0x15) | encoder; usc bComplementCSrc1 |
-| h20-21, h11 | a1: zero s1a s2a k18 + complement | 0xe3 arg1 | encoder |
-| h9-10, h2 | a2: zero s1a s2a k19 + complement | 0xe3 arg2 | encoder |
-| l16-17 | aop: 0 add, 1 sub, 2 min, 3 max | 0xe3 arg3 | encoder |
-| l15 | as1c: complement src1 (alpha) | 0xe3 arg0 0x1a | encoder; usc bComplementASrc1 |
-| l14 | aneg: negate alpha result | 0xe3 arg4 0x14 | encoder |
+| h6-8, h24 | c1: 0 zero 1 s1 2 s2 3 s1a 4 s2a 5 asat 6 k18; h24 complement | | oracle; hardware (hwt_p6: zero, one, s2) |
+| h3-5, h15 | c2: same, 6 = k19 | | oracle; hardware (hwt_p6: zero, one) |
+| l18-19 | cop: 0 add, 1 sub, 2 min, 3 max | | oracle; hardware (hwt_p6: add, sub) |
+| l20 | cs1c: complement src1 (color) | | oracle |
+| h20-21, h11 | a1: zero s1a s2a k18 + complement | | oracle; hardware (hwt_p6: zero, s2a) |
+| h9-10, h2 | a2: zero s1a s2a k19 + complement | | oracle; hardware (hwt_p6: one) |
+| l16-17 | aop: 0 add, 1 sub, 2 min, 3 max | | oracle |
+| l15 | as1c: complement src1 (alpha) | | oracle |
+| l14 | aneg: negate alpha result | | oracle |
 
 The only corpus use is `mov_l`/`fl_gt_l`: `sop2 d, a, b [c1=one c2=zero a1=zero a2=one]`, a lowp select or move.
 
@@ -1155,192 +1121,203 @@ difference; r1 channel 0 = 0x010 -> alpha byte 0x10). A C10 destination
 (`sop2 r3.c10, ...`) gets the three 10-bit channels at bits 0-29 (0x04020100
 for (0x100, 0x080, 0x040)), bits 30-31 zero.
 
-### sopwm (hw 12, USEASM 0x58 / 0xfa, FUN_0010c9e0)
+### sopwm (hw 12)
 
-`dst = (src1 * c1) cop (src2 * c2)` per byte, with a write mask. There is no coissue and no repeat; flags1 mask must be 0x200.
+`dst = (src1 * c1) cop (src2 * c2)` per byte, with a write mask. There is no coissue and no repeat; the assembler takes only a one-channel instruction mask.
 
 | bits | field | source | tag |
 |---|---|---|---|
-| h12,h13,h14,h11 | mask, in USEASM order x y z w (stored rotated); default 15 | dest arg flags b7-10 with flag b20; a partial mask needs a non-indexed dest | encoder; usc puts auDestMask << 7 there |
-| h6-8, h24 | c1: 0 zero 1 asat 2 s1 3 s1a 6 s2 7 s2a (4, 5 unused) + complement | arg3 | encoder |
-| h3-5, h15 | c2: same | arg4 | encoder |
-| h20-21 | cop: 0 add, 1 sub, 2 min, 3 max | arg5 | encoder |
-| h9-10 | aop: same values | arg6 | encoder |
+| h12,h13,h14,h11 | mask, in order x y z w (stored rotated); default 15 | a partial mask needs a non-indexed dest | oracle |
+| h6-8, h24 | c1: 0 zero 1 asat 2 s1 3 s1a 6 s2 7 s2a (4, 5 unused) + complement | | oracle |
+| h3-5, h15 | c2: same | | oracle |
+| h20-21 | cop: 0 add, 1 sub, 2 min, 3 max | | oracle |
+| h9-10 | aop: same values | | oracle |
 
-h2 and l14-20 are unused. Corpus: lowp add/sub/min/max (`sopwm d, a, b [c1=one c2=one cop=sub aop=sub]`) and lowp mix (0xfa).
+h2 and l14-20 are unused. Corpus: lowp add/sub/min/max (`sopwm d, a, b [c1=one c2=one cop=sub aop=sub]`) and lowp mix (`[c1=s1a c2=1-s1a]`, add, add).
 
 ### sop3 family (hw 11)
 
-All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in every form of the family. Selects for c1/c2 (h6-8 + h24, h3-5 + h15) are 0 zero, 1 asat, 2 s1, 3 s1a, 4 s0, 5 s0a, 6 s2, 7 s2a (**encoder**). h21 picks the color op and h10 the coissued alpha op.
+All forms take dst, src0 (r/pa), src1 and src2. cop and aop are 0 add, 1 sub in every form of the family. Selects for c1/c2 (h6-8 + h24, h3-5 + h15) are 0 zero, 1 asat, 2 s1, 3 s1a, 4 s0, 5 s0a, 6 s2, 7 s2a (**oracle**). h21 picks the color op and h10 the coissued alpha op.
 
-**sop3** (h21=0, h10=0; USEASM 0x59 + 0xde asop / 0xdf arsop):
-
-| bits | field | tag |
-|---|---|---|
-| h20 | cop: 0 add, 1 sub (arg6 0x12/0x13) | encoder |
-| h12-13, h14 | a: alpha select zero s0a s1a s2a + complement (0xde/0xdf arg0) | encoder |
-| h9 | aop: 0 add, 1 sub (0xde/0xdf arg1) | encoder |
-| h11 | arev: 0xdf instead of 0xde | encoder; usc uses 0xdf when bNegateAResult. In asop the other alpha select is c2's alpha; arsop swaps the roles (b - a) |
-
-**sop3l** (h21=0, h10=1; 0x59 + 0xe0 alrp):
+**sop3** (h21=0, h10=0; alpha op asop, or arsop with arev):
 
 | bits | field | tag |
 |---|---|---|
-| h20 | cop | encoder |
-| h13, h9 | a1: zero / s1a + complement | encoder |
-| h12, h14 | a2: zero / s2a + complement | encoder |
-| h11 | cneg: color result negate (arg7 0x14); only allowed with alrp | encoder |
+| h20 | cop: 0 add, 1 sub | oracle |
+| h12-13, h14 | a: alpha select zero s0a s1a s2a + complement | oracle |
+| h9 | aop: 0 add, 1 sub | oracle |
+| h11 | arev: arsop instead of asop | oracle. Meaning **unconfirmed**: it negates the alpha result. In asop the other alpha select is c2's alpha; arsop swaps the roles (b - a) |
 
-**lrp1** (h21=1, h10=0; USEASM 0xe1 + 0xde):
+**sop3l** (h21=0, h10=1; alpha op alrp):
 
 | bits | field | tag |
 |---|---|---|
-| h13, h20 | l1: zero / s1 + complement | encoder |
-| h12, h14 | l2: zero / s2 + complement | encoder |
-| h11 | cs: s0 / s0a | encoder; usc assert `psLrp1->uCS == SRC0ALPHA` |
-| c1/c2 fields | the coissued asop's two selects, with the family's c1/c2 select values above | encoder |
-| h9 | aop | encoder |
+| h20 | cop | oracle |
+| h13, h9 | a1: zero / s1a + complement | oracle |
+| h12, h14 | a2: zero / s2a + complement | oracle |
+| h11 | cneg: color result negate; only allowed with alrp | oracle |
+
+**lrp1** (h21=1, h10=0; alpha op asop):
+
+| bits | field | tag |
+|---|---|---|
+| h13, h20 | l1: zero / s1 + complement | oracle |
+| h12, h14 | l2: zero / s2 + complement | oracle |
+| h11 | cs: s0 / s0a | oracle |
+| c1/c2 fields | the coissued asop's two selects, with the family's c1/c2 select values above | oracle |
+| h9 | aop | oracle |
 
 Color = lerp(l1, l2, cs) is a **guess** from the name.
 
-**sop3x** (h21=1, h10=1; USEASM 0xe2 + 0xe0): c1 and c2 as above, plus the alrp alpha (a1, a2 as in sop3l).
+**sop3x** (h21=1, h10=1; alpha op alrp): c1 and c2 as above, plus the alrp alpha (a1, a2 as in sop3l).
 
-h11 and h20 (field p, h11 the low bit) encode the pair arg6/arg7: 0 `s1.s2`, 1 `s1.1-s2`, 2 `one.s2`, 3 `1-s1.s2`. The pair 1-s1, 1-s2 is rejected (**encoder**). The name and the meaning are **guess**; usc's asm.c never emits 0xe2 explicitly.
+h11 and h20 (field p, h11 the low bit) encode a pair of selects: 0 `s1.s2`, 1 `s1.1-s2`, 2 `one.s2`, 3 `1-s1.s2`. The pair 1-s1, 1-s2 is rejected (**oracle**). The name and the meaning are **guess**; no corpus word is a sop3x.
 
 Corpus: lowp `mul_l`/`div_l`/`pow_l`/`mad_l` are `sop3l d, x, y, z [c1=s0 c2=zero a2=s2a]`. `mod_l` uses `sop3 [cop=sub c1=one c2=s0 a=one aop=sub]`.
 
-### dot3 / dot4 (hw 18, USEASM 0x5a-0x61, FUN_0010e460)
+### dot3 / dot4 (hw 18)
 
 | bits | field | source | tag |
 |---|---|---|---|
-| h24 | 4-vector (dot4) | 0x5b 0x5d 0x5f 0x61 | encoder; usc uVecLength 3/4 |
-| h6 | f6 | 0x5e-0x61 | encoder; meaning unknown |
-| h7-8 | cs: color scale x1 x2 x4 x8 | arg1 INTSRCSEL 0xa-0xd | encoder |
-| h11 / h15 | src1 / src2 complement | arg3/arg4 flag b15 | encoder |
-| h5 | src0 present: coissue 0xda/0xdb (forms dot3s/dot4s) | | encoder |
-| h4 | f4: 0xdb or 0xdd rather than 0xda/0xdc | | encoder |
-| h20-21 (+h2 when h5=0) | a1: zero s1a s2a, 3 = x3 (+ complement) | coissue arg1; 0x5c 0x5d 0x60 0x61 force 3 | encoder |
-| h9-10, h3 | a2: zero s1a s2a, 3 = x3 + complement | coissue arg2 (0xda/0xdb) or arg3 (0xdc/0xdd); without a coissue libusc writes 3, but the field holds any value | encoder |
-| l16-17 (h5=0) | as: alpha scale | arg2 0xe-0x11 (no coissue) or 0xdc/0xdd arg0 | encoder |
-| l15 (h5=0) | s1ac: complement of 0xdc/0xdd's fixed src1alpha (arg2) | | encoder |
-| l14-20 (h5=1) | src0 (r/pa) | 0xda/0xdb arg0 | encoder |
+| h24 | 4-vector (dot4) | | oracle |
+| h6 | f6 | | oracle; meaning unknown |
+| h7-8 | cs: color scale x1 x2 x4 x8 | | oracle |
+| h11 / h15 | src1 / src2 complement | | oracle |
+| h5 | src0 present: coissue (forms dot3s/dot4s) | | oracle |
+| h4 | f4 | | oracle; meaning unknown |
+| h20-21 (+h2 when h5=0) | a1: zero s1a s2a, 3 = x3 (+ complement) | | oracle |
+| h9-10, h3 | a2: zero s1a s2a, 3 = x3 + complement | with no coissue the vendor tools write 3, but the field holds any value | oracle |
+| l16-17 (h5=0) | as: alpha scale | | oracle |
+| l15 (h5=0) | s1ac: complement of the alpha op's fixed src1 alpha | | oracle |
+| l14-20 (h5=1) | src0 (r/pa) | | oracle |
 
-0x5b and 0x5f reject a coissue. Corpus: dp3_l/dp4_l/norm3_l use `dot3/dot4 d, a, b [a1=zero a2=x3]`, the lowp dot product with no alpha op.
+Corpus: dp3_l/dp4_l/norm3_l use `dot3/dot4 d, a, b [a1=zero a2=x3]`, the lowp dot product with no alpha op.
 
-### ima8 (hw 13, USEASM 0x62) / fpma (hw 19, 0xf4), FUN_0010f1a0
+### ima8 (hw 13) / fpma (hw 19)
 
 `dst = c0 * c1 + c2` per channel and `alpha = a0 * s1a + s2a`. Operands: dst, src0 (r/pa, negate h3), src1, src2.
 
 | bits | field | source | tag |
 |---|---|---|---|
-| h20-21, h10 | c0: s0 s1 s0a s1a + complement | arg4 | encoder |
-| h5, h24 | c1: s1 / s1a + complement | arg5 | encoder |
-| h4, h15 | c2: s2 / s2a + complement | arg6 | encoder |
-| h9, h6 | a0: s0a / s1a + complement | arg7 | encoder |
-| h7 / h8 | a1c / a2c: complement s1a / s2a (arg8 must be s1a, arg9 s2a) | | encoder |
-| h11 | sat | flags2 b10 | encoder; name **guess** (usc psFpma field after bNegateSource0) |
+| h20-21, h10 | c0: s0 s1 s0a s1a + complement | | oracle |
+| h5, h24 | c1: s1 / s1a + complement | | oracle |
+| h4, h15 | c2: s2 / s2a + complement | | oracle |
+| h9, h6 | a0: s0a / s1a + complement | | oracle |
+| h7 / h8 | a1c / a2c: complement s1a / s2a | | oracle |
+| h11 | sat | | oracle; name **guess** |
 
 Corpus: lowp `mad_l`/`sin_l` use `fpma`.
 
-### ima16 (hw 14, USEASM 0x63; 0xe4-0xe9), FUN_0010f960
+### ima16 (hw 14)
 
 `dst = src0 * src1 + src2`, 16-bit. src0 is r/pa only.
 
 | bits | field | source | tag |
 |---|---|---|---|
-| h11 | sgn (.sgn) | flags2 b12 (b11 = unsigned; both rejected) | encoder; usc |
-| h10 | sat | flags2 b10 | encoder; name **guess** |
-| h3-4 | f2_15 | flags2 b15-18, 0..3 | encoder; meaning unknown |
-| h24 | dflag1 | dest arg flag b1 | encoder; meaning unknown |
-| h6-7 / h8-9 | f1 / f2: src1 / src2 format: 0 16-bit (INTSRCSEL 0x2c), 1 u8 (0x1e), 2 s8 (0x1f), 3 o8 (0x20) | arg4 / arg5 | encoder; names **guess** (Eurasia SFORM) |
-| h20 / h5 | s1hi / s2hi: byte select for 8-bit formats | arg2/arg3 flag b13 (b12 = low; one is required for a register) | encoder |
-| h21 | src2 negate | arg3 flag b0 | encoder |
+| h11 | sgn (.sgn) | | oracle; corpus |
+| h10 | sat | | oracle; name **guess** |
+| h3-4 | f2_15 | 0..3 | oracle; meaning unknown |
+| h24 | dflag1 | | oracle; meaning unknown |
+| h6-7 / h8-9 | f1 / f2: src1 / src2 format: 0 16-bit, 1 u8, 2 s8, 3 o8 | | oracle; names **guess** |
+| h20 / h5 | s1hi / s2hi: byte select for 8-bit formats | the assembler requires a high or low choice for a register | oracle |
+| h21 | src2 negate | | oracle |
 
-Immediates are 7-bit signed unless the format is u8. usc uses u8 exactly when the source is an immediate (usc.c case 0x34). Corpus: indexing, e.g. `ima16.sgn idx1, r0, #4, #0 [f1=u8 f2=u8]` scales an array index into an index register.
+Immediates are 7-bit signed unless the format is u8 (**oracle**). The vendor compiler uses u8 exactly when the source is an immediate (**unconfirmed**). Corpus: indexing, e.g. `ima16.sgn idx1, r0, #4, #0 [f1=u8 f2=u8]` scales an array index into an index register.
 
-### imae (hw 15, USEASM 0x64; 0xea 0xf0), FUN_00110060
+### imae (hw 15)
 
 `dst = src0 * src1 + src2`, 16x16 + 32 with carry. src0 is r/pa only.
 
 | bits | field | source | tag |
 |---|---|---|---|
-| h11 | sgn | flags2 b12 (usc: b11 when unsigned) | encoder; usc |
-| h10 | sat | flags2 b10 | encoder; name **guess** |
-| h3-5 | f2_15 | flags2 b15-18, 0..7 | encoder; unknown |
-| h6-7 | t2: src2 type u16 / s16 / u32 | arg4 0x27/0x28/0x29 | encoder; usc assert names S16, U32 |
-| h24 / h21 / h20 | s0hi / s1hi / s2hi: high 16 bits of src0/1/2 (arg flag b13; b12 = low; one of them, or an immediate, is required; u32 src2 takes neither) | | encoder |
-| h8 | cout (arg5 0x2b) | | encoder; name **guess** |
-| h9 | cin (arg6 0x2a) | | encoder; name **guess** |
-| h15 | ci: carry internal register i0/i1 (arg7, when cin or cout) | | encoder |
+| h11 | sgn | | oracle; corpus |
+| h10 | sat | | oracle; name **guess** |
+| h3-5 | f2_15 | 0..7 | oracle; unknown |
+| h6-7 | t2: src2 type u16 / s16 / u32 | | oracle; corpus (u32) |
+| h24 / h21 / h20 | s0hi / s1hi / s2hi: high 16 bits of src0/1/2 (the assembler requires a high or low choice, or an immediate; a u32 src2 takes neither) | | oracle |
+| h8 | cout | | oracle; name **guess** |
+| h9 | cin | | oracle; name **guess** |
+| h15 | ci: carry internal register i0/i1 (when cin or cout) | | oracle |
 
-src1 immediates are signed when sgn is set. src2 immediates are signed whenever `t2` isn't 0: s16, u32 and the unnamed 3 (`t2=x3`) (usc sign-extends 16-bit constants for s16/u32: usc.c ~69289). So `imae o72, pa36, r58, #-63 [t2=u32]` is legal, and the 7-bit number holds -63 in two's complement. Corpus: dynamic array addressing, `imae.sgn pa0, pa1, #16, sa9 [t2=u32]`.
+src1 immediates are signed when sgn is set. src2 immediates are signed whenever `t2` isn't 0: s16, u32 and the unnamed 3 (`t2=x3`) (**oracle**). So `imae o72, pa36, r58, #-63 [t2=u32]` is legal, and the 7-bit number holds -63 in two's complement. Corpus: dynamic array addressing, `imae.sgn pa0, pa1, #16, sa9 [t2=u32]`.
 
-### hw 16 / 17 / 1a (no corpus words; encoder or encoder (patched))
+### hw 16 / 17 / 1a (no corpus words; oracle or oracle (not emitted for SGX545))
 
-The common fields are as above. firv and op16s1 have only h12-13 for the repeat (1..4); firh accepts 1..6. Only ima32 is named by libusc (`psIn->u.psIma32`); the other names are Eurasia-family **guesses**.
+The common fields are as above. firv and op16s1 have only h12-13 for the repeat (1..4); firh accepts 1..6. The names are our labels; apart from ima32 they are **guesses**.
 
-**adif / adifsum** (16, h20-21=0, FUN_00110800, USEASM 0x67/0x68):
+**adif / adifsum** (16, h20-21=0):
 - h6 = 1 makes it adifsum, with src0 (r/pa). adif has no src0 (l14-20 and h2 are 0).
-- h15 = s0f13 (src0 arg flag b13, unknown).
+- h15 = s0f13 (meaning unknown).
 - Probably |src1 - src2| (+ src0) (**guess**).
 
-Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16, firv and firh: 0 u8, 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). It is written as a mnemonic suffix, `bilin.s8`, `ssum16.o8`, `firh.s8`; u8 has none. `[fmt=s8]` in the brackets means the same. Fields given as USEASM values (op16s1's `x39`) print as the stored field value.
+Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unless an entry says otherwise. `fmt` (h8-9) in bilin, ssum16, firv and firh: 0 u8, 1 s8, 2 o8 (ssum16i is the separate form with h8-9 = 3). It is written as a mnemonic suffix, `bilin.s8`, `ssum16.o8`, `firh.s8`; u8 has none. `[fmt=s8]` in the brackets means the same. Every field prints as its stored value.
 
-**op16s1** (16, h20-21=1, 0x6e, FUN_00118bf0, patched):
-- f2_15 h3-6 (flags2 b15-18).
-- s8 h7 (arg8 0x1f).
+**op16s1** (16, h20-21=1; oracle (not emitted for SGX545)):
+- f2_15 h3-6.
+- s8 h7.
 - x38 h8.
 - x1c h9.
-- x39 h10-11 (0x39-0x3b).
-- i h15 (arg6 i0/i1).
+- x39 h10-11 (0-2).
+- i h15 (i0/i1).
 - The operation is unknown.
 
-**bilin** (16, h20-21=2, 0x6b, FUN_001111f0):
-- fmt h8-9 u8/s8/o8 (0x1e-0x20; s8/o8 make immediates signed).
-- ileave h24 (0x2d vs 0x2e).
-- src23 h11 (0x30 vs 0x2f).
-- dst23 h10 (0x32 vs 0x31).
-- rnd h15 (0x33).
+**bilin** (16, h20-21=2):
+- fmt h8-9 u8/s8/o8 (s8/o8 make immediates signed).
+- ileave h24.
+- src23 h11.
+- dst23 h10.
+- rnd h15.
 - The names are **guess**.
 
-**ssum16** (16, h20-21=3, 0x69, FUN_00110be0):
-- src0 has no bank bits: it is read in src1's bank (the encoder requires the same r/o/pa/sa type), and src1 has no ext.
+**ssum16** (16, h20-21=3):
+- src0 has no bank bits: it is read in src1's bank (the assembler requires src0 and src1 of the same r/o/pa/sa kind), and src1 has no ext.
 - fmt h8-9.
 - x1b h24.
 - x1c h7.
 - x1d h10.
-- nf16 h15: set unless dest flag b16 (the text prints `nf16` when the bit is set).
+- nf16 h15 (the text prints `nf16` when the bit is set).
 
-**ssum16i** (h8-9 = 3, 0x6a, FUN_001192a0, patched): src0 is an internal register, its number written raw in l14-20 with no bank bits; there is no src1 (l7-13, l30-31 are 0).
+**ssum16i** (h8-9 = 3; oracle (not emitted for SGX545)): src0 is an internal register, its number written raw in l14-20 with no bank bits; there is no src1 (l7-13, l30-31 are 0).
 
-**firv** (17, h2=0, 0x6c, FUN_00111850):
+**firv** (17, h2=0):
 - src0 is read in src1's bank: its number in l14-20 with no bank bits (as ssum16).
 - fmt h8-9.
 - a5 h6-7 (immediate 0-2).
-- coef h3-5 (register type 0x11, 0-7).
+- coef h3-5 (0-7).
 - shift: 5-bit two's complement, bits 0-1 in h10-11, 2-3 in h14-15, 4 in h24 (printed raw 0-31).
 - a8 h20-21 (0-3).
 - The destination is the generic dst slot (g<n> as everywhere: number + 0x40 on ext bank 1).
 
-**firh** (h2=1, 0x6d inline, patched): repeat count - 1 in h12-14. The dest is an internal register, its number written raw in l21-27 with no bank bits. Shift bits 2-3 move to h0-1 (bits 0-1 stay in h10-11, bit 4 in h24). h19 = flags2 b27.
+**firh** (h2=1; oracle (not emitted for SGX545)): repeat count - 1 in h12-14. The dest is an internal register, its number written raw in l21-27 with no bank bits. Shift bits 2-3 move to h0-1 (bits 0-1 stay in h10-11, bit 4 in h24). h19 = f2_27 (meaning unknown).
 
-**ima32** (1a, h20=0, 0x65, FUN_00118650): `dst = src0*src1 + src2`, 32-bit.
-- sgn h9 (flags2 0x1000 vs 0x800; it also makes immediates signed).
-- hi h4-6: the high 32 bits go to i0-i2 (arg1; usc psHighWordDest): 0 nowhere, 4 i0, 5 i1, 6 i2.
-- cin h10-11: carry-in from i0-i2 (arg5 0x2a + arg6): 0 none, 1 i0, 2 i1, 3 i2.
+**ima32** (1a, h20=0): `dst = src0*src1 + src2`, 32-bit.
+- sgn h9 (it also makes immediates signed).
+- hi h4-6: 0 none, 4 i0, 5 i1, 6 i2. The high 32 bits go there: **hardware**
+  (hwt_gaps `ima32_hi_*`, open stack, 2026-11-11: 0x10000 * 0x10000 gave 0 in
+  the destination and 1 in i1).
+- cin h10-11: carry-in from i0-i2: 0 none, 1 i0, 2 i1, 3 i2.
 - negp h8 = src0 neg xor src1 neg.
 - src2 neg h7.
+- **hardware** (hwt_int, open stack, 2026-11-11): the destination is the
+  low 32 bits of `src0 * src1 + src2`, wrapping (0x7fffffff + 1 =
+  0x80000000, 0xffffffff + 2 = 1, 0x12345678 * 0x9abcdef = 0xe242d208,
+  -3 * 5 = -15); src2 negate subtracts (`ima32 d, a, #1, -b`: 5 - 7 = -2,
+  0x80000000 - 1 = 0x7fffffff), on an immediate too (`-#7`); a 7-bit
+  immediate without `.sgn` is unsigned (`#100`); `a * c56` (~0) is -a.
+  The high word in i1 is the unsigned product's (0xffffffff² gives
+  0xfffffffe) and, with `.sgn`, the signed one's (-1 * -1 gives 0, -2 * 3
+  gives 0xffffffff).
 - src0 r/pa/o/sa via ext h15.
-- USEASM 0x167/0x168 are rewritten to `a*#1 + -b`: isub32 signed/unsigned.
+- The assembler writes isub32 (signed or unsigned) as `a*#1 + -b`.
 
-**op1adrc** (1a, h20=1, 0x66 inline, patched):
+**op1adrc** (1a, h20=1; oracle (not emitted for SGX545)):
 - dest r/pa (h7), raw number.
-- drc h0 (register type 10, DRC? 0-1).
+- drc h0 (0-1).
 - Sources src1, src2. The operation is unknown; the DRC operand suggests a long-latency op.
 
 ### What GLSL integer code compiles to (c3 corpus, ef_c3.txt)
 
-libusc has no integer path for GLSL ES 1.0 `int`/`bool`. They are floats:
+The vendor compiler has no integer path for GLSL ES 1.0 `int`/`bool` (**corpus**). They are floats:
 - mediump ints, the fragment default: F16 `fmad16`.
 - highp ints (vertex shaders, or highp in in_*/ic_*): F32 `fmad`.
 - bools: 1.0/0.0.
@@ -1369,256 +1346,193 @@ The hardware integer units appear only for array indexing.
 
 For true integer ops (GLSL ES 3 / OpenCL style, never emitted by this compiler):
 - **add/sub/mul**:
-  - 32-bit: `ima32` (USEASM 0x65; signed/unsigned via h9; the high word to an internal register; carry-in from i0-i2). `isub32` = USEASM 0x167/0x168.
-  - 16-bit: `ima16` (USEASM 0xe4-0xe9 = iadd16 isub16 imul16 and the unsigned variants).
-  - `imae` = 16x16 + 32 with carry in/out through an internal register (USEASM 0xea/0xf0 = iadd32).
+  - 32-bit: `ima32` (signed/unsigned via h9; the high word to an internal register; carry-in from i0-i2). `isub32` = `ima32 d, a, #1, -b`.
+  - 16-bit: `ima16` (iadd16 `a*#1+b`, isub16 `a*#1-b`, imul16 `a*b+#0`, each signed or unsigned).
+  - `imae` = 16x16 + 32 with carry in/out through an internal register (iadd32 = `a*#1+b` with a u32 src2).
 - **compares**: `test` with integer ALU ops (hw 09: `test.isub16.<cond>`, `test.iadd32.<cond>`, see notes_pack).
-- **shifts and logic**: hw 0a `and`/`or`, 0b `xor`, 0c `shl`/`rol`, 0d `shr`/`asr` (hw_pack.py / notes_pack; USEASM 0x4f-0x55). There is also `test.and/shl...` for flag tests.
+- **shifts and logic**: hw 0a `and`/`or`, 0b `xor`, 0c `shl`/`rol`, 0d `shr`/`asr` (hw_pack.py / notes_pack). There is also `test.and/shl...` for flag tests.
 - **conversion**:
   - float to int: `pck.s16.f32`, `pck.u16.f32`, `pck.s8.f32`, ...
   - int to float: `pck.f32.s16`, `pck.f32.u16`, ...
   - pck has no 32-bit integer format. A 32-bit conversion needs two halves, or the float path above.
-- **division**: there is no hardware integer divide; use frcp + multiply + fix-up. op1adrc (0x66) is unknown and not on SGX545.
+- **division**: there is no hardware integer divide; use frcp + multiply + fix-up. op1adrc is unknown and not emitted for SGX545.
 
 ### Open questions
 
-- **Operand bit 6** (format flag vs register number bit 6) in efo/sop*/dot/ima8/fpma: is there a global mode? See above.
 - **efo**:
-  - h22 (a0lneg) is a name guess.
-  - h8 (flags3 b10) is unknown.
-  - The exact M1 product of m-mode 2 is unknown.
-  - What d=i0/i1 returns (the old or new internal value).
-- **INTSRCSEL names**: 2 (asat), 0x18/0x19 (k18/k19), u8/s8/o8, and 0x2c are not in the binary.
-- **sop3x** (USEASM 0xe2): its operation.
-- **dot**:
-  - f6 (h6, 0x5e-0x61), f4 (0xdb/0xdd vs 0xda/0xdc) and a1/a2 = 3 are unknown.
-  - The meaning of 0x5c/0x5d/0x60/0x61, which have no alpha op.
-- **sat** (flags2 b10) in ima8/fpma/ima16/imae is a name guess.
-- ima16/imae **f2_15** (flags2 b15-18) and ima16 **dflag1** (dest flag b1) are unknown.
-- **hw 16/17/1a**: INTSRCSEL 0x1b-0x1d and 0x38-0x3b, register types 0x11 and 10, the adifsum and ssum16 h15 flags, firv a5/a8, and the operations of op16s1 and op1adrc.
-
+  - h22 (a0lneg) is a name guess, and its effect is unconfirmed.
+  - h8 (f3_10) is unknown.
+- **sop3x**: its operation.
+- **dot**: f6 (h6), f4 (h4) and a1/a2 = 3 (x3) are unknown.
+- **sat** (h11 in ima8/fpma, h10 in ima16/imae) is a name guess.
+- ima16/imae **f2_15** and ima16 **dflag1** are unknown.
+- **hw 16/17/1a**: the x1b/x1c/x1d and x38/x39 fields, coef, drc, the adifsum and ssum16 h15 flags (s0f13, nf16), firv a5/a8, firh f2_27, the operations of op16s1 and op1adrc, and whether the SGX545 runs ssum16i, firh, op16s1 and op1adrc at all.
 ## smp, ld/st, and the special class (hw 1c, 1d, 1e, 1f)
 
 Forms: `hw_mem.py`. Check: `check_mem.py` (about 290 directed oracle cases, every
 corpus word of these classes, and a mutation sweep: about 13,000 instructions
-libusc accepts, made by changing one flag bit, argument type, number,
-argument flag or index at a time from a valid instruction per opcode. All of
-them decode with no unexplained bit and round-trip through the text).
+the vendor assembler accepts, made by changing one input at a time (a flag, or
+an operand's type, number, flags or index) from a valid instruction of each
+form. All of them decode with no unexplained bit and round-trip through the text).
 `hwcheck.py` reports no hw 1c-1f word without a form, no unexplained bits and
 no round-trip failures.
 
-Evidence tags: **encoder** = read from the decompiled encoder and confirmed by
-running it (oracle); **corpus** = also seen in what the GLSL corpora compile
-to; **guess** = the name or meaning has no backing beyond plausibility.
-Function names are Ghidra addresses (libusc + 0x10000). "fN bK" = USEASM
-flags word N (dw1-3) bit K; "argument flag K" = bit K of an argument's flags
-dword.
+Evidence tags are as defined in "How each fact is established".
 
-Target feature bits used below (SGX545: word0 = 0x57fdbffd, word1 =
-0xe387c601, core flag word at core entry +8 = 0x2c194000, feature +0xc = 8,
-+0x10 = 16, +0x20 = 18):
+What the vendor assembler allows for the SGX545 in these classes (all
+**oracle**):
 
-| predicate | test | SGX545 | gates |
-|---|---|---|---|
-| FUN_0011de30 | core byte 9 & 0x40 | yes | smp: write mask must be 1, no repeat |
-| FUN_0011e150 | word0 & 0x40000 | yes | smp PCF (h5/h6); icvt_core.c says "PCF isn't supported on this processor" without it |
-| FUN_0011e170 | word0 & 0x80000 | yes | smp h14/h15 |
-| FUN_0011e2a0 | word1 & 1 | yes | smp repeat/mask encoding |
-| FUN_0011dfa0 | word0 & 0x200 | yes | eld exists; nosched on ld rejected |
-| FUN_0011dfc0 | word1 & 0x200 | yes | ld/st cache bits h1/h19 via f2/f3 |
-| FUN_0011dfe0 | word1 & 0x400 | yes | st h0 (f3 b13) |
-| FUN_0011dde0 | core byte 9 & 1 | no | (would allow inc flags with mode "l") |
-| FUN_0011e1d0 | word0 & 0x400000 | yes | branch "extended sync-end" (asm.c: SGX_FEATURE_FLAGS_USE_BRANCH_EXTSYNCEND) |
-| FUN_0011e0c0 | feature +0x10 (16) | 16 | br/ba f1 b22 allowed; USEASM 0xd7 immediate limit |
-| FUN_0011e0d0 | feature +0x20 (18) | 18 | branch / phas address width |
-| FUN_0011e0b0 | feature +0xc (8) | 8 | 0xcd/0xce immediate limit |
-| FUN_0011dee0 | word0 & 4 | yes | MOE register forms (h19) |
-| FUN_0011e230 | word0 & 0x2000000 | yes | emit: SGX545 forms 0x101-0x104, 3-bit n |
-| FUN_0011e250 | word0 & 0x8000000 | no | (would reject 0x9c/0x9d) |
-| FUN_0011e1b0 | word0 & 0x200000 | yes | USEASM 0x98 |
-| FUN_0011e190 | word0 & 0x100000 | yes | nop l1 (f3 b5) |
-| FUN_0011e080 | word0 & 0x1000 | yes | phas (0xd8/0xd9) |
-| FUN_0011e210 | word0 & 0x1000000 | yes | USEASM 0xfe-0x100 |
-| FUN_0011e1f0 | word0 & 0x800000 | yes | USEASM 0xfd |
+- smp: the mask / repeat field (h12-15, h21) exists, but only write mask 1
+  and no repeat are accepted.
+- smp: PCF (h5/h6) is accepted.
+- smp: h14/h15 (rdata / rinfo) are accepted.
+- ld/st: eld exists (hw 1d with h22 = 1); nosched on ld is rejected.
+- ld/st: the cache bits h1/h19 are accepted.
+- st: h0 (f3_13) is accepted.
+- ld/st: preinc/postinc are not accepted with address mode l.
+- br/ba: extended sync-end (xsyncend, h12) is accepted.
+- br/ba: h10 (f1_22) is accepted; op0xd7 takes n below 16.
+- br/ba and phas.i: 18-bit targets.
+- lock/release: n below 8.
+- MOE control: the register forms (h19) are accepted.
+- emit: the t1 and t3 targets and a 3-bit n are accepted; emit.t0 is accepted.
+- op0x98, nop's l1 (f3_5), phas / phas.i, op0xfd and op0xfe-0x100 are
+  accepted.
 
-### USEASM opcode -> form
-
-| USEASM | form | encoder |
-|---|---|---|
-| 0x6f-0x71 | `smp` (1d/2d/3d) | FUN_0010a3f0 |
-| 0x72-0x74 | `smp.bias` | FUN_0010a3f0 |
-| 0x75-0x77 | `smp.lod` (replace LOD) | FUN_0010a3f0 |
-| 0x78-0x7a | `smp.grad` | FUN_0010a3f0 |
-| 0x7b/0x7c/0x7d (0x7e rejected) | `ld.a.b` / `ld.a.w` / `ld.a.d` | FUN_0010b190 |
-| 0x7f/0x80/0x81 (0x82) | `st.a.b/w/d` | FUN_0010b190 |
-| 0x83-0x85 (0x86) | `ld.l.b/w/d` | FUN_0010b190 |
-| 0x87-0x89 (0x8a) | `st.l.b/w/d` | FUN_0010b190 |
-| 0x8b-0x8d (0x8e) | `ld.t.b/w/d` | FUN_0010b190 |
-| 0x8f-0x91 (0x92) | `st.t.b/w/d` | FUN_0010b190 |
-| 0x93 / 0x94 | `eld.d` / `eld.q` | FUN_0010ace0 |
-| 0x95 | `ba` | FUN_00119f50 inline |
-| 0x96 | `br` (with f1 b19: call) | FUN_00119f50 inline |
-| 0x97 | `lapc` | FUN_00119f50 inline |
-| 0x98 | `op0x98` | FUN_00119f50 inline |
-| 0x99 | `idf` | FUN_00119f50 inline |
-| 0x9a | `wdf` | FUN_00119f50 inline |
-| 0x9b | `limm` | FUN_00119710 |
-| 0x9c, 0x9d, 0xa2 (0x9e, 0x9f-0xa1 rejected on SGX545) | `emit.t0` / `emit.t0` / `emit.t2` | FUN_00109700 |
-| 0x101, 0x102 / 0x103, 0x104 | `emit.t1` / `emit.t3` | FUN_00109700 |
-| 0xa8 | label definition: no instruction, records the address and patches waiting branches | FUN_00119f50 |
-| 0xb7 | nothing (returns 0) | FUN_00119f50 |
-| 0xbc | `smoa` | FUN_00108120 |
-| 0xbd / 0xbf / 0xc0 | `smr` / `smbo` / `imo` | FUN_00108a50 |
-| 0xbe | `smlsi` | FUN_001084b0 |
-| 0xc1 | `setfc` | FUN_00119f50 inline |
-| 0xcd / 0xce | `lock` / `release` | FUN_00119f50 inline |
-| 0xd0 / 0xd1 | `ldr` / `str` | FUN_00119f50 inline |
-| 0xd2 / 0xd3 | `pcoeff` / `ptoff` | FUN_0010a1e0 |
-| 0xd4 | `atst8` | FUN_00111ef0 |
-| 0xd5 | `depthf` | FUN_00109eb0 |
-| 0xd6 | `op0xd6` | FUN_00119f50 inline |
-| 0xd7 | `op0xd7` | FUN_00119f50 inline |
-| 0xd8 / 0xd9 | `phas` / `phas.i` | FUN_00108ff0 |
-| 0xf1 | `nop` | FUN_00119f50 inline |
-| 0xfd | `op0xfd` | FUN_00119970 |
-| 0xff / 0xfe / 0x100 | `op0xff` / `op0xfe` / `op0x100` | FUN_00108d50 |
-
-A scan of all USEASM opcodes 0-0x1ff with generic arguments finds no other
-opcode that lands on hw 1c-1f.
-
-libusc's internal opcodes (from its instruction descriptor table at Ghidra
-0x159960, field +0x30 = USEASM opcode): 0x22-0x2f loads/stores (byte group
-0x22-0x25, word 0x26-0x29, dword 0x2a-0x2f), 0x30/0x31 eld, 0x32 idf, 0x33
-wdf, 0x6b IBR and 0x6c ICALL (both 0x96; asm.c adds f1 b19 for the call),
-0x6d ILABEL (0xa8), 0x6e ILAPC (0x97; asm.c asserts `eOpcode == ILAPC`
-around return labels), 0x71 and 0x76 (0xf1: INOP and IDRVPADDING), 0x72
-ISMLSI (0xbe), 0x73 (0xbd), 0x74 (0xc1), 0x75 (0xbf), 0x04 (0x9b), 0xa7
-(0xd6), 0xaf (0x101: created only by the geometry-shader path, behind "Geometry
-shaders aren't supported on this core"), 0xb7/0xb8 (0xcd/0xce).
+Encoding every vendor assembler opcode with generic operands finds no form in
+hw 1c-1f other than the ones below (oracle).
 
 ---------------------------------------------------------------------------
 
-### hw 1c: smp (FUN_0010a3f0)
+### hw 1c: smp
 
 `smp.<dim>[.rdata|.rinfo][.pcf|.pcf16][.f16|.c10][.bias|.lod|.grad] dst, coord, state[, lod]  [drc=n ...]`
 
-Arguments (USEASM): dest, coordinate, texture state, [LOD source], DRC
-(register type 10, number 0/1), and int-source-select 0x15 (a fixed
-terminator the encoder checks).
+Operands: dest, coordinate, texture state, [LOD source], DRC (0/1).
 
 | bits | field | values | evidence |
 |---|---|---|---|
-| h27-31 | class | 0x1c | encoder |
-| h24-26 | pred | 3-bit predicate (PRED3) | encoder |
-| h23 | skipinv | f1 b0 | encoder |
-| h22 | nosched | f1 b3 (not h11 as in the ALU classes) | encoder |
-| h21 | rcnt | set with a repeat count; SGX545 rejects any repeat | encoder |
-| h20 | syncs | f1 b2 (sync-start) | encoder |
-| h12-15 | mask, or rpt - 1 when h21 is set | write mask (text `mask=`, default 1); SGX545's encoder accepts only mask 1 and no repeat, so libusc always has h12 set, but the field holds any value. `ret` below is ORed into bits 14-15 of the same field | encoder |
-| h14 | ret = 1: `.rdata` | f3 b3. asm.c sets it for the sample's mode field = 1 | encoder; name guess (raw sample data) |
-| h15 | ret = 2: `.rinfo` | f3 b2 (mode 2). Mode 3 (f3 0x8000, "both") is rejected on SGX545; h14+h15 together is rejected | encoder; name guess (sample info) |
-| h10-11 | dim | 0 1D (USEASM 0x6f+3k), 1 2D (+1), 2 3D (+2; cube maps) | encoder, corpus (2D for texture2D, 3D for samplerCube) |
-| h8-9 | lod | 0 none, 1 bias, 2 replace (texture2DLod), 3 gradients | encoder, corpus (bias, lod, grad seen in ef_c3) |
-| h7 | dst bank | 0 r, 1 pa (no other destination) | encoder |
-| h5 | pcf | f3 b0: percentage-closer compare, F32 coordinates | encoder; asm.c sets it only for an F32 coordinate |
-| h6 | pcf16 | f3 b1: the same with F16 coordinates. Not with C10 coordinates | encoder |
-| h3 | f16 | coordinate is F16 (argument-1 flag 22) | encoder, corpus (mediump tx_*_m) |
-| h4 | c10 | coordinate is C10 (argument-1 flag 24) | encoder, corpus (lowp tx_*_l) |
-| h2, h18 | coord bank | r 00, pa h2, o h18, sa h2+h18. Internal registers become r124+n; no indexing, no constants/immediates | encoder |
-| l14-20 | coord | first register of the coordinate | encoder |
-| l7-13, l30-31, h17 | state | src1 slot, any source kind (r o pa sa c g i # indexed) | encoder |
-| l0-6, l28-29, h16 | lod source | src2 slot. With lod 0 it holds the unused-source pattern (#0: l29 + h16) | encoder |
-| l21-27 | dst | first result register | encoder |
-| h0 | drc | dependent-read counter the result signals (0/1); a later `wdf drc` waits on it | encoder, corpus (ef_c3 tx_dep*) |
-| h1 | - | never set | encoder |
+| h27-31 | class | 0x1c | oracle |
+| h24-26 | pred | 3-bit predicate (PRED3) | oracle |
+| h23 | skipinv | | oracle |
+| h22 | nosched | not h11 as in the ALU classes | oracle |
+| h21 | rcnt | set with a repeat count; the SGX545 target rejects any repeat | oracle |
+| h20 | syncs | sync-start | oracle |
+| h12-15 | mask, or rpt - 1 when h21 is set | write mask (text `mask=`, default 1); the vendor assembler accepts only mask 1 and no repeat for the SGX545, so the vendor compiler's samples always have h12 set, but the field holds any value. `ret` below is ORed into bits 14-15 of the same field | oracle |
+| h14 | ret = 1: `.rdata` | | oracle; name guess (raw sample data) |
+| h15 | ret = 2: `.rinfo` | h14 and h15 together are rejected | oracle; name guess (sample info) |
+| h10-11 | dim | 0 1D (`smp.1d`), 1 2D (`smp.2d`), 2 3D, cube maps (`smp.3d`) | oracle, corpus (2D for texture2D, 3D for samplerCube); exercised by the open stack (dEQP-GLES2) |
+| h8-9 | lod | 0 none, 1 bias, 2 replace (texture2DLod), 3 gradients | oracle, corpus (bias, lod, grad seen in ef_c3); exercised by the open stack (dEQP-GLES2) |
+| h7 | dst bank | 0 r, 1 pa (no other destination) | oracle |
+| h5 | pcf | percentage-closer compare, F32 coordinates | oracle (accepted only with an F32 coordinate); meaning **unconfirmed** |
+| h6 | pcf16 | the same with F16 coordinates. Not with C10 coordinates | oracle; meaning **unconfirmed** |
+| h3 | f16 | coordinate is F16 | oracle, corpus (mediump tx_*_m); exercised by the open stack (dEQP-GLES2) |
+| h4 | c10 | coordinate is C10 | oracle, corpus (lowp tx_*_l); exercised by the open stack (dEQP-GLES2) |
+| h2, h18 | coord bank | r 00, pa h2, o h18, sa h2+h18. Internal registers become r124+n; no indexing, no constants/immediates | oracle |
+| l14-20 | coord | first register of the coordinate | oracle |
+| l7-13, l30-31, h17 | state | src1 slot, any source kind (r o pa sa c g i # indexed) | oracle |
+| l0-6, l28-29, h16 | lod source | src2 slot. With lod 0 it holds the unused-source pattern (#0: l29 + h16) | oracle |
+| l21-27 | dst | first result register | oracle |
+| h0 | drc | dependent-read counter the result signals (0/1); a later `wdf drc` waits on it | oracle, corpus (ef_c3 tx_dep*); exercised by the open stack (dEQP-GLES2) |
+| h1 | - | never set by the vendor assembler | oracle |
 
-Result format: nothing in the word selects it; the texture state (src1)
-does. The `state` operand is a placeholder in the USP binary: dependent
-`smp` words sit in USP sample blocks, which the patcher turns into code with
-the real state registers at finalize time (ef_c3 logs them with `#0`).
-Projective reads have no smp bit: the compiler divides the coordinate first
-(tx_dep_proj*).
+Result format: nothing in the word selects it (oracle); the texture state
+(src1) does. **hardware** (hwt_smp, open stack, CE5300 board, 2026-11-11): the same
+dependent `smp.2d r0, r8, r4` on an RGBA8888 texel (bytes 0x10, 0x20, 0x40,
+0x80) returned one register, 0x80102040 (BGRA byte order, as T1 format 0x0d
+gives it), with T3 = 0x00800800. It returned two registers with T3 =
+0x01028800: r0 = 0x30042c04 (R lo, G hi as F16) and r1 = 0x38043404 (B lo,
+A hi), the non-dependent F16 return's layout. The `state` operand is a placeholder in the USP
+binary: dependent `smp` words sit in USP sample blocks, which the patcher
+turns into code with the real state registers at finalize time (capture;
+ef_c3 logs them with `#0`). Projective reads have no smp bit: the compiler
+divides the coordinate first (corpus, tx_dep_proj*).
 
-### hw 1d: ld (FUN_0010b190), h22 = 0
+### hw 1d: ld, h22 = 0
 
 `ld.<a|l|t>.<b|w|d> dst, base, off[, range]  [drc=n preinc postinc range moe rpt=n ...]`
 
-USEASM 0x7b + i (load when (i / 4) is even): address mode = i / 8, size =
-i % 4. Arguments: dest, base, offset, range (only with f1 b29; otherwise a
+Operands: dest, base, offset, range (only with the range flag h6; otherwise a
 placeholder), DRC.
 
 | bits | field | values | evidence |
 |---|---|---|---|
-| h27-31 | class | 0x1d | encoder |
-| h24-26 | pred | PRED3 | encoder, corpus (the `(p0) ld.a.d` of every secondary program) |
-| h23 | skipinv | f1 b0 | encoder, corpus |
-| h22 | 0 | nosched would set it but libusc rejects nosched on loads; h22 = 1 is eld | encoder |
-| h21 | moe | set unless f1 b31 (so libusc's loads nearly always have it): a repeated load steps its operands by the MOE increments (same bit as the ALU classes). The text prints `moe` when it is set | encoder; meaning by analogy (guess) |
-| h20 | syncs | f1 b2 | encoder |
-| h19 | f2_3 | f2 b3; f3 b9 sets h19 and h1 | encoder; data-cache control (guess) |
-| h18, h2 | base bank | src0 slot: r, pa (h2), o (h18), sa (h2+h18) | encoder, corpus (base sa1 = local memory base) |
-| h17, h16 | src exts | of offset / range | encoder |
-| h12-15 | rpt | repeat count - 1 (1-16) | encoder, corpus (st rpt=16) |
-| h10-11 | am | 0 "a" (USEASM LDA*, the secondary program's uniform loads), 1 "l" (LDL*: spills, temp arrays), 2 "t" (LDT*; the offset must be a register; no pre/post flags) | encoder, corpus (a, l); names a/l/t guess (absolute / local / tiled) |
-| h8 | preinc | f1 b27 | encoder; name guess |
-| h9 | postinc | f1 b28 (not both) | encoder; name guess |
-| h7 | dst bank | 0 r, 1 pa | encoder |
-| h6 | range | f1 b29: src2 holds a 4th source | encoder; name guess |
-| h4-5 | size | 0 d (dword: 0x7d...), 1 w (0x7c...), 2 b (0x7b...), 3 `q` (0x7e...: libusc's encoder rejects it, but the field holds it; the text is `ld.<mode>.q` and it encodes as 3) | encoder, corpus (d); b/w from libusc's internal opcode order (byte, word, dword groups) |
-| h3 | f2_9 | f2 b9 | encoder; unknown |
-| h1 | f2_2 | f2 b2 | encoder; data-cache control (guess) |
-| h0 | drc | DRC the loaded data signals | encoder, corpus (ix_tmp*: loads alternate drc 0/1, each followed later by `wdf`) |
-| l21-27 | dst | | encoder |
-| l14-20 | base | | encoder |
-| l7-13, l30-31 | off | any source kind, including #0-127 and indexed | encoder, corpus |
-| l0-6, l28-29 | range | without h6: the unused pattern | encoder |
+| h27-31 | class | 0x1d | oracle |
+| h24-26 | pred | PRED3 | oracle, corpus (the `(p0) ld.a.d` of every secondary program) |
+| h23 | skipinv | | oracle, corpus |
+| h22 | 0 | the vendor assembler rejects nosched on loads; h22 = 1 is eld | oracle |
+| h21 | moe | set by default (so the vendor compiler's loads nearly always have it): a repeated load steps its operands by the MOE increments (same bit as the ALU classes). The text prints `moe` when it is set | oracle; meaning by analogy (guess) |
+| h20 | syncs | | oracle |
+| h19 | f2_3 | one assembler option sets h19 and h1 together | oracle; data-cache control (guess) |
+| h18, h2 | base bank | src0 slot: r, pa (h2), o (h18), sa (h2+h18) | oracle, corpus (base sa1 = local memory base) |
+| h17, h16 | src exts | of offset / range | oracle |
+| h12-15 | rpt | repeat count - 1 (1-16) | oracle, corpus (st rpt=16) |
+| h10-11 | am | 0 "a" (the secondary program's uniform loads), 1 "l" (spills, temp arrays), 2 "t" (the offset must be a register; no pre/post flags) | oracle, corpus (a, l); exercised by the open stack (a, l, t; dEQP-GLES2); names a/l/t guess (absolute / local / tiled) |
+| h8 | preinc | | oracle; name guess |
+| h9 | postinc | not both | oracle; name guess |
+| h7 | dst bank | 0 r, 1 pa | oracle |
+| h6 | range | src2 holds a 4th source | oracle; name guess |
+| h4-5 | size | 0 d (dword), 1 w, 2 b, 3 `q` (the vendor assembler rejects it, but the field holds it; the text is `ld.<mode>.q` and it encodes as 3) | oracle, corpus (d); **hardware** (hwt_gaps `ld_w_*`, `ld_b_*`, open stack, 2026-11-11): 1 is a halfword, 2 a byte, each zero-extended (see Address) |
+| h3 | f2_9 | | oracle; unknown |
+| h1 | f2_2 | | oracle; data-cache control (guess) |
+| h0 | drc | DRC the loaded data signals | oracle, corpus (ix_tmp*: loads alternate drc 0/1, each followed later by `wdf`) |
+| l21-27 | dst | | oracle |
+| l14-20 | base | | oracle |
+| l7-13, l30-31 | off | any source kind, including #0-127 and indexed | oracle, corpus |
+| l0-6, l28-29 | range | without h6: the unused pattern | oracle |
 
-**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode, CE5300 board
+**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode
 2026-11-02): `ld.a.d` and `st.a.d` with an immediate offset `#i` access the
 dword at base + 4·(i + 1). `st.a.d sa0, #0` wrote word 1 of the buffer whose
 address was in sa0, `#2` wrote word 3, and `ld.a.d #2` read word 3 back.
 Microkernel code read with `#0`-`#7` lands as instruction pairs (low word,
 then the high word with the class) only under that reading: `wdf`'s high word
-0xf9200000 came from an odd word. Untested: register offsets, the b/w sizes,
-modes l/t, and offsets past #127.
+0xf9200000 came from an odd word. The other sizes follow the same rule in
+their own unit (**hardware**, hwt_gaps, open stack, 2026-11-11, a buffer of
+bytes 0x00, 0x01, ...): `ld.a.w #i` reads the halfword at base + 2·(i + 1)
+into the low half, zero-extended (#0 -> 0x0302, #3 -> 0x0908); `ld.a.b #i`
+reads the byte at base + (i + 1), zero-extended (#0 -> 0x01, #5 -> 0x06).
+`ld.a.d #0`/`#2` read words 1 and 3 again. Untested: register offsets, modes
+l/t, and offsets past #127.
 
-### hw 1d: eld (FUN_0010ace0), h22 = 1
+### hw 1d: eld, h22 = 1
 
-`eld.<d|q> dst, src1, src0, #imm11, src2  [drc=n ...]` (USEASM 0x93 / 0x94;
-target feature word0 & 0x200).
+`eld.<d|q> dst, src1, src0, #imm11, src2  [drc=n ...]` (present on the
+SGX545; oracle).
 
 | bits | field | values | evidence |
 |---|---|---|---|
-| h24-26 | pred | PRED3 | encoder |
-| h23 | skipinv | | encoder |
-| h21 | f2_3 | f2 b3 (h19 in ld) | encoder |
-| h20 | syncs | | encoder |
-| h12-15 | rpt | count - 1; a repeat needs f1 b31 | encoder |
-| h5-11, h16-19 | imm | 11-bit immediate (USEASM argument 3): low 7 bits h5-11, high 4 h16-19, so no source has an extension bit (r/pa/o/sa only) | encoder |
-| h4 | dst bank | r / pa | encoder |
-| h3 | size | 0 d (0x93), 1 q (0x94) | encoder; names from USEASM order |
-| h2 | src0 bank | r / pa | encoder |
-| h1 | f2_2 | f2 b2 | encoder |
-| h0 | drc | | encoder |
-| l21-27, l14-20, l7-13 + l30-31, l0-6 + l28-29 | dst, src0 (argument 2), src1 (argument 1), src2 (argument 4) | | encoder |
+| h24-26 | pred | PRED3 | oracle |
+| h23 | skipinv | | oracle |
+| h21 | f2_3 | the bit ld has at h19 | oracle |
+| h20 | syncs | | oracle |
+| h12-15 | rpt | count - 1 | oracle |
+| h5-11, h16-19 | imm | 11-bit immediate: low 7 bits h5-11, high 4 h16-19, so no source has an extension bit (r/pa/o/sa only) | oracle |
+| h4 | dst bank | r / pa | oracle |
+| h3 | size | 0 d, 1 q | oracle; what each size loads is **unconfirmed** |
+| h2 | src0 bank | r / pa | oracle |
+| h1 | f2_2 | | oracle |
+| h0 | drc | | oracle |
+| l21-27, l14-20, l7-13 + l30-31, l0-6 + l28-29 | dst, src0, src1, src2 | | oracle |
 
-nosched is rejected.
+nosched is rejected (oracle).
 
-### hw 1e: st (FUN_0010b190)
+### hw 1e: st
 
-`st.<a|l|t>.<b|w|d> base, off, data  [...]` (arguments: base, offset, data).
-Same layout as ld, with these differences: no destination (l21-27 and h7
-are 0), no DRC (h0 = f3_13, f3 b13, target feature word1 & 0x400; unknown),
-h22 = nosched (allowed on stores), the data is the src2 slot (any source
-kind, including immediates). A store has no range operand: with the range
-flag (h6) set, src2 still holds the data. Corpus: ix_tmpw (`st.l.d sa1, pa1, sa9`,
-dynamic array writes; `st.l.d sa1, sa13, pa0 [rpt=16]`) and ix_comp.
+`st.<a|l|t>.<b|w|d> base, off, data  [...]` (operands: base, offset, data).
+Same layout as ld, with these differences (oracle): no destination (l21-27
+and h7 are 0), no DRC (h0 = f3_13; unknown), h22 = nosched (allowed on
+stores), the data is the src2 slot (any source kind, including immediates).
+A store has no range operand: with the range flag (h6) set, src2 still holds
+the data. Corpus: ix_tmpw (`st.l.d sa1, pa1, sa9`, dynamic array writes;
+`st.l.d sa1, sa13, pa0 [rpt=16]`) and ix_comp; both stores are also
+exercised by the open stack (dEQP-GLES2).
 
 ---------------------------------------------------------------------------
 
 ### hw 1f: the special class
 
-The encoders' constant high words split the class on h20-22:
+The class splits on h20-22 (oracle):
 
 | h22 h21 h20 | group | op field |
 |---|---|---|
@@ -1631,53 +1545,48 @@ The encoders' constant high words split the class on h20-22:
 So unlike the ALU classes the predicate lives in h24-26 only in flow control;
 elsewhere h24-26 is the op and the predicate (where there is one) moves:
 limm h9-11 (PRED3), depthf h9-10 (PRED2). Everything else rejects a
-predicate.
+predicate (oracle).
 
 #### flow control (h20-22 = 0)
 
 | form | fixed | fields | evidence |
 |---|---|---|---|
-| `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits (feature +0x20) | encoder; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8 |
-| `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | encoder, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
-| `lapc` | h6-8 = 2 | return to the saved link address | encoder, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
-| `nop` | h6-8 = 5 | h23 syncs (f1 b2), h18 end (f1 b17), l0 = f2 b26, l1 = f3 b5; no predicate, h12 and h24-26 are 0 | encoder, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
-| `setl src` | h6-8 = 3 | set the link address from a register: src in the src1 slot (l7-13, bank l30-31, extension h17) | `static` (the DDK microkernel's code: a call through a table is `setl` + `lapc`, a nested call `savl rN` ... `br [link]` ... `setl rN`); `capture` (tools/ukernel's emulator runs a captured frame through the microkernel with this reading and matches the DDK's register and memory writes). libusc has no USEASM op for it, so there is no oracle |
+| `ba #target` | h6-8 = 0, h19 = 0 | target l0-17: label address + the program's load offset (encode()'s `offset`), unsigned 18 bits | oracle; **hardware** (hwt_ba): the target is the absolute instruction index from the USE code base the task runs from (DOUTU's base 0 = 0x37000000): `ba #0x1077` reached the instruction at 0x37008388 + 6*8. From base 1 (0x37080000), `ba #0x1090` lands at 0x37088480, and `ba #0x11090` at 0x37108480, so the origin is the task's code base and not the heap; from base 0, `ba #0x11090` reaches 0x37088480, past the first window (hwt_window) |
+| `br #target` | h6-8 = 1, h19 = 0 | target l0-17: label + label-argument offset - this instruction's index, signed 18 bits (-0x20000..0x1ffff) | oracle, corpus; **hardware** (hwt_p2 `br_1..3`, `loop_br`, `br_pred_*`): `br #n` goes to this instruction + n; `#-2` loops back; a predicated br falls through when its predicate is false |
+| `lapc` | h6-8 = 2 | return to the saved link address | oracle, corpus (fn_call); **hardware** (hwt_p7 `call_lapc`): `br #3 [link]` ... `lapc` returns to the instruction after the br |
+| `nop` | h6-8 = 5 | h23 syncs, h18 end, l0 = f2_26, l1 = f3_5; no predicate, h12 and h24-26 are 0 | oracle, corpus (secondary-program prologue `nop [nosched]`, discard placeholder) |
+| `setl src` | h6-8 = 3 | set the link address from a register: src in the src1 slot (l7-13, bank l30-31, extension h17) | **hardware** (the open microkernel saves and restores the link around a nested call with `savl r23` ... `setl r23` and runs on the CE5300 board and CE5300); capture (the DDK microkernel calls through a table with `setl` + `lapc` and nests calls the same way). The vendor assembler has no form for it, so there is no oracle; exercised by the open stack (dEQP-GLES2) |
 | `savl dst` | h6-8 = 4 | save the link address to a register: dst in the destination slot's number and bank (l21-27, h0-1), no extension bit | as `setl` |
-| `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no arguments; needs word0 & 0x200000 | encoder; meaning unknown |
+| `op0x98` | h6-8 = 0, h9 = 1, h19 = 1 | no operands; accepted for the SGX545 | oracle; meaning unknown |
 
-Fields of ba/br/lapc/setl/savl: h24-26 pred (PRED3; pn rejected), h23 syncend (f1 b18;
-asm.c's branch sync-end), h12 xsyncend (f3 b4: the encoder sets h12 and
-h23; not with f1 b18), h11 nosched, and for ba/br h9 link (f1 b19: save the
-return address; asm.c ICALL = `br` + this flag) and h10 f1_22 (meaning
-unknown; allowed because feature +0x10 is non-zero).
+Fields of ba/br/lapc/setl/savl (oracle): h24-26 pred (PRED3; pn rejected), h23
+syncend, h12 xsyncend (extended sync-end: the vendor assembler sets h12 and
+h23 together for it, and never together with plain syncend), h11 nosched, and
+for ba/br h9 link (save the return address; a call is `br [link]`: corpus
+fn_call, hardware hwt_p7) and h10 f1_22 (meaning unknown).
 
-Branch targets: the label argument is register type 0xb (label number) or
-0x12 (label number, with the argument's flags dword as an offset added to the
-target); type 0x15 is a raw target. The encoder asks the context's callback
-3 for the label's address; -1 means not yet defined, and the instruction is
-queued (FUN_00107760) and patched when USEASM 0xa8 defines the label
-(FUN_00107580 writes the field). In the USP binaries every branch has low
-word 0: the branch is stored in a branch block with its label number, and the
-patcher fills the target at finalize. `lapc` is stored in a branch block with
-label 0xffff.
+Branch targets: in the USP binaries every branch has low word 0: the branch
+is stored in a branch block with its label number, and the patcher fills the
+target at finalize. `lapc` is stored in a branch block with label 0xffff
+(capture).
 
 #### MOE control (h20-22 = 1)
 
 h18 = nosched for the whole group; no predicate. h19 = register form for ops
-0-3 (the values come from src1/src2 instead of immediates; word0 & 4),
+0-3 (the values come from src1/src2 instead of immediates),
 printed `smoa.r`, `smr.r`, `smlsi.r`, `smbo.r`: two operands, the generic
 src1 and src2 slots with their banks and extension bits, and nothing else in
-the word.
+the word (oracle).
 
 | op | form | layout | evidence |
 |---|---|---|---|
-| 0 | `smoa v0, v1, v2, v3 [am0..am3]` (0xbc) | four signed 10-bit values: v0 l30-31 + h0-7, v1 l20-29, v2 l10-19, v3 l0-9; four 2-bit modes (USEASM register type 0xe): am0 h14-15, am1 h12-13, am2 h10-11, am3 h8-9 | encoder; name and meaning guess (MOE operand addressing) |
-| 1 | `smr v0..v3` (0xbd) | four 12-bit: v0 h4-15, v1 l24-31 + h0-3, v2 l12-23, v3 l0-11 | encoder; name guess |
-| 2 | `smlsi v0..v3 [lim0 lim1 lim2]` (0xbe) | per operand (dest, src0, src1, src2) an 8-bit value: v0 l24-31, v1 l16-23, v2 l8-15, v3 l0-7; flag h3/h2/h1/h0 set = the value is a swizzle (four 2-bit selects, printed `#0.xyzw`), clear = a signed increment; lim0 h12-15, lim1 h8-11, lim2 h4-7 = USEASM arguments 8-10 / 4 (multiples of 4, up to 60) | encoder, corpus (every swizzled operation is bracketed by `smlsi`; libusc's ISMLSI); limits' meaning guess (temp / pa / sa wrap limits) |
-| 3 | `smbo v0..v3` (0xbf) | as op 1 | encoder; MOE base offsets (the USP code block keeps 4 MOE base offsets) — guess |
-| 4 | `imo v0..v3` (0xc0) | as op 1, signed (the encoder takes -32..31); no register form | encoder; name guess (increment MOE offsets) |
-| 5 | `setfc #a0, #a1` (0xc1) | a0 l0, a1 l8 (USEASM arguments must be #0/#1) | encoder, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the color-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). **a0 (l0) is the efo F16 enable** and is **off at program start** (hwt_p8: an efo with operand bit 6 reads r64 with no setfc or after `setfc #0, #1`, and the F16 half after `setfc #1, #1`) |
-| 6 | `op0xfd dst, #n` (0xfd) | dst l21-27 + h0-1 + h19 (destination slot), n h11-14 (0..8), h23 skipinv | encoder; meaning unknown |
+| 0 | `smoa v0, v1, v2, v3 [am0..am3]` | four signed 10-bit values: v0 l30-31 + h0-7, v1 l20-29, v2 l10-19, v3 l0-9; four 2-bit modes: am0 h14-15, am1 h12-13, am2 h10-11, am3 h8-9 | oracle; name and meaning guess (MOE operand addressing) |
+| 1 | `smr v0..v3` | four 12-bit: v0 h4-15, v1 l24-31 + h0-3, v2 l12-23, v3 l0-11 | oracle; name guess |
+| 2 | `smlsi v0..v3 [lim0 lim1 lim2]` | per operand (dest, src0, src1, src2) an 8-bit value: v0 l24-31, v1 l16-23, v2 l8-15, v3 l0-7; flag h3/h2/h1/h0 set = the value is a swizzle (four 2-bit selects, printed `#0.xyzw`), clear = a signed increment; lim0 h12-15, lim1 h8-11, lim2 h4-7 = the limit / 4 (the vendor assembler takes multiples of 4, up to 60) | oracle, corpus (every swizzled operation is bracketed by `smlsi`); exercised by the open stack (dEQP-GLES2); limits' meaning guess (temp / pa / sa wrap limits) |
+| 3 | `smbo v0..v3` | as op 1 | oracle; MOE base offsets (the USP code block keeps 4 MOE base offsets) — guess |
+| 4 | `imo v0..v3` | as op 1, signed (the vendor assembler takes -32..31); no register form | oracle; name guess (increment MOE offsets) |
+| 5 | `setfc #a0, #a1` | a0 l0, a1 l8 (each #0 or #1) | oracle, corpus (`setfc #1, #1` in tx_dep_loop, cos_l, sin_l). **hardware** (hwt_p6): **a1 (l8) is the color-class C10 enable** and is **on at program start**: `sop2 r3, r0.c10, r1.c10` reads C10 with no setfc, after `setfc #1, #1` and after `setfc #0, #1`; after `setfc #0, #0` or `#1, #0` the same word reads r64/r65 (garbage, different per pixel, no fault). **a0 (l0) is the efo F16 enable** and is **off at program start** (hwt_p8: an efo with operand bit 6 reads r64 with no setfc or after `setfc #0, #1`, and the F16 half after `setfc #1, #1`) |
+| 6 | `op0xfd dst, #n` | dst l21-27 + h0-1 + h19 (destination slot), n h11-14 (0..8), h23 skipinv | oracle; meaning unknown |
 
 The USP code block header's four MOE words are this state at block entry:
 0x8000 | increment (low 8 bits signed) or 0x4000 | swizzle, per operand (for
@@ -1688,37 +1597,36 @@ example after `smlsi #1, #1, #0.zyxw, #1` the next block has 0x8001 0x8001
 
 | op | form | layout | evidence |
 |---|---|---|---|
-| 0 | `idf [drc=d path=p]` (0x99) | h0 DRC, h14 second argument (#0/#1) | encoder; idf = issue data fence (guess) |
-| 1 | `wdf [drc=d]` (0x9a) | h0 DRC; waits until the loads/samples that signal that DRC have written their results | encoder, corpus (after every uniform load and before the first use of a loaded or sampled register) |
-| 2 | `op0xd7 #n` (0xd7) | n l0-3 (below feature +0x10 = 16) | encoder; unknown |
-| 3 | `emit.<t0..t3> src0, src1, src2 [n f10 f12 f13 f3_20 imm end]` | tgt h14-15 (0x9c/0x9d 0, 0x101/0x102 1, 0xa2 2, 0x103/0x104 3); f12 h12 (0x101, 0x103; 0xa0 on older cores; f2 b5 on 0xa2); f13 h13 (0x101 + f3 b8: libusc's geometry "emit and cut" sets f3 0x100; 0xa1 on older cores; f2 b4 on 0xa2); f10 h10 (f3 b6 on 0x101/0x103, f3 b7 on 0x102/0x104); l21 = f3 b20; n = first argument (h0-1 + h9, 0..5); h18 end; h11 nosched. Sources: 0x101/0x102 src1 + src2; 0x103/0x104 src2 only; 0x9c-0x9e/0xa2 src0 (extension h19) + src1 (+ src2). Unused sources hold #0. 0x9d/0x9e/0xa1/0xa2 add a 14-bit immediate (bits 0-5 in l22-27, 6-11 in h3-8, 12-13 in h22-23); 0x9c sets h8 (= immediate 0x800). In the word all three source slots exist whatever the USEASM op (src0: l14-20, bank h2, extension h19; src1, src2 generic), the text always shows all three, and `imm=` and `n=` are the raw fields (n: bits 0-1 in h0-1, bit 2 in h9) | encoder; 0x101 is libusc's geometry-shader vertex emit; target names unknown |
-| 4 | `limm dst, #imm32` (0x9b) | dst = destination slot (l21-27, h0-1, h19); imm l0-20 (bits 0-20), h4-8 (21-25), h12-17 (26-31); a label argument (type 0xb) gives its absolute address (+ offset); argument flag 11 inverts the value; h9-11 pred (PRED3); h23 skipinv; h22 nosched; h18 end | encoder, corpus (`limm r0, #4096` before indexed stores); **hardware** (every hwt test loads its inputs with it: 0x12345678, 0xdeadbeef exact) |
-| 5 | `lock #n` / `release #n` (0xcd / 0xce) | l0 = 0 / 1; n l4-6 (below feature +0xc = 8) | encoder; names guess (mutexes) |
-| 6 | `ldr dst, addr [drc=d]` (0xd0), `str addr, data` (0xd1) | h19 = str; dst l21-27 + h7 (r/pa); addr = src2 slot whose immediate form has 14 bits (low 7 l0-6, high 7 l14-20, and the slot's immediate bank: l29 + h16); data = src1 slot; h0 DRC (ldr); h23 skipinv; h11 nosched | encoder; names guess |
-| 7 | `op0xd6 #n` (0xd6) | n l0-2 (0..5), l3 = f3 b6 (libusc sets it under the same compile flag as emit's f3 b6) | encoder; unknown |
+| 0 | `idf [drc=d path=p]` | h0 DRC, h14 path (#0/#1) | oracle; exercised by the open stack (dEQP-GLES2); idf = issue data fence (guess) |
+| 1 | `wdf [drc=d]` | h0 DRC; waits until the loads/samples that signal that DRC have written their results | oracle, corpus (after every uniform load and before the first use of a loaded or sampled register); exercised by the open stack (dEQP-GLES2) |
+| 2 | `op0xd7 #n` | n l0-3 (below 16) | oracle; unknown |
+| 3 | `emit.<t0..t3> src0, src1, src2 [n f10 f12 f13 f3_20 imm end]` | tgt h14-15 (0-3, printed t0-t3); f12 h12; f13 h13; f10 h10; l21 = f3_20; n h0-1 + h9 (0..5); h18 end; h11 nosched; imm: a 14-bit immediate (bits 0-5 in l22-27, 6-11 in h3-8, 12-13 in h22-23). The forms the vendor assembler emits for the SGX545: t0 with src0 (extension h19) + src1 (+ src2), with or without the immediate (without it, h8 is set: immediate 0x800); t2 with src0 + src1 (+ src2) and the immediate; t1 with src1 + src2; t3 with src2 only. f10 on t1 and t3, f12 on t1, t2 and t3, f13 on t1 and t2. Unused sources hold #0. In the word all three source slots exist whatever the form (src0: l14-20, bank h2, extension h19; src1, src2 generic), the text always shows all three, and `imm=` and `n=` are the raw fields (n: bits 0-1 in h0-1, bit 2 in h9) | oracle; t1 is a geometry-shader vertex emit and f13 on t1 is "emit and cut" (**unconfirmed**); target names unknown |
+| 4 | `limm dst, #imm32` | dst = destination slot (l21-27, h0-1, h19); imm l0-20 (bits 0-20), h4-8 (21-25), h12-17 (26-31); a label operand encodes its absolute address (+ offset); h9-11 pred (PRED3); h23 skipinv; h22 nosched; h18 end | oracle, corpus (`limm r0, #4096` before indexed stores); **hardware** (every hwt test loads its inputs with it: 0x12345678, 0xdeadbeef exact) |
+| 5 | `lock #n` / `release #n` | l0 = 0 / 1; n l4-6 (below 8) | oracle; names guess (mutexes) |
+| 6 | `ldr dst, addr [drc=d]`, `str addr, data` | h19 = str; dst l21-27 + h7 (r/pa); addr = src2 slot whose immediate form has 14 bits (low 7 l0-6, high 7 l14-20, and the slot's immediate bank: l29 + h16); data = src1 slot; h0 DRC (ldr); h23 skipinv; h11 nosched | oracle; names guess |
+| 7 | `op0xd6 #n` | n l0-2 (0..5), l3 = f3_6 | oracle; unknown |
 
-h11 = nosched for all of them except limm (h22).
+h11 = nosched for all of them except limm (h22) (oracle).
 
 #### visibility test (h20-21 = 3)
 
-Sources: src0 (l14-20, bank h2, extension h19), src1, src2. The USEASM
-int-source-select arguments: 0x34 sets h5 ("sel34"), 0x36 sets h3, 0x37 sets
-h4; 0x15 and 0x35 mean none. h18 = end, h11 = nosched, h23 = syncs (atst8,
-depthf).
+Sources: src0 (l14-20, bank h2, extension h19), src1, src2. Select bits:
+h5 (`sel34`), h3 (`sel36`), h4 (`sel37`); none set is the default. h18 = end,
+h11 = nosched, h23 = syncs (atst8, depthf). All oracle.
 
 | op | form | layout | evidence |
 |---|---|---|---|
-| 0 | `pcoeff src0, src1, src2` (0xd2), `ptoff` (0xd3: h15, no sources: every source field is 0) | | encoder; names guess (plane coefficients / punch-through off) |
-| 1 | `atst8 dst, pdst, src0, src1, src2` (0xd4) | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (cleared by the argument's flag 16, "disable write-back": printed `p1.nw`); h22 = f2 b25; h3/h4/h5 sel. The GLES driver's own atst8 (`f9340406`) also sets h10, which libusc never does: h9-10 is a PRED2 predicate as in depthf (2 = p1); a false predicate kills the pixel (driver, hardware: "Phases, visibility feedback and discard") | encoder; name guess |
-| 3 | `depthf src0, src1, src2` (0xd5) | h9-10 pred (PRED2); h4/h5 sel (0x36 rejected) | encoder; name guess |
+| 0 | `pcoeff src0, src1, src2`, `ptoff` (h15, no sources: every source field is 0) | | oracle; exercised by the open stack (dEQP-GLES2, pcoeff); names guess (plane coefficients / punch-through off) |
+| 1 | `atst8 dst, pdst, src0, src1, src2` | dst l21-27 + h0-1 without extension (r o pa); pdst = predicate p0-p3 in h7-8, h6 = write it (clear: printed `p1.nw`); h22 = f2_25; h3/h4/h5 sel. The vendor driver's own atst8 (`f9340406`, capture) also sets h10, which the vendor assembler never does (oracle): h9-10 is a PRED2 predicate as in depthf (2 = p1); a false predicate kills the pixel (capture; hardware: "Phases, visibility feedback and discard") | oracle; exercised by the open stack (dEQP-GLES2, with h10); name guess |
+| 3 | `depthf src0, src1, src2` | h9-10 pred (PRED2); h4/h5 sel (h3 rejected) | oracle; exercised by the open stack (dEQP-GLES2); name guess |
 
 #### phase / 0xfe-0x100 (h20-22 = 4, h23 = 0)
 
 | op | form | layout | evidence |
 |---|---|---|---|
-| 2 | `phas src1, src2` (0xd8, h18 = 0) | h19 end, h11 nosched | encoder; name guess |
-| 2 | `phas.i #pc, #temps4 [rate wait sel43 end]` (0xd9, h18 = 1) | pc l0-17 (18 bits, absolute, no load offset added); temps4 h0-7 = USEASM argument / 4 (multiple of 4, up to 0x3fc); rate h11-12: int-source-select 0x3c 0, 0x3e 1, 0x3d 2; wait h8-10: none (type 0xe #0) 0, 0x3f 1, 0x40 2, 0x41 7; sel43 h13 (0x42 0, 0x43 1); h19 end | encoder; reading as "next phase address, temporaries, execution rate, wait condition" is a guess (libusc talks about feedback/split phases: uMainProgFeedbackPhase1Start) |
-| 0 | `op0xff` / `op0xfe` / `op0x100 src1, src2, #n` | h12-13 = 1 / 2 / 3; n h8-9 (0..3); h15 = f3 b11, h14 = f3 b12; h11 nosched | encoder; unknown |
+| 2 | `phas src1, src2` (h18 = 0) | h19 end, h11 nosched | oracle; name guess |
+| 2 | `phas.i #pc, #temps4 [rate wait sel43 end]` (h18 = 1) | pc l0-17 (18 bits, absolute from the task's USE code base, as `ba`; no load offset added); temps4 h0-7 = the temporaries / 4 (multiple of 4, up to 0x3fc); rate h11-12 (0, 1, 2); wait h8-10 (0, 1, 2, 7); sel43 h13; h19 end | oracle; exercised by the open stack (dEQP-GLES2: `wait=7`, `rate=1`, `end`); pc and temps4 as the next phase's address and temporaries: **hardware** (the two-phase discard program, "Phases, visibility feedback and discard"); rate and wait as execution rate and wait condition are a guess |
+| 0 | `op0xff` / `op0xfe` / `op0x100 src1, src2, #n` | h12-13 = 1 / 2 / 3; n h8-9 (0..3); h15 = f3_11, h14 = f3_12; h11 nosched | oracle; unknown |
 
 ---------------------------------------------------------------------------
 
@@ -1758,11 +1666,11 @@ the target label). The patcher lays the blocks out and fills the targets.
   code block holding only `nop` between two labels (USP header 0x76 / 0x78
   name them). The kill is not in the USP binary: the draw-time builder
   replaces that nop with `atst8 ... [end]` predicated on p1 and splits the
-  program into two phases (driver; see "Phases, visibility feedback and
+  program into two phases (capture; see "Phases, visibility feedback and
   discard").
 - **calls** (fn_call): the function body is its own labeled region ending
   in `lapc` (a branch block with label 0xffff); each call site is `br
-  [link]` (asm.c ICALL: f1 b19) to that label; arguments and results go
+  [link]` to that label; arguments and results go
   through ordinary registers (r0-r4 here).
 - **dependent reads / loads**: `smp` / `ld` set a DRC (h0); `wdf drc` before
   the first use of the result (ix_tmp*: loads alternate drc0/drc1 so two
@@ -1776,104 +1684,91 @@ the target label). The patcher lays the blocks out and fills the targets.
 
 - Names/meanings marked guess, in particular: ld/st address modes (a/l/t),
   pre/post increment, range (h6), f2_2/f2_3/f2_9 (cache control?), st h0
-  (f3 b13); smp h14/h15 (rdata/rinfo); the MOE ops other than smlsi/smbo;
+  (f3_13); smp h14/h15 (rdata/rinfo); the MOE ops other than smlsi/smbo;
   op0x98, op0xd6, op0xd7, op0xfd, op0xfe-0x100; emit targets; the
-  visibility-test names and their int-source-select options; phas fields.
-- br/ba h10 (f1 b22) and USEASM 0xd7 share target feature +0x10 (16).
+  visibility-test names and their select bits; phas fields.
+- br/ba h10 (f1_22) and op0xd7's limit are tied to the same core feature
+  (**unconfirmed**); what either does is unknown.
 - smp's coordinate count (how many registers the coordinate spans) is not in
   the word; it follows from the dimension and the projective/PCF modes.
 - The discard path is traced (see "Phases, visibility feedback and
   discard"); the visibility-test operands are not.
-
 ## USP texture-sample blocks and the driver's sample finalizer
 
 How a texture read gets from GLSL to USSE code on SGX545 (Cedarview DDK 1.7):
-libusc writes USP blocks 5 and 6 instead of code, and the USP finalizer that
-is statically linked into `libGLESv2.so.1.7.862890` turns them into
-instructions once the texture formats are known.
+the vendor compiler writes USP blocks 5 and 6 in place of code, and the
+vendor GLES driver's USP finalizer turns them into instructions once the
+texture formats are known.
 
-Addresses are Ghidra addresses (file vaddr + 0x10000) for **both** libraries:
-libusc `FUN_001042a0` = libusc vaddr 0xf42a0. `docs/PDS.md` gives libGLESv2
-addresses as file vaddrs (0x36b00 there = `FUN_00046b00` here).
+Evidence tags: **capture** (the vendor compiler's USP binaries: `usp.py` and
+`smpblock.py` parse every one in c1-c3, and a field is capture when it is
+present and consistent across them; also the vendor driver's programs in GPU
+memory), **corpus** (c1/c2/c3 and `ef_c3.txt`), **hardware** (A/B: the vendor
+driver runs, on the CE5300 board, USPs that our writer `tools/usc/sgx_usp.c` builds
+with that field; or open stack: the open compiler and driver emit it and pass
+dEQP-GLES2 on the CE5300 board), **unconfirmed**, **guess**.
 
-Evidence tags: **writer** (read from libusc's writer), **reader** (read from
-the driver's USP loader `FUN_000511d0`), **driver** (read from the finalizer),
-**corpus** (c1/c2/c3 and `ef_c3.txt`), **guess**.
-
-Tools: `smpblock.py` parses the three block types; `usp.py` now calls it
+Tools: `smpblock.py` parses the three block types; `usp.py` calls it
 (`block["sample"]`). `python3 -I smpblock.py corpus/c3` prints every sample
-block of a corpus. Decompiles used: `$S/usc.c`; `$S/gles.c` (libGLESv2,
-DumpAll) and `$S/gles_sw.c` (the three switch functions Ghidra could not
-recover, re-decompiled with jump-table overrides by `$S/gs2/FixSw.java`).
+block of a corpus.
 
 ### Where the blocks come from
 
-libusc's block walker `FUN_001042a0` (uspbin.c) inlines the sample writers.
-They are switch cases on the IR opcode, not separate functions: ISA.md's
-"0xf48da, 0xf46e0, 0xf43a0" are addresses inside that function. (**writer**)
+The vendor compiler writes one block 5 per texture read: a non-dependent read
+(iterated coordinate) or a dependent one in one of four LOD modes (0 normal,
+1 bias, 2 explicit LOD, 3 gradients; the mode is the template smp's h8-9).
+Block 6 is the read's unpack, block 9 a texture or image write. (**capture**)
 
-| IR opcode | name (from asserts / `aeUSPOpcodes` at 0x12841c) | block |
-|---|---|---|
-| 0xa0 | ISMP_USP (LOD mode 0, normal) | 5 |
-| 0xa1 | ISMPBIAS_USP (LOD mode 1) | 5 |
-| 0xa2 | ISMPREPLACE_USP (LOD mode 2, explicit LOD) | 5 |
-| 0xa3 | ISMPGRAD_USP (LOD mode 3, gradients) | 5 |
-| 0xa4 | ISMP_USP_NDR (non-dependent read) | 5 |
-| 0xa5 | ISMPUNPACK_USP | 6 |
-| 0xa6 | texture/image write ("Invalid register format for image write") | 9 |
-
-(The non-USP opcodes are 0x5f..0x62, table 0x12842c.) The driver's reader
-`FUN_000511d0` dispatches on the block type through the table at 0x74ff8:
-type 1 → 0x521bd, 2 → 0x51f5e, 3 → 0x52928, 4 → 0x51bca, **5 → 0x51c79,
-6 → 0x51a18, 9 → 0x513c7**, 0/7/8 end. The reader's field order is the
-writer's, field for field. (**writer**, **reader**)
+The driver's loader also treats block types 0 and 8 as an end of the stream
+(**unconfirmed**); the corpus ends every stream with type 7.
 
 Every sample block sits where the instruction stood in the program, between
-code blocks; the finalizer inserts its generated code at that point.
+code blocks (**capture**). The generated code goes at that point (**hardware**,
+open stack: the open driver inserts its smp and `wdf` there).
 
 #### Shared sub-records
 
-- **Format control + MOE state, 18 bytes** (also the start of code blocks;
-  reader `FUN_0004f940`): u16 format control (b0: F16 format select enabled,
-  b1: C10 format select enabled; tracked from IR opcode 0x74, SETFC), 4 u16
-  per-operand MOE mode (`0x8000|inc` = increment, `0x4000|swz` = four 2-bit
-  swizzle selects, from IR 0x72 SMLSI; default `0x8001`), 4 u16 MOE base
-  offsets (IR 0x75 SMBO). (**writer**, **reader**)
-- **Per-instruction flags (iflags), u16** (libusc `FUN_00103fd0`, same word
-  as the code block's per-instruction flags; driver converts it with
-  `FUN_0004f700`): b0 internal registers live at this instruction (driver
-  flag 0x2: it must save/restore i0..i2 around code it inserts); b2 the IR
-  instruction lacks the skip-invalid flag (driver 0x1000; when clear, every
-  instruction the driver generates gets skipinv); b4-7 the IR instruction's
-  +0x88 low nibble, only when compile flag +0x9e bit 4 is clear (driver
-  0x100..0x800; meaning **unknown**). (**writer**, **reader**)
+- **Format control + MOE state, 18 bytes** (also the start of code blocks):
+  u16 format control (b0: F16 format select enabled, b1: C10 format select
+  enabled; what `setfc` sets), 4 u16 per-operand MOE mode (`0x8000|inc` =
+  increment, `0x4000|swz` = four 2-bit swizzle selects, what `smlsi` sets;
+  default `0x8001`), 4 u16 MOE base offsets (what `smbo` sets). (**capture**:
+  the defaults everywhere, `tx_dep_loop` format control 3 and increments
+  +255, +1, +0, +1; **hardware**, A/B: the defaults; the `0x4000` swizzle
+  form **unconfirmed**)
+- **Per-instruction flags (iflags), u16** (the same word as a code block's
+  per-instruction flags): b0 internal registers live at this instruction
+  (**capture**: set exactly where the block's ilive is non-zero); the driver
+  then saves and restores i0..i2 around code it inserts (**unconfirmed**). b2
+  the instruction lacks skip-invalid (**capture**: `tx_dep_chain`); when it is
+  clear, every instruction the driver generates gets skipinv
+  (**unconfirmed**). b4-7 are written only under a compile option; their
+  meaning is **unknown** (**unconfirmed**).
 - **Register types.** Two USP enums: 2-valued fields 1 = r, 2 = pa; 4-valued
-  fields 1 = r, 2 = o, 3 = pa, 4 = i (writer table 0x136c18 maps USEASM
-  types 0/1/2/7). The reader turns them into its own kind codes, which are
-  also what its operand encoders take: 0 r, 1 pa, 2 sa, 3 o, 4 i, 6 c/g
-  constant, 7 immediate (`FUN_000573a0` bank table). (**writer**, **reader**, **driver**)
+  fields 1 = r, 2 = o, 3 = pa, 4 = i. (**capture** for r and pa; o and i
+  **unconfirmed**)
 
 ### Block 5: SAMPLE (56 bytes)
 
 | off | type | field | values / meaning | tag |
 |---|---|---|---|---|
-| 0 | u16 | flags | b0 non-dependent (IR sample +0xa0), b1 projected (+0x98, only with b0), b2 IR +0x9c (driver +0x70, matched against the iterator's third key; **guess**: centroid) | writer, reader; corpus: proj4 sets b1 |
-| 2 | 18 B | fmt ctrl + MOE | see above; c3 is always `2, 8001×4, 0×4` except `tx_dep_loop` | writer |
-| 20 | u32 | sample id | pairs the block with its unpack (block 6); 0, 1, ... per shader | writer, reader, corpus |
-| 24 | u16 | iflags | see above | writer |
-| 26 | u16 | sampler | texture unit, 0..15 (reader rejects >15) | writer, reader, corpus (`tx_nd_two` 0/1, `tx_nd_same2` 0/0) |
-| 28 | u16 | swizzle | 4 × 3 bits: result channel i ← texel channel sel_i (0-3 = xyzw; ≥4 not seen). Bits 12-15 must be 0. The compiler folds a following channel reorder into it: `0x60a` = zyxw when the texel goes straight to the BGRA color output, `0x688` = xyzw otherwise | writer (IR +0xac), reader (+0x58), driver (`FUN_0005cb10`), corpus |
-| 30 | u16 | dest type | 2-valued: where the smp writes the raw texel data | writer (IR dest 0), driver (+0x90: smp destination base) |
-| 32 | u16 | dest number | | writer, driver |
-| 34 | u16 | usrc type | 4-valued: IR dest +0xb0; the driver compares this register with the unpack's source and first destination and sets "in place" (sample +0x2d8) when they match | writer, driver (`FUN_00053d00`); meaning **guess** |
-| 36 | u16 | usrc number | | writer |
-| 38 | u16 | scratch type | 2-valued: first temporary the driver may use for its own code (iReg saves, state loads, coordinate fix-ups) | writer (IR +0xb4/0xb8), driver (+0xa0/+0xa4) |
-| 40 | u16 | scratch number | c3: r20..r83 fragment, r294/r302 vertex | writer, driver |
-| 42 | u16 | ilive | mask of internal registers live across the sample | writer (`FUN_00101c30` state), driver (+0x544) |
-| 44 | u16 | ilive C10 | the subset holding C10 data (saved with two instructions instead of a mov) | driver (+0x546) |
-| 46 | u16 | forced format | result format override: 8 = none (the reader's table 0x750dc maps n-1 → 1 f32, 2 f16, 3 c10, 4 u8, 6, 7, else none); only written ≠ 8 under a compile option (state +0xaf bit 0), from IR +0xb0 (0→1, 4→7, 5→6) | writer, reader; 6/7 **unknown** |
-| 48 | 8 B | dependent: smp template | the smp libusc encoded (`FUN_00018a50` → `FUN_0010a3f0`), with the destination zeroed and IR args 0, 6, 11, 12 renumbered from their +0x24 field. Identical to the smp words logged in `ef_c3.txt` for every dependent shader | writer, corpus |
-| 48 | 4 u16 | non-dependent | coordinate iterator + 1 (reader stores n-1, accepts 1..10), coordinate dimension (≤3; 2 = 2D, 3 = cube), coordinate register type (4-valued), number. The reader substitutes the template `0x20000000 / 0xe0411000` | writer, reader, corpus |
+| 0 | u16 | flags | b0 non-dependent, b1 projected (only with b0), b2 matched against the iterator entry's third key (**guess**: centroid) | capture (proj4 sets b1; b2 never set); hardware (A/B: b0, b1); b2 **unconfirmed** |
+| 2 | 18 B | fmt ctrl + MOE | see above; c3 is always `2, 8001×4, 0×4` except `tx_dep_loop` | capture; hardware (A/B) |
+| 20 | u32 | sample id | pairs the block with its unpack (block 6); 0, 1, ... per shader | capture; hardware (A/B) |
+| 24 | u16 | iflags | see above | capture |
+| 26 | u16 | sampler | texture unit, 0..15 (the loader rejects >15: **unconfirmed**) | capture, corpus (`tx_nd_two` 0/1, `tx_nd_same2` 0/0); hardware (A/B) |
+| 28 | u16 | swizzle | 4 × 3 bits: result channel i ← texel channel sel_i (0-3 = xyzw; ≥4 not seen). Bits 12-15 must be 0 (**unconfirmed**). The compiler folds a following channel reorder into it: `0x60a` = zyxw when the texel goes straight to the BGRA color output, `0x688` = xyzw otherwise | capture, corpus; hardware (A/B: `0x688`) |
+| 30 | u16 | dest type | 2-valued: where the smp writes the raw texel data | capture; hardware (A/B) |
+| 32 | u16 | dest number | | capture; hardware (A/B) |
+| 34 | u16 | usrc type | 4-valued; equal to the unpack's source in every corpus block. The driver compares this register with the unpack's source and first destination and unpacks in place when they match (**unconfirmed**) | capture; meaning **guess** |
+| 36 | u16 | usrc number | | capture; hardware (A/B) |
+| 38 | u16 | scratch type | 2-valued: first temporary the driver may use for its own code (iReg saves, state loads, coordinate fix-ups) | capture; hardware (A/B); use **unconfirmed** |
+| 40 | u16 | scratch number | c3: r20..r83 fragment, r294/r302 vertex | capture |
+| 42 | u16 | ilive | mask of internal registers live across the sample | capture (3 where the coordinate is in i0: `tx_nd_proj3`, `tx_dep_proj3/4/b`, `tx_dep_loop`, `vtx_projlod`) |
+| 44 | u16 | ilive C10 | the subset holding C10 data (saved with two instructions instead of a mov) | capture (always 0); meaning **unconfirmed** |
+| 46 | u16 | forced format | result format override: 8 = none (values map n-1 → 1 f32, 2 f16, 3 c10, 4 u8, 6, 7, else none); written ≠ 8 only under a compile option | capture (always 8); hardware (A/B: 8); other values **unconfirmed**; 6/7 **unknown** |
+| 48 | 8 B | dependent: smp template | the smp the vendor compiler encodes, with the destination zeroed and the texture state `#0`. Identical to the smp words logged in `ef_c3.txt` for every dependent shader | capture, corpus; hardware (A/B; open stack: the template with its destination and state filled in) |
+| 48 | 4 u16 | non-dependent | coordinate iterator + 1 (1..10 accepted: **unconfirmed**), coordinate dimension (≤3; 2 = 2D, 3 = cube), coordinate register type (4-valued), number. The driver substitutes the template `0x20000000 / 0xe0411000` (**unconfirmed**) | capture, corpus; hardware (A/B) |
 
 What the compiler makes non-dependent (corpus): `texture2D(s, v)`,
 `texture2DProj(s, v4)` (proj bit), `textureCube(s, v)` (dim 3) with `v` an
@@ -1900,374 +1795,301 @@ Dependent templates in c3 (decoded with `smpblock.smp_fields`):
 
 | off | type | field | meaning | tag |
 |---|---|---|---|---|
-| 0 | 18 B | fmt ctrl + MOE | as above | writer, reader |
-| 18 | u32 | sample id | must match a block 5 (`FUN_00053d00` links them: sample +0x5d0) | writer, reader |
-| 22 | u16 | iflags | | writer |
-| 24 | u16 | channels | channels to write (IR unpack +8); must be a subset of the next field | writer, reader (+0x54) |
-| 26 | u16 | mask | live channels of the destination (from the IR dest mask, `iStack_bc` per format) | writer, reader (+0x58) |
-| 28 | 4 u16 | per-channel register type | 4-valued (0 for unwritten channels) | writer, reader (+0x5c + 0x14 i) |
-| 36 | 4 u16 | per-channel register number | base + i / (channels per register) | writer, reader |
-| 44 | 4 u16 | per-channel format | 1 f32, 2 f16, 3 c10, 4 u8 (writer table 0x136c34 from the IR dest format) | writer, reader, corpus (highp f32, mediump f16, lowp to the color output u8) |
-| 52 | 4 u16 | per-channel byte offset | 0 for f32; 0/2 for f16; 0..3 for c10/u8 (reader checks the bound per format) | writer, reader |
-| 60 | u16+u16 | source | 4-valued type, number: where the unpack expects the raw data (IR arg 4) | writer, reader (+0xac/+0xb0) |
-| 64 | u16+u16 | smp dest | 2-valued: IR arg 0 = block 5's dest | writer, reader (+0xb4/+0xb8), corpus |
-| 68 | u16+u16 | scratch | 2-valued: temporaries for the conversion code (IR unpack +0xc/+0x10) | writer, reader (+0xbc/+0xc0) |
-| 72 | u16 | ilive | internal registers live here | writer, reader (+0x2d4) |
+| 0 | 18 B | fmt ctrl + MOE | as above | capture; hardware (A/B) |
+| 18 | u32 | sample id | must match a block 5 | capture; hardware (A/B) |
+| 22 | u16 | iflags | | capture |
+| 24 | u16 | channels | channels to write; a subset of the next field | capture; hardware (A/B) |
+| 26 | u16 | mask | live channels of the destination | capture; hardware (A/B) |
+| 28 | 4 u16 | per-channel register type | 4-valued (0 for unwritten channels) | capture; hardware (A/B) |
+| 36 | 4 u16 | per-channel register number | base + i / (channels per register) | capture; hardware (A/B) |
+| 44 | 4 u16 | per-channel format | 1 f32, 2 f16, 3 c10, 4 u8 | capture (highp f32, mediump f16, lowp to the color output u8; c10 not seen); hardware (A/B: u8) |
+| 52 | 4 u16 | per-channel byte offset | 0 for f32; 0/2 for f16; 0..3 for c10/u8 (the loader checks the bound per format: **unconfirmed**) | capture; hardware (A/B) |
+| 60 | u16+u16 | source | 4-valued type, number: where the unpack expects the raw data | capture; hardware (A/B) |
+| 64 | u16+u16 | smp dest | 2-valued: block 5's dest | capture; hardware (A/B) |
+| 68 | u16+u16 | scratch | 2-valued: temporaries for the conversion code | capture; hardware (A/B); use **unconfirmed** |
+| 72 | u16 | ilive | internal registers live here | capture |
 
 ### Block 9: TEXTURE WRITE (82 bytes; was 78 in usp.py)
 
-20 u32 then one u16, in this order (writer case 0xa6, reader 0x513c7): IR
-params +0x2c (an id); eight (register number, operand format) pairs for IR
-args 0..7 (format code from `FUN_00103f30`: USEASM format 0→1, 2→2, 3→3,
-6→4, 7→5; anything else is an error); IR params +4; a format from table
-0x136c58 (IR params +0x70: 0..5 → 1, 2, 3, 4, 7, 6); `FUN_0009af00()`;
-iflags. The reader keeps them in a 0x324-byte record (list at shader +0x34).
-GLSL ES never produces it; the field meanings beyond the layout are
+20 u32 then one u16, in this order: an id; eight (register number, operand
+format) pairs, one per operand (operand format codes 1-5); a word; a format
+(one of 1, 2, 3, 4, 7, 6); a word; iflags. GLSL ES never produces it, so the
+whole layout is **unconfirmed**; the field meanings beyond the layout are
 **unknown**.
 
-### The finalizer (libGLESv2)
+### The finalizer
 
-`PVRUniPatchSetTextureFormat` = `FUN_0004f1b0`/`FUN_0004f230`: per sampler
-(16, 0x2c bytes each in the patch context) a 5-word format descriptor (+0xc,
-word 0 is a format id; 0x21 is special-cased below), two words, and
-`FUN_0004f230`'s (+0x28 = arg==0, +0x2c, +0x30 width?, +0x34 height?).
+The vendor driver finalizes these blocks into instructions at draw time. Its algorithm
+is not described here; the open compiler emits the sequence below itself.
 
-**Linking and planning** (`FUN_00053e10`):
-1. `FUN_00053d00`: each sample finds its unpack by id.
-2. `FUN_00066760` then `FUN_00064540` → `FUN_0005cb10` per sample: from the
-   format descriptor and the swizzle, which *chunks* of the texel are needed.
-   A texture format is split into up to 4 chunks (table 0x75ec0 gives bits per
-   channel format: 8, 8, 16, 16, 16, 32, 24, 32, 32); chunk c returns
-   `ceil(bits/32)` dwords at a dword offset in the raw area (+0x548 record:
-   +0x550 needed-chunk mask, +0x5b8.. offsets/sizes). Channels can also be
-   constant 0/1 (descriptor kinds 5/6), which need no chunk. A YUV-like case
-   (all three of channels 0-2 of kind 2..4 from one chunk, flag +0x548) adds
-   a FIRH color conversion later (`FUN_0005a040`, coefficient tables
-   0x75f48/0x75f6c).
-3. `FUN_00065d30`: builds the final **iterator list** (what GL's PDS
-   generator turns into DOUTIs; PDS.md "DOUTI"): for non-dependent samples it
-   adds sample entries (key: coordinate iterator, dimension, flag b2) within a
-   PA budget of `0x80 - header[0x3c]`. Only the **first** needed chunk of a
-   non-dependent sample can come from the PDS (`FUN_0005d5a0`, tables
-   0x76200 = lowest set bit, 0x76240 = the rest). +0x554 = chunks the PDS
-   delivers.
-4. Per non-dependent sample: `FUN_0005ac30` adds a *plain* iteration of the
-   coordinate when some chunk still needs a USSE smp; `FUN_0005a800` places
-   PDS-delivered chunks; `FUN_0005a420` allocates **texture state**: per
-   (sampler, chunk) 4 consecutive dwords, placed in SA registers after the
-   program's own (header +0x30/+0x32/+0x24..0x28/+0x36) or, when they don't
-   fit (`header +0x30 + +0x34`), in memory. The table (7 dwords per entry:
-   sampler, chunk, tag, 4, register, in-memory, tag2; in the program-output
-   record at shader +4: list +0x30, count +0x20) is copied into the
-   finalized program (`FUN_00054da0` sizes it at 0x1c bytes per entry) for
-   GL to fill.
-   Dependent samples get the same allocation.
+### The smp instruction, as the vendor compiler writes it
 
-**Code generation** (`FUN_00054570`): `FUN_000646c0` per sample (non-dependent
-list +0x4c, then dependent list +0x40), `FUN_000655f0` per unpack. Generated
-instructions go into a per-sample array (+0x270 words, +0x3a8 USP opcode,
-+0x444 flags; opcodes are the driver decoder's enum, `FUN_00055d60`: hw class
-→ 0x01..0x4c, smp = 0x2b + LOD mode, ld 0x2f, mov 0x10, pck 0x13, and 0x15,
-limm 0x41, smlsi 0x39, smbo 0x3a, setfc 0x3c, wdf 0x3e).
-
-`FUN_000646c0` → `FUN_0005d790` (the sample), in order:
-1. If the MOE state at the sample isn't the default: `smbo` 0,0,0,0 (0x3a,
-   `FUN_00058f30`) and/or `smlsi` 1,1,1,1 (0x39, `FUN_00058e40`).
-2. If internal registers are live and some chunk needs a USSE smp: save each
-   live i_n to scratch (`mov`, `FUN_00058b00`; C10 ones with a sopwm
-   `FUN_00059c00` + `pck` pair), after a `setfc` if C10 ones are live.
-3. Texture state held in memory: `ld` 4 dwords per chunk into scratch
-   (`FUN_00059f70`: hi `0xe8800000 | (n-1)<<12`, base = SA header[0x24] +
-   offset), merging adjacent chunks up to 16 dwords, then `wdf` (0x3e).
-4. Sampler with ctx +0x28 set: coordinate fix-up before the smp:
-   `fsubflr` (op 4, wrap) unless ctx +0x2c, `limm` 1/w (and 0.5/w), op 0x11
-   (hw class 6) multiply-add; same for h. **Guess**: NPOT/rectangle
-   emulation.
-5. Per needed chunk not delivered by the PDS: copy the template from
-   sample +0x7c/+0x80; non-dependent: set h10/h11 from the dimension
-   (`FUN_0005a160`) and src0 = the plain iteration's PA register (`FUN_00057100`);
-   set src1 = the chunk's 4 state registers (`FUN_000573a0`); set the
-   destination to dest + chunk offset (`FUN_00056cc0`).
-6. After the last smp: `wdf drc` (`FUN_00059bd0`: hi `0xf9200000 | drc`,
-   drc = template h0-1, `FUN_00059bc0`).
-7. Format id 0x21: `and dst, dst, #0x7fffffff` on the result (`FUN_00057cf0`).
-8. Restore the saved internal registers.
-
-Then back in `FUN_000646c0`: chunks the PDS delivered are found in PA
-(`FUN_0005a2a0`) and, if needed, moved; the YUV conversion; `FUN_0005cfe0` and
-**`FUN_0005fcc0` the unpack**: per output channel, by result format (block 6,
-or the forced format): f32: `pck.f32.<src>` with normalize (`FUN_000595c0`
-with dst code 7, src code from table 0x75fc4 by channel format: u8, s8, u16,
-s16, f16, f32), or `mov` when the channel is already f32; f16: `pck.f16.<src>`
-(dst code 6, table 0x76070); c10/u8: pck to c10/u8 or in-place when the raw
-data already have that layout (with the swizzle); formats 6 and 7 other
-paths (`limm 0xffff8000`, test). pck format codes: dst h6-8 and src h9-11 =
-code-1 (`FUN_000595c0`), so 0 u8, 1 s8, 3 u16, 4 s16, 5 f16, 6 f32
-(**driver**; names per USEASM order, **guess** for 2 and 7). Finally the MOE
-state is put back (smbo/smlsi/setfc) if it was changed.
-
-### The smp instruction, as libusc's FUN_0010a3f0 writes it
-
-USEASM ops 0x6f..0x7a = smp{1d,2d,3d} × {normal, bias, replace, grad}.
-
-| field | bits | source |
+| field | bits | tag |
 |---|---|---|
-| opcode | h27-31 = 0x1c | |
-| predicate | h24-26 | flags1 pred |
-| skipinv / syncstart / nosched | h23 / h20 / h22 | flags1 b0 / b2 / b3 |
-| write mask, or repeat | h12-15 mask; with h21 set, repeat-1 | flags1 b9-12 / b4-8 |
-| LOD mode | h8-9: 0 none, 1 bias, 2 LOD, 3 gradients | opcode |
-| dimension | h10-11 = dim-1 | opcode |
-| dest | l21-27; h7 = pa, else r (only r and pa allowed) | arg0 |
-| coordinate | src0 l14-20, bank h2, ext h18 (r, pa, o, sa) | arg1 |
-| texture state | src1 l7-13, bank l30-31, ext h17 | arg2 |
-| bias / LOD / gradients | src2 l0-6, bank l28-29, ext h16 (none: `#0`) | arg3 |
-| coordinate format | h3 F16, h4 C10 | arg1 flags b22 / b24 |
-| h5 | flags3 b0/b1 | **unknown** |
-| h14-15 path | flags3 b2/b3/b15 on a feature-gated path | **unknown** |
-| drc | h0 (0 or 1; h1 is never set) | the arg after the last source, type 0xa |
-| (check only) | next arg must be type 0x10, number 0x15 | |
+| opcode | h27-31 = 0x1c | oracle; corpus |
+| predicate | h24-26 | oracle |
+| skipinv / syncstart / nosched | h23 / h20 / h22 | oracle; corpus (skipinv) |
+| write mask, or repeat | h12-15 mask; with h21 set, repeat-1. SGX545: write mask 1 only, no repeat | oracle |
+| LOD mode | h8-9: 0 none, 1 bias, 2 LOD, 3 gradients | oracle; corpus |
+| dimension | h10-11 = dim-1 | oracle; corpus |
+| dest | l21-27; h7 = pa, else r (only r and pa allowed) | oracle |
+| coordinate | src0 l14-20, bank h2, ext h18 (r, pa, o, sa) | oracle; corpus |
+| texture state | src1 l7-13, bank l30-31, ext h17 | oracle |
+| bias / LOD / gradients | src2 l0-6, bank l28-29, ext h16 (none: `#0`) | oracle; corpus |
+| coordinate format | h3 F16, h4 C10 | oracle; corpus |
+| h5 | an assembler option (hw 1c: pcf) | oracle (position); meaning **unknown** |
+| h14-15 path | assembler options on a path the SGX545 enables (hw 1c: `.rdata` / `.rinfo`) | oracle (position); meaning **unknown** |
+| drc | h0 (0 or 1; h1 is never set) | oracle; corpus |
 
 ### The texture-sample sequence a compiler must emit
 
-The driver does all of this today; an own compiler that skips USP has to do
-it itself. Field names as above; exact bit forms belong to `hw_mem.py`.
+A compiler that does not go through the vendor finalizer has to do all of
+this itself. The open compiler and driver do it for dependent 2D and cube
+reads, bias, state words in SA, `wdf`, the u8 unpack and non-dependent PDS
+reads, and pass dEQP-GLES2 on the CE5300 board (**hardware**, open stack). LOD reads,
+gradients, vertex texture fetch, state words in memory and multi-chunk
+formats are what the vendor compiler emits (**corpus**) or what its finalizer
+does (**unconfirmed**); the open stack does not emit them yet. Field names as
+above; exact bit forms belong to `hw_mem.py`.
 
 **State words (all cases).** For each (sampler, chunk) the texture unit needs
 4 control words, the same 4 a PDS `DOUTT` sends (PDS.md: word 1 = width-1 /
-height-1, word 2 = base address, the rest format/filter/wrap). Put them in 4
-consecutive SA registers (load them in the secondary update program or by
-PDS `DOUTD` into the SA bank), or keep them in memory and `ld` them into 4
-temps followed by `wdf`. One chunk for any ≤32-bit texel format.
+height-1, word 2 = base address, the rest format/filter/wrap; **capture**).
+Put them in 4 consecutive SA registers (load them in the secondary update
+program or by PDS `DOUTD` into the SA bank; **hardware**, open stack), or keep
+them in memory and `ld` them into 4 temps followed by `wdf`
+(**unconfirmed**). One chunk covers any ≤32-bit texel format (**hardware**
+for the formats the open stack samples; the chunk split itself is
+**unconfirmed**).
 
 **Dependent 2D read** `c = texture2D(s, uv)`, uv computed in r2..r3, c wanted
-as f32 in r8..r11:
+as f32 in r8..r11 (**hardware**, open stack):
 1. (MOE state default, internal registers not live; otherwise save them.)
 2. `smp2d drc0 r4, r2, sa[S]` — opcode 0x1c, h10-11 = 1, h8-9 = 0, dest r4,
    src0 r2 (2 consecutive F32 coordinates; h3/h4 for F16/C10 ones), src1 =
    first of the 4 state SAs, src2 `#0`, mask 1 (one dword for RGBA8).
-3. `wdf drc0` before the first use of r4.
+3. `wdf drc0` before the first use of r4 (the open driver puts it right after
+   the smp).
 4. Unpack r4: four `pck.f32.u8` with normalize, one per channel, each
    picking byte `swizzle[i]` of r4 into r8+i (or `pck.f16.u8` two per
    register for mediump; for lowp output to the color register, the raw
    RGBA8 can be written to the output as is with the channel order chosen
-   by the swizzle).
+   by the swizzle: **corpus**).
 
 **Cube read** `textureCube(s, d)`: as 2D with h10-11 = 2 and a 3-register
-coordinate (the direction); the state words describe the cube texture.
+coordinate (the direction); the state words describe the cube texture
+(**hardware**, open stack).
 
 **Bias read** `texture2D(s, uv, b)`: h8-9 = 1 and src2 = the bias (any F32
-source: pa, sa, r, or a hardware constant such as c52 = 1.0).
+source: pa, sa, r, or a hardware constant such as c52 = 1.0; **corpus**;
+**hardware**, open stack).
 
-**LOD read** `texture2DLod(s, uv, l)`: h8-9 = 2 and src2 = the LOD.
-Gradients (`h8-9 = 3`, what libusc emits for a sample inside non-uniform
-flow) take src2 = the first of the derivative registers.
+**LOD read** `texture2DLod(s, uv, l)`: h8-9 = 2 and src2 = the LOD
+(**corpus**). Gradients (`h8-9 = 3`, what the vendor compiler emits for a
+sample inside non-uniform flow) take src2 = the first of the derivative
+registers (**corpus**, one case).
 
-**Vertex texture fetch**: the same smp with h8-9 = 2; `texture2D` in a vertex
-shader uses LOD c48 (0.0) since there are no derivatives; libusc also sets
-skipinv. No PDS sampling in vertex programs: every read is a USSE smp.
-Result and unpack as above (c3's vertex reads come back as f16 pairs).
+**Vertex texture fetch** (**corpus**): the same smp with h8-9 = 2;
+`texture2D` in a vertex shader uses LOD c48 (0.0) since there are no
+derivatives; the vendor compiler also sets skipinv. No PDS sampling in vertex
+programs: every read is a USSE smp. Result and unpack as above (c3's vertex
+reads come back as f16 pairs).
 
 **Non-dependent fragment read** (coordinate = an untouched varying): no
 instruction. Emit an iterator entry with a sample: PDS `DOUTI` with the
 coordinate set + 1 in bits 0-4, 2-D (0x200) or projected (0x400), followed by
 the `DOUTT` with the 4 state words; the texel lands in the next PA registers
-in raw format, and only the unpack runs in the USSE. A texel format needing
-more than one chunk gets its other chunks by smp from a plainly iterated
-coordinate (template `0x20000000 / 0xe0411000`: src2 `#0`, nosched, mask 1).
-The PDS side (DOUTI/DOUTT bit layouts, `FUN_00046b00` = 0x36b00, `FUN_00047b90`
-= 0x37b90) is in `docs/PDS.md`.
+in raw format, and only the unpack runs in the USSE (**capture**, PDS.md
+tex1/tex2; **hardware**, open stack). A texel format needing more than one
+chunk gets its other chunks by smp from a plainly iterated coordinate
+(template `0x20000000 / 0xe0411000`: src2 `#0`, nosched, mask 1;
+**unconfirmed**). The PDS side (DOUTI/DOUTT bit layouts) is in `docs/PDS.md`.
 
 ### Open
 
-- Block 5 flag b2 (IR sample +0x9c) and the "usrc" pair: guessed meanings.
+- Block 5 flag b2 and the "usrc" pair: guessed meanings.
 - iflags b4-7; smp h5 and the h14-15 path; forced formats 6 and 7.
-- Which GL code writes the exported texture-state table into SA registers
-  (not traced past `FUN_00054da0`, which builds the finalized program).
-- `FUN_00066760` (1121 lines) and `FUN_0005fcc0` cases 6/7 were only skimmed.
+- How the driver writes the texture-state table into SA registers at draw
+  time: **unconfirmed**.
+- The finalizer's chunk planning and its unpack for formats 6/7:
+  **unconfirmed**.
 - Block 9 field meanings; never produced by GLSL ES.
 - Gradient operand layout (how many registers, which order): one corpus case.
 
 ## The USP container
 
-Read from libusc's writer (`tools/intern/usc2/uspbin.c`; in
-`libusc.so.1.7.862890`: header and lists `0xf28a0` = `FUN_001028a0` in the
-decompile, code-block walker `0xf42a0`, code block `0xf4090`, branch `0xf26e0`,
-labels `0xf2380`/`0xf23d0`, secondary-program writer `0xf2660`, record kind 3
-`0xf2250`) and from the driver's reader (libGLESv2 `FUN_000511d0`, block type
-1, in `$S/gles_sw.c`), which copies the header into a 0xbc-byte record (the
-*record* below, `rec+N`) that the finalizer and `FUN_00054da0` (the finalized
-program, *PROG*) read. **Confirmed**: `usp.py` sizes every list from the header
-alone and parses all 552 shaders of c1-c3; every one ends exactly on the end
-block at the declared size.
+The vendor compiler's shader binary. **Confirmed** (**capture**): `usp.py`
+sizes every list from the header alone and parses all 552 shaders of c1-c3;
+every one ends exactly on the end block at the declared size. Our writer
+`tools/usc/sgx_usp.c` builds USPs to this layout, and the vendor driver runs
+them on the CE5300 board (**hardware**, A/B: the fields the writer fills).
 
-Everything goes through u32 / u16 / raw-byte write callbacks, packed with no
-padding, so a u16 field leaves the next u32 unaligned.
+Fields are packed with no padding, so a u16 field leaves the next u32
+unaligned (**capture**).
 
 ### Header
 
-The writer's sources: *state* is libusc's compile state, *SAO* the driver's
-`psSAOffsets` parameter block (state +0x714; glCompileShader fills it, e.g.
-SAO[6] = 9 / 10 and SAO[7] = 0x77 / 0x1f6 for fragment / vertex). Tags: writer
-(field source), reader (where the loader puts it), driver (what reads it),
-corpus (values in c1-c3).
+Tags: capture (the field's values across c1-c3), corpus (what a shader
+feature changes), hardware (A/B: our writer fills the field and the vendor
+driver runs the result), unconfirmed.
 
 | off | type | field | meaning | tag |
 |---|---|---|---|---|
-| 0x00 | u32 | magic | `0x55535020` ("USP ") | writer, reader |
-| 0x04 | u32 | version | `0x23` (the reader rejects anything else) | writer, reader |
-| 0x08 | u32 | size | size of the binary **minus 12** | writer |
-| 0x0c | u32 | block type | 1: PC shader header (the reader requires it first) | writer, reader |
-| 0x10 | u32 | program type | 0 fragment, 1 vertex, 2 geometry (SAO[0]) | writer, reader |
-| 0x14 | u32 | flags A | 2 = state +0x9c b20; 4 = +0x9c b21 (the finalizer then lets the color stay in pa0 in output mode 3); **8 = feedback split**: libusc split the program at a feedback point (`psPreFeedbackBlock`, `psPreFeedbackDriverEpilogBlock`, finalize.c), PROG flag 0x40; 0x10 = state +0xa0 b1, PROG flag 0x80. Corpus: 2 most texture shaders, 8 dc_* except dc_always, else 0 | writer, reader, corpus; meaning of 2/4 unknown |
-| 0x18 | u32 | compile flags | state +0xac verbatim (the flags glslcompiler passes to libusc). b5 (0x20) = the driver will insert visibility feedback (finalize.c only builds the pre-feedback epilog block when it is set); discard shaders also get b11 (0x800); b3 with dynamically indexed uniforms (ix_n, vix_*); b29/b30 vary | writer, corpus; other bits unknown |
-| 0x1c | u32 | flags B | 1 = state +0x9c b14 (all dc_*), PROG 1; 2 = the last instruction cannot take `end` (read by `FUN_00054da0` with the block list), PROG 2; 4 = state +0x7cc ≠ 0 or +0xa0 b10, PROG 4 (sets `phas` h13 and fragment state +0x22c = 2 at draw time); 8 / 0x10 = state +0x9c b11 / b12, PROG 8 / 0x10 (0x10: the finalizer counts one more color register); 0x20 = +0x9c b4; **0x40 = no secondary update program** (state +0x70c empty), PROG 0x100. The finalizer adds 0x100 when a branch is out of range (PROG 0x800) | writer, reader, driver, corpus |
-| 0x20 | u32 | SAO[0x1a] | 1..10 (reader rejects others), always 9; PROG +4 | writer, reader; unknown |
-| 0x24 | u32 | SAO[0x1b] | always 0x2793; PROG +8 | writer; unknown |
-| 0x28 | u32 | workaround count | u32 ids after the header: 0x54c1, 0x54d1, 0x5518 (21697, 21713, 21784) when state +0xbc b0/b1/b2; none in the corpora | writer, reader; hardware-erratum (BRN) numbers is a guess |
-| 0x2c | u32 | flags C | which SA areas exist (`FUN_00054da0` turns them into PROG +0x30 bits): 1 = list B non-empty; 4 = memory area 0x34/0x60 (state +0x788); 8 = constants in SA (0x3c, 0x7e; state +0x13ec); 0x10 = indexable temporaries in memory (0x40, 0x4a; state +0x9c b2). Corpus: 8 with uniforms, 0x18 with temp arrays | writer, reader, driver, corpus |
-| 0x30 | u16 | SAO[1] | 0; PROG +0x34 (flags C 1) | writer, driver |
-| 0x32 | u16 | | 0 | writer |
-| 0x34 | u16 | SA of memory area | SAO[2] when flags C 4, else 0xffff | writer, driver |
-| 0x36 | u16 | | 0xffff | writer |
-| 0x38 | u32 | in-memory constants | state +0x110 (0 in the corpora) | writer |
-| 0x3c | u16 | constant SA base | first SA register holding constants (SAO[6]: 9 fragment, 10 vertex; `tx_dep_bias` reads its uniform from sa9). List C register numbers are relative to it | writer, driver, corpus |
-| 0x3e | u16 | constant SA count | SA registers available from 0x3c (SAO[7]: 0x77, 0x1f6); the finalizer puts texture state after the program's SAs and moves it to memory when it doesn't fit below 0x3c + 0x3e | writer, driver |
-| 0x40 | u16 | scratch SA | SA register with the address of the indexable-temporary memory (SAO[8], 1 in ix_comp/ix_tmp*), else 0xffff | writer, corpus |
-| 0x42 | u16 | SAO[0xf] | 0; rec +0x3c, PROG +0x26; the finalizer's PDS budget is `0x80 - rec+0x3c` | writer, driver; meaning unknown |
-| 0x44 | u16 | PA count | primary attribute registers the main program uses (fragment: iterated inputs, vi_4 = 16; vertex: attribute registers) | writer, driver, corpus |
-| 0x46 | u16 | temp count | temporaries (r) of the main program (0 straight-line, 5 loops, 13 fl_big); the finalizer raises it for its own code | writer, driver, corpus |
-| 0x48 | u16 | secondary temp count | temporaries of the secondary update program (mod_m: r0-r4 = 5, sign 4, div_m 1) | writer, corpus |
-| 0x4a | u32 | scratch size | bytes of indexable-temporary memory (state +200 × +0x734; ix_comp 0x1000, ix_tmparr 0x4000) | writer, corpus |
-| 0x4e | u16 | list A entries | iterated inputs (fragment only; vertex 0) | writer, reader |
-| 0x50 | u16 | list C records | constants in SA registers | writer, reader |
-| 0x52 | u32 | list B records | constants in memory | writer, reader |
-| 0x56 | u16 | list D entries | 3-u16 entries (libusc 1.7 writes 0) | writer, reader |
-| 0x58 | 2 u32 | sampler mask | one bit per sampler (≤ 16, asserted), state +0x744; set only by the vertex texture shaders (vtx_*) | writer, corpus; meaning unknown |
-| 0x60 | u32 | memory area size | state +0x788 × +200 × 4 (flags C 4) | writer |
-| 0x64 | u16 | | -(state +0x7bc × 4); 0 | writer; unknown |
-| 0x66 | u16 | color type | fragment: register type of the color result, 4-valued (1 r, 2 o, 3 pa): 3 | writer, reader, corpus |
-| 0x68 | u16 | color register | fragment: its number (pa0; pa2 in dc_gt) | writer, reader, corpus |
-| 0x6a | u16 | color format | fragment: 1 f32, 2 f16, 3 c10, 4 u8 (4 everywhere: packed BGRA8) | writer, reader, corpus |
-| 0x6c | u16 | color registers | fragment: 1 | writer, reader |
-| 0x6e / 0x70 / 0x72 | u16 | color alternatives | fragment: the r, pa and o register the finalizer may move the color to (output modes 2, 3, 1 below) | writer, driver |
-| 0x74 | u16 | start label | label at the main program's start (3, fn_call 4). The loader opens a code block there; the finalizer puts its placeholders in it | writer, reader, driver, corpus |
-| 0x76 | u16 | feedback label | label just before the discard `nop` (the pre-feedback driver epilog), 0xffff if none. PROG +0x16 = its instruction index | writer, reader, driver, corpus (dc_* 4) |
-| 0x78 | u16 | phase-1 label | label after the epilog, where the post-feedback phase starts. PROG +0x18 | writer, reader, driver, corpus (dc_* 5) |
-| 0x7a | u16 | fourth label | PROG +0x1a; 0xffff in the corpora | writer, reader; guess: the sample-rate split point (`psPreSplitBlock`) |
-| 0x7c | u16 | secondary instructions | length of the secondary update program | writer, reader |
-| 0x7e | u16 | SA constant count | SA registers from 0x3c holding constants (flags C 8; tx_dep_bias 1) | writer, driver, corpus |
-| 0x80 | u16 | input mask bits | vertex: the mask's bit count (SAO block +0x14) | writer, reader |
-| 0x82 | u16 | output mask bits | always 0x80 | writer, reader |
+| 0x00 | u32 | magic | `0x55535020` ("USP ") | capture; hardware (A/B) |
+| 0x04 | u32 | version | `0x23` (the loader rejects anything else: **unconfirmed**) | capture; hardware (A/B) |
+| 0x08 | u32 | size | size of the binary **minus 12** | capture; hardware (A/B) |
+| 0x0c | u32 | block type | 1: PC shader header, always first | capture; hardware (A/B) |
+| 0x10 | u32 | program type | 0 fragment, 1 vertex, 2 geometry (2 **unconfirmed**) | capture; hardware (A/B) |
+| 0x14 | u32 | flags A | 2: meaning unknown; 4: the finalizer then lets the color stay in pa0 in output mode 3 (**unconfirmed**); **8 = feedback split**: the compiler split the program at a feedback point; 0x10: **unconfirmed**. Corpus: 2 most texture shaders, 8 dc_* except dc_always, else 0 | capture, corpus; hardware (A/B: 2, 8); meaning of 2/4 unknown |
+| 0x18 | u32 | compile flags | the flags the GLSL compiler passes to the vendor compiler. b5 (0x20) = the driver will insert visibility feedback (**unconfirmed**); discard shaders also get b11 (0x800); b3 with dynamically indexed uniforms (ix_n, vix_*); b29/b30 vary | capture, corpus; hardware (A/B); other bits unknown |
+| 0x1c | u32 | flags B | 1 = all dc_*; 2 = the last instruction cannot take `end` (**unconfirmed**); 4 = the draw-time builder sets `phas` h13 (**unconfirmed**); 8 / 0x10: meaning **unconfirmed** (0x10: the finalizer counts one more color register); 0x20: unknown; **0x40 = no secondary update program**. The finalizer adds 0x100 when a branch is out of range (**unconfirmed**) | capture, corpus; hardware (A/B: 1, 0x40) |
+| 0x20 | u32 | (unnamed) | always 9 (1..10 accepted: **unconfirmed**) | capture; hardware (A/B); meaning unknown |
+| 0x24 | u32 | (unnamed) | always 0x2793 | capture; hardware (A/B); meaning unknown |
+| 0x28 | u32 | workaround count | u32 ids after the header; none in the corpora. The ids 0x54c1, 0x54d1, 0x5518 (21697, 21713, 21784) under compile options (**unconfirmed**) | capture; hardware-erratum (BRN) numbers is a guess |
+| 0x2c | u32 | flags C | which SA areas exist: 1 = list B non-empty (**unconfirmed**); 4 = memory area 0x34/0x60 (**unconfirmed**); 8 = constants in SA (0x3c, 0x7e); 0x10 = indexable temporaries in memory (0x40, 0x4a). Corpus: 8 with uniforms, 0x18 with temp arrays | capture, corpus; hardware (A/B: 8) |
+| 0x30 | u16 | (unnamed) | 0; tied to list B (**unconfirmed**) | capture |
+| 0x32 | u16 | | 0 | capture |
+| 0x34 | u16 | SA of memory area | 0xffff in the corpora; an SA register when flags C 4 (**unconfirmed**) | capture; hardware (A/B) |
+| 0x36 | u16 | | 0xffff | capture; hardware (A/B) |
+| 0x38 | u32 | in-memory constants | 0 in the corpora; meaning **unconfirmed** | capture |
+| 0x3c | u16 | constant SA base | first SA register holding constants (9 fragment, 10 vertex; `tx_dep_bias` reads its uniform from sa9). List C register numbers are relative to it | capture, corpus; hardware (A/B) |
+| 0x3e | u16 | constant SA count | SA registers available from 0x3c (0x77, 0x1f6); the finalizer puts texture state after the program's SAs and moves it to memory when it doesn't fit below 0x3c + 0x3e (**unconfirmed**) | capture; hardware (A/B) |
+| 0x40 | u16 | scratch SA | SA register with the address of the indexable-temporary memory (1 in ix_comp/ix_tmp*), else 0xffff | capture, corpus; hardware (A/B: 0xffff) |
+| 0x42 | u16 | (unnamed) | 0; the finalizer's PDS budget is `0x80 -` this (**unconfirmed**) | capture; meaning unknown |
+| 0x44 | u16 | PA count | primary attribute registers the main program uses (fragment: iterated inputs, vi_4 = 16; vertex: attribute registers) | capture, corpus; hardware (A/B) |
+| 0x46 | u16 | temp count | temporaries (r) of the main program (0 straight-line, 5 loops, 13 fl_big); the finalizer raises it for its own code (**unconfirmed**) | capture, corpus; hardware (A/B) |
+| 0x48 | u16 | secondary temp count | temporaries of the secondary update program (mod_m: r0-r4 = 5, sign 4, div_m 1) | capture, corpus |
+| 0x4a | u32 | scratch size | bytes of indexable-temporary memory (ix_comp 0x1000, ix_tmparr 0x4000) | capture, corpus |
+| 0x4e | u16 | list A entries | iterated inputs (fragment only; vertex 0) | capture; hardware (A/B) |
+| 0x50 | u16 | list C records | constants in SA registers | capture; hardware (A/B) |
+| 0x52 | u32 | list B records | constants in memory (0 in the corpora) | capture |
+| 0x56 | u16 | list D entries | 3-u16 entries (always 0) | capture |
+| 0x58 | 2 u32 | sampler mask | one bit per sampler; set only by the vertex texture shaders (vtx_*) | capture, corpus; meaning unknown |
+| 0x60 | u32 | memory area size | 0 in the corpora; size of the flags C 4 area (**unconfirmed**) | capture |
+| 0x64 | u16 | | 0 | capture; unknown |
+| 0x66 | u16 | color type | fragment: register type of the color result, 4-valued (1 r, 2 o, 3 pa): 3 | capture, corpus; hardware (A/B) |
+| 0x68 | u16 | color register | fragment: its number (pa0; pa2 in dc_gt) | capture, corpus; hardware (A/B) |
+| 0x6a | u16 | color format | fragment: 1 f32, 2 f16, 3 c10, 4 u8 (4 everywhere: packed BGRA8) | capture, corpus; hardware (A/B) |
+| 0x6c | u16 | color registers | fragment: 1 | capture; hardware (A/B) |
+| 0x6e / 0x70 / 0x72 | u16 | color alternatives | fragment: the r, pa and o register the finalizer may move the color to (output modes 2, 3, 1 below; **unconfirmed**). The pa one equals 0x68 in the corpora, the others are 0 | capture |
+| 0x74 | u16 | start label | label at the main program's start (3, fn_call 4). The loader opens a code block there and the finalizer puts its placeholders in it (**unconfirmed**) | capture, corpus; hardware (A/B) |
+| 0x76 | u16 | feedback label | label just before the discard `nop` (the pre-feedback driver epilog), 0xffff if none | capture, corpus (dc_* 4); hardware (A/B) |
+| 0x78 | u16 | phase-1 label | label after the epilog, where the post-feedback phase starts | capture, corpus (dc_* 5); hardware (A/B) |
+| 0x7a | u16 | fourth label | 0xffff in the corpora | capture; hardware (A/B); guess: the sample-rate split point |
+| 0x7c | u16 | secondary instructions | length of the secondary update program | capture |
+| 0x7e | u16 | SA constant count | SA registers from 0x3c holding constants (flags C 8; tx_dep_bias 1) | capture, corpus; hardware (A/B) |
+| 0x80 | u16 | input mask bits | vertex: the mask's bit count | capture; hardware (A/B) |
+| 0x82 | u16 | output mask bits | always 0x80 | capture; hardware (A/B) |
 
-The color *output mode* is the patch context's +0x2cc, set per draw
-(`FUN_0004f2a0`): 0 when blend or color-mask code will be appended (the
-color stays where it is), 1 otherwise (moved to the o register: the
-hardware capture's `mov o0, sa9`); the finalizer (`FUN_000541a0`,
-`FUN_000546f0`) adds the move. (**driver**, **hardware**)
+The color *output mode* is set per draw: 0 when blend or color-mask code
+will be appended (the color stays where it is), 1 otherwise (moved to the o
+register); the finalizer adds the move (**unconfirmed**). The move itself is
+**capture**: the vendor driver's finalized probe program ends `mov o0, sa9`.
 
 ### Lists and blocks
 
-After the header, in this order (writer and reader agree):
+After the header, in this order (**capture**):
 
 1. **Workaround ids**: header 0x28 u32s.
 2. **List A** (fragment): 12 bytes (6 u16) per iterated input, in PA
-   order: flags (4 or 0xc for a plain iteration; a sample entry has the
-   sampler in the next field; b1 from another input flag; other bits not
-   traced), sampler, iterator (texture coordinate set + 1 for varyings;
-   0xb/0xc, 0xd, 0xe, 0xf for the writer's other input kinds: the
-   draw-time builder iterates the first two from DOUTI source 0x20, the
-   color, and the rest from source 0), components, format (1 f32, 2 f16,
-   3 c10: highp, mediump, lowp in the corpus), registers (PA registers it
-   takes: 4 for a highp vec4, 2 for a mediump one). A highp `a` gives
-   `(4, 0, 1, 4, 1, 4)`. (**writer**, **driver** `FUN_00046b00`, **corpus**;
-   gl_FragCoord is iterator 14, DOUTI source 0, PDS.md "DOUTI"; gl_PointCoord
-   is set 0 of a sprite; gl_FrontFacing is not an iterated input: "Fragment
-   shaders")
+   order: flags (4 or 0xc for a plain iteration; 0 for a sample entry, 1
+   when projected (`tx_nd_proj4`), with the sampler in the next field; b1
+   meaning unknown), sampler, iterator (texture coordinate set + 1 for
+   varyings; 0xb/0xc, 0xd, 0xe, 0xf for the compiler's other input kinds),
+   components, format (1 f32, 2 f16, 3 c10: highp, mediump, lowp in the
+   corpus), registers (PA registers it takes: 4 for a highp vec4, 2 for a
+   mediump one). A highp `a` gives `(4, 0, 1, 4, 1, 4)`. (**capture**,
+   **corpus**; **hardware**, A/B.) The draw-time builder iterates 0xb and 0xc
+   from DOUTI source 0x20, the color, and the rest from source 0
+   (**unconfirmed**). gl_FragCoord is iterator 14, DOUTI source 0 (PDS.md
+   "DOUTI"); gl_PointCoord is set 0 of a sprite; gl_FrontFacing is not an
+   iterated input ("Fragment shaders").
 3. **List B** then **List C**: constant records whose first u16 is a kind.
    Kinds 1, 2 and 4 are 8 bytes; kinds 3 and 5 are 10. Kind 1 `(1, n, n, 0)`
    is one uniform component; 2 is two (F16 halves, `(n & 3) != 3`), 3 a C10
    triple, 4 a 32-bit value. List B holds constants the driver leaves in
-   memory, list C those it loads into SA registers from header 0x3c on
-   (`FUN_00054da0` adds 0x3c to list C's register field and copies both into
-   PROG). Only list C occurs in the corpora. (**writer**, **driver**)
-4. **List D**: header 0x56 entries of 3 u16 (reader checks ≤ 16, ≤ 4);
-   never written.
+   memory, list C those it loads into SA registers from header 0x3c on. Only
+   list C occurs in the corpora, with kinds 1, 2, 3 and 5. (**capture**;
+   **hardware**, A/B: kinds 1-3; kind 4 and list B **unconfirmed**)
+4. **List D**: header 0x56 entries of 3 u16 (the loader checks ≤ 16, ≤ 4:
+   **unconfirmed**); never written (**capture**).
 5. **Secondary update program**: header 0x7c instructions, 8 bytes each.
    **Confirmed** separate from the main program: the compiler moves all
    uniform-only math here (`gl_FragColor = -u` puts the negate here and
    leaves one instruction in the main program). It runs once per draw and
    its pa registers are the main program's sa (**hardware**, docs/NOTES.md).
 6. Vertex only: the input mask, `ceil(header 0x80 / 32)` u32: the primary
-   attribute registers the program reads (the PDS fetches those; corpus vo_*).
-7. **Output mask**, `ceil(header 0x82 / 32)` = 4 u32 from state +0x7fc,
-   always `ffffffff ffffffff 0 0`. libusc renumbers vertex outputs by its set
-   bits (`FUN_0007d380`: output n → popcount of the bits below n), so with all
-   64 bits set the numbering is the identity. Its meaning beyond that is a
-   **guess** (the output registers that exist).
+   attribute registers the program reads (the PDS fetches those; corpus
+   vo_*; **hardware**, A/B).
+7. **Output mask**, `ceil(header 0x82 / 32)` = 4 u32, always
+   `ffffffff ffffffff 0 0` (**capture**; **hardware**, A/B). The vendor
+   compiler numbers vertex outputs by its set bits (output n → popcount of
+   the bits below n; **unconfirmed**), so with all 64 bits set the numbering
+   is the identity. Its meaning beyond that is a **guess** (the output
+   registers that exist).
 8. **Block stream**, each block a u32 type and a body, until type 7:
 
 | type | body | meaning |
 |---|---|---|
 | 2 | u16 n, u16 flags, 4 u16 MOE state, 4 u16 MOE base offsets, n u16 per-instruction flags, n × 8-byte instructions | straight-line code. flags = format control at block entry (bit 0 EFO F16, bit 1 C10; 2 unless the code uses `setfc`; **corpus**). MOE state per operand: 0x8000 \| increment or 0x4000 \| swizzle |
-| 3 | 8-byte instruction, u16 label | branch (the target is patched at finalize) |
+| 3 | 8-byte instruction, u16 label | branch (the offset field is 0 in every corpus branch; the target is patched at finalize) |
 | 4 | u16 label | label; header 0x74-0x7a name the ones the driver patches at |
-| 5 | 56 bytes | texture sample: non-dependent (iterated coordinate) or dependent (libusc's encoded smp as a template); see the sample-block section |
+| 5 | 56 bytes | texture sample: non-dependent (iterated coordinate) or dependent (the vendor compiler's encoded smp as a template); see the sample-block section |
 | 6 | 74 bytes | sample unpack: texel data to the shader's registers and formats |
 | 9 | 82 bytes | texture write (not produced by GLSL ES) |
 | 7 | none | end |
 
-The GLES driver's USP finalizer generates the sampling code from the sample
-blocks at link time, for dependent and non-dependent reads alike, which is
-why no `smp` appears in USP code.
+No `smp` appears in USP code (**capture**): the vendor driver's finalizer
+generates the sampling code from the sample blocks at link time, for
+dependent and non-dependent reads alike.
 
 Each instruction is 64 bits, stored as (low word, high word). The disassembler
 names the bits l0..l31 and h0..h31.
 
 ## Phases, visibility feedback and discard
 
-A USP fragment program is not runnable as it stands: the finalizer and the
-draw-time builder `FUN_00046b00` (libGLESv2 0x36b00, also the DOUTI builder
-of docs/PDS.md) wrap it in phase instructions, and for `discard` add the
-visibility feedback. Read from the decompile and, where Ghidra merged
-variables, from the x86 (`objdump -d --start-address=0x36b00`). Tags:
-**driver** (read from the code), **hardware** (the probe capture in
-docs/NOTES.md), **guess**.
+A USP fragment program is not runnable as it stands: the vendor driver wraps
+it in phase instructions when it finalizes the program and at draw time (the
+same step builds the DOUTI words of docs/PDS.md), and for `discard` adds the
+visibility feedback. Tags: **capture** (the vendor driver's finalized
+programs in GPU memory: the probe's in docs/NOTES.md, and STATE.md "The DDK's
+fragment programs for a flat color and one sample"), **hardware** (the
+discard draws on the CE5300 board below, and the open stack's discard programs, which
+use the same words and pass dEQP-GLES2 on the CE5300 board), **oracle**,
+**unconfirmed**, **guess**.
 
 ### What the finalizer prepares
 
-- The loader opens a code block at the start label (header 0x74), and
-  `FUN_00054b80` puts *k* placeholder instructions (driver opcode 0x60) into
-  it, k = patch context +0x2d0 = 1, or 2 when the draw needs feedback
-  (`FUN_0004f2b0`, set from the draw state below). PROG +0x14 = the index of
-  the first placeholder. (**driver**)
-- PROG +0x16 = the instruction index at the feedback label (0x76): the USP's
-  discard `nop`. PROG +0x18 = the index at the phase-1 label (0x78).
-  (**driver**)
-- PROG byte 0 flags: 1, 4, 8, 0x10 = header flags B 1, 4, 8, 0x10; 2 = the
-  program's last instruction cannot carry `end` (flags B 2, or the last
-  instruction's opcode, `FUN_000593e0`); 0x40 / 0x80 = flags A 8 / 0x10;
-  0x100 = flags B 0x40; 0x800 = branch fix-up; 0x20, 0x200, 0x400 come from
-  finalizer state that was not traced. The draw-time builder reads 2, 4 and
-  0x40 (0x40 only to add one more `phas` when blend code gets a phase of its
-  own in a feedback program). PROG +0x78 = the color register after the
-  finalizer's move. (**driver**)
+- The program starts at the USP header's start label (0x74). The driver
+  puts one phase instruction there, or two (`phas` and `pcoeff`) when the
+  draw needs feedback (one: **capture**; two: **hardware**, the open
+  stack's discard programs).
+- The feedback label (header 0x76) is at the USP's discard `nop`; the phase-1
+  label (header 0x78) is where phase 1 starts (**capture**, the dc_* corpus
+  binaries).
+- USP header flags B 2 says the program's last instruction cannot carry
+  `end`; the driver then appends `nop [end]`. Flags B 4 sets `phas` h13.
+  In a feedback program (flags A 8) whose blend code gets a phase of its
+  own, the driver adds one more `phas`. (**unconfirmed**)
+- The color register the driver's code uses (atst8's c below) is where the
+  color is after the finalizer's move (the probe's `mov o0, sa9`:
+  **capture**).
 
-### The draw state (ctx +0x7a0)
+### The draw state
 
-`FUN_00049a00` sets ctx +0x7a0 together with ISPA (STATE.md: pass type in
-b25-27) when the linked fragment shader's compiled-object flags (+0x1c,
-glslcompiler's result +4) have b3, *the shader discards* (glslcompiler sets
-b3 in `FUN_00019690` when the parser met `discard`, statement 0x23 in a
-fragment shader, `FUN_0004c460`):
+The vendor driver picks the ISPA pass type (STATE.md: b25-27) from whether
+the linked fragment shader contains `discard`, and from the primitive:
 
-| ctx +0x7a0 | when | ISPA pass type |
-|---|---|---|
-| 0 | the shader doesn't discard | 0 opaque / 1 translucent (blend) |
-| 1 | discards, triangles (ctx +0xc74 = the GL primitive 4-6) | 4 punch-through, or 2 when blending |
-| 9 | discards, points or lines (primitive 0-3, or 7) | 5 |
+| when | ISPA pass type |
+|---|---|
+| the shader doesn't discard | 0 opaque / 1 translucent (blend) |
+| discards, triangles | 4 punch-through, or 2 when blending |
+| discards, points or lines | 5 |
 
-(**driver**; the pass-type names are STATE.md's.)
+(No discard: **capture**, STATE.md's `01d00200` and `03d00200`. Triangles:
+**hardware**, the open stack's discard draws use 4 / 2, and STATE.md "Alpha
+test (ES1)" finds 4 works like the DDK's 1. Points and lines:
+**unconfirmed**. The pass-type names are STATE.md's.)
 
 ### What the draw-time builder emits
 
@@ -2276,67 +2098,80 @@ Instruction words as written (low high), decoded with `dis.py -x`:
 | words | decodes as | role |
 |---|---|---|
 | `00000000 fa440700` | `phas.i #0, #0 [wait=7]` | single phase: no next phase |
-| `pc>>3 fa440800 \| t` | `phas.i #pc, #t` | phase 0 → phase 1 at `pc` (byte address relative to the code heap, /8); t = (temps + 3) / 4 in h0-7; h13 = PROG flag 4; h11 (`rate=1`) when the blend code runs in a phase of its own |
+| `pc>>3 fa440800 \| t` | `phas.i #pc, #t` | phase 0 → phase 1 at `pc` (byte address relative to the task's USE code base, /8: the DOUTU base's window, not the heap); t = (temps + 3) / 4 in h0-7; h13 = header flags B 4; h11 (`rate=1`) when the blend code runs in a phase of its own |
 | `00000000 fa4c0700` | `phas.i #0, #0 [end wait=7]` | last phase ends here |
-| `00000000 f8040140` | `nop [end]` | appended when PROG flag 2 says the last instruction can't take `end` |
+| `00000000 f8040140` | `nop [end]` | appended when header flags B 2 says the last instruction can't take `end` |
 | `n<<14 \| (n+1)<<7 \| b0000004 f8300004` | `pcoeff pa<n>, ...` | n = PA registers taken by the program's iterated inputs: the first register after them |
-| `c<<21 \| c<<14 \| f0000184 f9340406` | `atst8 pa<c>, p0.nw, pa<c>, ... [end]` with h10 set | c = PROG +0x78, the color register |
-| `a0000000 28a10002` | `mov pa0, pa0 [skipinv rcnt]` | a no-op in pcoeff's place (state 9) |
-| `(n+2)<<14 \| f0000184 fb340404` | `(p1) depthf pa<n+2>, ... [end]` | built for state 9, see below |
+| `c<<21 \| c<<14 \| f0000184 f9340406` | `atst8 pa<c>, p0.nw, pa<c>, ... [end]` with h10 set | c = the color register |
+| `a0000000 28a10002` | `mov pa0, pa0 [skipinv rcnt]` | a no-op in pcoeff's place (points and lines) |
+| `(n+2)<<14 \| f0000184 fb340404` | `(p1) depthf pa<n+2>, ... [end]` | built for points and lines, see below |
 
-Without feedback (ctx +0x7a0 bit 0 clear):
+(`phas.i #0, #0 [wait=7]`: **capture**. The phase-0 `phas`, `pcoeff`,
+`atst8` and closing `phas`: **hardware**, the open stack's discard
+programs, except that their phase-0 `phas` is `phas.i #pc, #t [wait=1]`
+(hi `fa440100 | t`, h11 clear).
+`mov pa0, pa0` and `depthf`: **hardware**, the `depthf_patch.py` draws
+below. `nop [end]` as an append, and the h13 / h11 conditions:
+**unconfirmed**.)
+
+Without feedback:
 - placeholder 0 = `phas.i #0, #0 [wait=7]`, then the program, with `end`
-  set (h18) on its last instruction, or `nop [end]` appended (PROG flag 2).
-  **hardware**: the probe's finalized main program is
+  set (h18) on its last instruction, or `nop [end]` appended (header flags
+  B 2). **capture**: the probe's finalized main program is
   `phas.i #0,#0 [wait=7]`, `mov o0, sa9 [end]`, and its secondary program
   starts with the same `phas`.
-- Blend and color-mask code (`FUN_000457d0`; the mask is the
+- Blend and color-mask code (the mask is the
   `sopwm ... 0x90b00601 | mask<<11` of STATE.md) is appended after the
-  program; with ctx +0x1280 it gets a phase of its own (a `phas` to it, then
-  `phas.i #0,#0`).
+  program (**capture**, STATE.md "Blending and the color mask are shader
+  code"). In some draws it gets a phase of its own (a `phas` to it, then
+  `phas.i #0,#0`) (**unconfirmed**; which draws is not known).
 
-With feedback, ctx +0x7a0 = 1 (discard on triangles):
+With feedback (discard on triangles):
 
 ```
-[+0x14]   phas.i #phase1, #temps4             (phase 0 runs up to the feedback)
-[+0x14+1] pcoeff pa<n>, ...                   (PDS-iterated value, see below)
-          ... the shader up to the discard test (writes p1 = keep) ...
-[+0x16]   atst8 pa<c>, p0.nw, pa<c>, ... [end] (replaces the USP's nop; h10 set)
-[+0x18]   phase 1: the rest of the shader (color packing)
-          phas.i #0, #0 [end wait=7]          (appended after the program)
+[start]    phas.i #phase1, #temps4             (phase 0 runs up to the feedback)
+[start+1]  pcoeff pa<n>, ...                   (PDS-iterated value, see below)
+           ... the shader up to the discard test (writes p1 = keep) ...
+[feedback] atst8 pa<c>, p0.nw, pa<c>, ... [end] (replaces the USP's nop; h10 set)
+[phase 1]  the rest of the shader (color packing)
+           phas.i #0, #0 [end wait=7]          (appended after the program)
 ```
 
 - The PDS program gets one more plain iteration after the shader's own:
-  DOUTI iterate half `0x7811000` (source 0x22, 3 components, 0x6000000),
-  or `0x7c11000` (4 components) with ctx +0x1280; it fills pa<n>..: that is
-  what `pcoeff` reads (**driver**; that source 0x22 is the triangle's depth
-  plane, so `pcoeff` = hand the ISP its plane coefficients, is a **guess**
-  from the name).
+  DOUTI iterate half `0x7811000` (source 0x22, 3 components, 0x6000000);
+  it fills pa<n>..: that is what `pcoeff` reads (**hardware**: the open
+  stack's discard programs iterate source 0x22, 3 components, the same
+  way). In the draws whose blend code gets a phase of its own it is
+  `0x7c11000` (4 components) (**unconfirmed**). That source 0x22 is the triangle's depth plane, so
+  `pcoeff` = hand the ISP its plane coefficients, is a **guess** from the
+  name.
 - **Which predicate kills**: atst8's h9-10, a PRED2 predicate (0 none,
-  1 p0, 2 p1, 3 !p0, as in depthf). libusc's encoder never sets it
-  (`{?h10}` in dis.py); the driver's word has 2 = p1, the keep predicate the
-  USP's `test` computed. A pixel whose atst8 predicate is false is killed.
-  **hardware** (CE5300 board, `tools/isa/discard/`, the left half of a triangle kept
-  by `if (q.x > 0.0) discard`): the stock driver keeps exactly the left
-  half (21600 of 43200 pixels); with h9-10 patched to 0 nothing is killed;
-  with p0 / !p0 about 83 % / 19 % survive, scattered over both halves (p0
-  is whatever the shader left there; the two are close to complementary).
-- atst8's other operands (src1 = 3, src2 = 4 with bank bits l28-31 = 0xf)
-  are fixed, and the color register is both its source and destination.
-  The color's alpha does not matter: the same draw with alpha 0 keeps the
-  same 21600 pixels (**hardware**), so whatever alpha test atst8 can do is
-  off in GL's ISP state. Operand meanings not traced.
+  1 p0, 2 p1, 3 !p0, as in depthf). The vendor assembler never sets it
+  (**oracle**; `{?h10}` in dis.py); the driver's word has 2 = p1, the keep
+  predicate the USP's `test` computed. A pixel whose atst8 predicate is
+  false is killed. **hardware** (`tools/isa/discard/`, the left half
+  of a triangle kept by `if (q.x > 0.0) discard`): the stock driver keeps
+  exactly the left half (21600 of 43200 pixels); with a driver patched to
+  put 0 in h9-10 nothing is killed; with p0 / !p0 about 83 % / 19 %
+  survive, scattered over both halves (p0 is whatever the shader left
+  there; the two are close to complementary).
+- atst8's other operands (src1 = sa3, src2 = sa4 with bank bits l28-31 =
+  0xf) are fixed, and the color register is both its source and
+  destination. sa3 / sa4 hold the depth and alpha-test words of STATE.md
+  "Alpha test (ES1)" (**capture**). The color's alpha does not matter: the
+  same draw with alpha 0 keeps the same 21600 pixels (**hardware**), so
+  whatever alpha test atst8 can do is off in GL's ISP state. The other
+  operand meanings are not known.
 
-With ctx +0x7a0 = 9 (discard on points/lines): a second extra iteration
-(`0x7800000`, source 0, 3 components) is added, pcoeff's slot gets
-`mov pa0, pa0`, and the builder computes `(p1) depthf pa<n+2>, ... [end]`
-(hi `fb340404`, predicated on p1). **But the x86 stores those two words into
-its own stack slots (`0xb8(%esp)`, `0xbc(%esp)` at 0x37304-0x3731e), not into
-the program**: the discard `nop` stays, and the slot at 0xbc is the temporary
-count returned by the blend builder, so the program's temp count becomes
-0xfb340404 (**driver**).
+For discard on points or lines, the stock driver adds a second extra
+iteration (`0x7800000`, source 0, 3 components), puts `mov pa0, pa0` in
+pcoeff's slot, and builds `(p1) depthf pa<n+2>, ... [end]` (hi `fb340404`,
+predicated on p1) for the discard nop's place, but does not store it in the
+program: the discard `nop` stays, and the program's temporary count becomes
+0xfb340404 (**unconfirmed**; the hardware result below, points ignoring the
+discard, agrees with it).
 
-On hardware (CE5300 board, 2026-10-28; `tools/isa/discard/results.txt`):
+On hardware (2026-10-28; `tools/isa/discard/results.txt`):
 
 | draw | stock DDK 1.7 | `depthf_patch.py` | `pt_patch.py` |
 |---|---|---|---|
@@ -2346,13 +2181,13 @@ On hardware (CE5300 board, 2026-10-28; `tools/isa/discard/results.txt`):
 | 3 lines, discard never taken (`q.x > 5.0`) | frame broken | | same |
 | line strip, or a pbuffer | | | frame broken |
 
-- `depthf_patch.py` rewrites those 33 bytes to store the depthf through the
-  slot pointer (and leaves the temp count alone): points then discard
-  correctly in the depth-only pass (type 5) with `(p1) depthf`. So depthf's
-  predicate kills like atst8's (**hardware**).
-- `pt_patch.py` instead sends points and lines down the triangle path
-  (0x39d55 in `FUN_00049a00`: pass type 4/2, atst8): points discard
-  correctly that way too.
+- `depthf_patch.py` patches the stock driver to write that depthf into the
+  program (and leave the temp count alone): points then discard correctly
+  in the depth-only pass (type 5) with `(p1) depthf`. So depthf's predicate
+  kills like atst8's (**hardware**).
+- `pt_patch.py` instead patches it to send points and lines down the
+  triangle path (pass type 4/2, atst8): points discard correctly that way
+  too.
 - **Lines with any discarding shader render a broken frame** on every
   path, also when the discard is never taken, so it is the feedback
   program with lines (pcoeff's plane-coefficient iteration, or the ISP's
@@ -2364,24 +2199,26 @@ On hardware (CE5300 board, 2026-10-28; `tools/isa/discard/results.txt`):
 Nothing is "killed" in the USSE: a discarding pixel shader is a two-phase
 program whose phase 0 ends in a visibility test, and the ISP decides.
 
-1. Compute the keep condition into a predicate (libusc uses p1).
+1. Compute the keep condition into a predicate (the vendor compiler uses
+   p1: corpus).
 2. Start the program with `phas.i #<phase-1 address>, #<temps/4>` and
    `pcoeff pa<n>, ...` (with the PDS iterating the extra 3-component
    source-0x22 input into pa<n>.. after the varyings).
 3. Run everything the feedback depends on in phase 0, then
-   `atst8 pa<c>, p0.nw, pa<c>, #3?, #4? [end]` with h9-10 = 2 (p1):
-   copy the driver's words `f0000184 | c<<21 | c<<14`, `f9340406`.
+   `atst8 pa<c>, p0.nw, pa<c>, sa3, sa4 [end]` with h9-10 = 2 (p1):
+   the words `f0000184 | c<<21 | c<<14`, `f9340406` (the vendor driver's,
+   and the open stack's: hardware).
 4. Phase 1 (the color output) follows, ending with
    `phas.i #0, #0 [end wait=7]`.
 5. ISPA pass type 4 (2 when blending) for triangles, and also for points
    (hardware). Points also work with pass type 5 and
-   `(p1) depthf pa<n+2>, sa3, sa4 [end]` in atst8's place (the driver's
-   intent, after `depthf_patch.py`). Lines with a feedback program break
-   the frame either way (hardware): don't discard on lines.
+   `(p1) depthf pa<n+2>, sa3, sa4 [end]` in atst8's place (a patched
+   vendor driver, `depthf_patch.py`: hardware). Lines with a feedback
+   program break the frame either way (hardware): don't discard on lines.
 
 Open: the atst8 / depthf / pcoeff operand meanings, the 0x22 iterator
 source, why lines break, and whether an unconditional discard
-(dc_always: flags A 8 clear, so PROG 0x40 clear) behaves differently.
+(dc_always: USP header flags A 8 clear) behaves differently.
 
 ## What a compiler needs
 
@@ -2392,7 +2229,8 @@ backed above; this section only collects it.
 
 - **Files**: see "Registers". Allocatable temporaries are r0-r123: r124-r127
   are the internal registers i0-i3 (efo, fddp, fdual and the sample code the
-  driver generates use them; libusc saves live ones around samples).
+  driver generates use them; the vendor compiler saves live ones around
+  samples: corpus).
 - **Slots**: a destination takes r/o/pa/indexed, or with its extension bit
   sa/g/idx/i (some forms have no extension bit: fddp, fdual, efo). In the
   float classes src0 is r or pa only; constants (c, g), immediates and
@@ -2433,12 +2271,13 @@ backed above; this section only collects it.
   index (clamped to the block with `fminmax`) and adds it to the base:
   `pck.s16.f32 t, x`, `imae.sgn a, t, #4, sa<base> [t2=u32]`, then `ld.a.d
   rN, a, #i` per component, so only immediate offsets are used. The DDK's equivalent is list B (USP header 0x2c flag
-  1, 0x38, 0x52); none of the corpora use it.
+  1, 0x38, 0x52; **unconfirmed**); none of the corpora use it.
 - **Constants**: the hardware constant table covers 0, 1, powers of two,
   1/2^n, e, π fractions, √2, F16 (1, 1) (c45-c47), 0xffffffff (c56-c59)
   (hardware); anything else is a uniform in sa or a `limm` (hardware: any
   32-bit value into r). Negation and abs are free on most float sources (not
-  on src0's negate: fold it into another source as libusc does).
+  on src0's negate: fold it into another source as the vendor compiler
+  does, corpus).
 - **Scalar functions** (hardware, hwt_p3): frcp/frsq/fsqrt/flog2/fexp2 are
   correctly rounded or within an ulp on the values tried (1/3 =
   0x3eaaaaab, rsq(2) = 0x3f3504f3); 1/±0 = ±inf, rsq(0) = inf, log2(0) =
@@ -2467,9 +2306,11 @@ backed above; this section only collects it.
 - **Loops**: do-while with a float counter (`fmad r, r, c52, c52` = +1) and
   `test.fsub.lt` against the bound; a guard branch when the trip count may
   be zero; `break` = predicated forward branch; `continue` = predication.
-  libusc unrolls nothing and uses no hardware loop counter.
-- **if/else**: libusc if-converts (both sides, predicated `mov`), even for
-  large bodies; branches only around texture reads.
+  The vendor compiler unrolls nothing and uses no hardware loop counter
+  (corpus).
+- **if/else**: the vendor compiler if-converts (both sides, predicated
+  `mov`), even for large bodies; branches only around texture reads
+  (corpus).
 - **discard**: a `test` writes the keep predicate (p1, the inverted
   condition); the USP holds a `nop` at the feedback label. At draw time the
   program becomes two phases: `phas` + `pcoeff` at the start, the nop
@@ -2478,14 +2319,49 @@ backed above; this section only collects it.
   Not on lines: any feedback program breaks a lines draw (hardware). See "Phases, visibility feedback and
   discard" for the words and what is a guess.
 - **gl_FragDepth** (not in GLES 2, so no corpus): the DDK's points path
-  feeds the ISP a depth with `(p1) depthf pa<z>, sa3, sa4 [end]` in the
-  feedback nop's place, pa<z> the iterated z (above). Our compiler leaves
+  builds `(p1) depthf pa<z>, sa3, sa4 [end]` for the feedback nop's place,
+  pa<z> the iterated z (above; with it in place, points discard on
+  hardware). Our compiler leaves
   gl_FragDepth, clamped to [0, 1], in a pa register at the feedback nop for
-  a `depthf` there, pass type 5. **Guess**: that depthf's src0 is the depth
-  written; sa3/sa4 not traced. Needs hardware.
+  a `depthf` there, pass type 5. **depthf's src0 is the depth written**
+  (**hardware**, test H10, 2026-11-12, below); what sa3/sa4 mean beyond
+  carrying the depth test words is not traced.
+  - The words for it: lo `0xf0000184 | depth_pa << 14` (src0 = pa<depth_pa>
+    in l14-20, src1/src2 = sa3/sa4 as in atst8), hi `0xfb340404` for
+    `(p1) depthf` (h9-10 = 2). In a program without a discard the compiler
+    computes no p1, so `(p1)` would test whatever p1 holds: such a program
+    uses h9-10 = 0, hi `0xfb340004`, and every pixel is kept (**hardware**,
+    H10).
+  - The program around it (the open driver's, `upload_fs` in the winsys):
+    phase 0 = `phas.i #phase1, #t [wait=1]`, then `pcoeff` when the program
+    also discards, otherwise `mov pa0, pa0 [skipinv rcnt]` in its place (as
+    the vendor driver's points path); the shader up to the feedback nop;
+    `depthf` [end] there; phase 1 = the colour out and `phas.i #0, #0 [end]`.
+    The draw's ISPA pass type is 5 for triangles too; sa3/sa4 hold the same
+    depth words as a discard's atst8 (STATE.md "Alpha test (ES1)").
+  - **H10** (a CE5300 board, `mesa/tests/sgx_fragdepth.c`): a 128×64 FBO
+    with 24-bit depth; a full quad at depth 0.5 writes gl_FragDepth =
+    x / 128 (from gl_FragCoord, or from a varying), depth test ALWAYS,
+    green; a second quad at 0.5 with LESS, red. Read back colour and depth
+    (ZLS). Without depthf every pixel stores 0.5 and the red quad covers
+    nothing. With it all three cases are exact, 8064 of 8064 pixels each
+    (the middle two columns left out), worst depth error 0: the ramp left of
+    the middle, 0.5 under the red right half; with a discard of the top 16
+    rows (`(p1) depthf`), those rows keep the clear and then take the red
+    quad. piglit's `glsl-1.10-fragdepth`, `glsl-bug-22603`, `drawpix-z`,
+    `early-z` and the `depthstencil-default_fb-copypixels` and
+    `-drawpixels-float-and-ushort` tests at 1, 2 and 4 samples all pass
+    (they failed without it); no GPU resets.
+  - The clamp runs before the colour is written: the colour may be packed
+    over an input the depth reads (pa0), so depth_pa is past every register
+    the colour can take, `max(inputs, 1) + 1`.
+  - The test: piglit `glsl-1.10-fragdepth` and `glsl-bug-22603` (a shader
+    depth against a depth-tested second draw, read back as colour); the
+    `*-copypixels` / `*-drawpixels` depth tests also need depth loaded and
+    stored between renders (ZLS), so they test both.
 - **Derivatives** (corpus c3 dsx, dsy, fwidth): `fdsx d, x, x` / `fdsy d,
-  x, x`, one per component, never repeated. libusc multiplies dFdy's
-  operand by a driver constant first (the target's y direction; Mesa's st
+  x, x`, one per component, never repeated. The vendor compiler multiplies
+  dFdy's operand by a driver constant first (the target's y direction; Mesa's st
   does the same). What feeds a derivative runs with skipinv clear (that
   fmad, and tx_dep's coordinate math, where the LOD needs the neighbors):
   a 2x2 neighbor outside the primitive is an invalid instance, and a
@@ -2493,11 +2369,81 @@ backed above; this section only collects it.
   keeps skipinv. `d` must not be a register `x` uses: the instances of a
   quad don't all read before any writes, so a neighbor can read the
   derivative instead of `x` (the DDK never overlaps them). **Hardware**
-  (CE5300 board piglit): with skipinv on everything, dFdx of an iterated value was
+  (piglit): with skipinv on everything, dFdx of an iterated value was
   right while dFdy of an `fmul` and either derivative of an `abs` were
   wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
   every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
-  r4`), while each that wrote another register was right.
+  r4`), while each that wrote another register was right. The allocator now
+  makes a derivative's destination live from its own instruction's start
+  (as a repeat's is), so `d` is never one of its sources. `glsl-derivs` and
+  `glsl-fwidth` pass on hardware (2026-11-10), and so do `glsl-derivs-abs`,
+  `-abs-sign`, `-sign`, `-swizzle` and `-varyings` (2026-11-11, a CE5300 board).
+  `fs-dfdx-accuracy` and `fs-dfdy-accuracy` give Warn: they expect
+  `dFdx(x * y)` of gl_FragCoord to be exactly `y` under the NICEST hint,
+  which only per-pixel differencing gives. That fits fdsx/fdsy differencing
+  per 2x2 quad (coarse; **guess**, not yet read back per pixel), which GL
+  allows. No fine form is known.
+- **Logic ops** (GL 1.1 `glLogicOp`; piglit `gl-1.0-logicop`, 16 subtests,
+  `gl-1.1-xor`, `gl-1.1-xor-copypixels`): there is no fixed-function logic
+  op, as there is no blender. Like blending they are code after the colour,
+  in a translucent pass where o0 starts as the tile's colour (STATE.md
+  "Blending and the color mask are shader code"), on the packed BGRA8 word.
+  The bitwise class has and, or and xor with src2 optionally inverted
+  (`.inv` on the mnemonic; src1 takes no modifier), each **hardware**
+  (hwt_p7 `bit_*`, `and.inv #1`), and an immediate src2 is inverted too.
+  With S = pa<c> (the colour) and D = o0:
+
+  | GL | code |
+  |---|---|
+  | CLEAR | `and o0, o0, #0` |
+  | AND | `and o0, pa<c>, o0` |
+  | AND_REVERSE (S & ~D) | `and.inv o0, pa<c>, o0` |
+  | COPY | nothing (the plain colour write) |
+  | AND_INVERTED (~S & D) | `and.inv o0, o0, pa<c>` |
+  | NOOP | `mov o0, o0` (or write nothing: colour mask 0) |
+  | XOR | `xor o0, pa<c>, o0` |
+  | OR | `or o0, pa<c>, o0` |
+  | NOR | `or r, pa<c>, o0`; `xor.inv o0, r, #0` |
+  | EQUIV (~(S ^ D)) | `xor.inv o0, pa<c>, o0` |
+  | INVERT | `xor.inv o0, o0, #0` |
+  | OR_REVERSE (S \| ~D) | `or.inv o0, pa<c>, o0` |
+  | COPY_INVERTED | `xor.inv o0, pa<c>, #0` |
+  | OR_INVERTED (~S \| D) | `or.inv o0, o0, pa<c>` |
+  | NAND | `and r, pa<c>, o0`; `xor.inv o0, r, #0` |
+  | SET | `or.inv o0, o0, #0` |
+
+  Every row assembles and round-trips (`tools/isa/asm.py`; with c = 0,
+  XOR is `58041001 90000000`). The last instruction carries `end`. The ops:
+  **hardware**; that a bitwise
+  op may write o0 (its dst slot takes o: oracle) and read the tile there in
+  a translucent pass as sop2 does: **guess**, to be confirmed by a DDK ES1
+  capture with `glLogicOp` (`tools/probe/probe1.c` PROBE_LOGICOP) or by the
+  piglit tests on the open driver. With a colour mask the logic op goes
+  first, then the masked move. Only for unsigned normalized colour buffers
+  (GL ignores the logic op for float ones).
+- **User clip planes** are clipped by the TA (STATE.md "Clip planes, shading,
+  polygon and line state": capture `cp1`, `cp2`, `cp6`). For plane n the DDK's
+  ES1 vertex program ends with `fdpc o(7+n), cp<n>, pa0, c52 [rpt=2 inc0
+  inc1]` (words `1081d001 90e04034` for n = 0): pa0 holds the distance
+  (computed by efos from the eye-space position and the planes, which arrive
+  as constants), pa1 = 0, and c52-c53 are 1.0, so the dot product is the
+  distance. fdpc writes only its last iteration's destination, as fdp does
+  (hardware, hwt_p7), so plane n's result is o(8+n), and output select's
+  dword count, 8 + n, agrees. Output select also gets b0-5 = the planes.
+  - The compiler: st keeps lowering the planes and gl_ClipVertex to clip
+    distances in the vertex shader (`nir_lower_clip_vs`, driver
+    `clip_planes` 0: planes 0..n-1, a disabled one below the last 0.0), and
+    each distance becomes `fdpc o<clip_o + p - 1>, cp<p>, (d, 0), c52
+    [rpt=2]` after every other output (`sgx_shader.n_clip`, `clip_o`). The
+    driver sets output select b0-5 to planes 0..n_clip-1 and counts n_clip
+    more dwords. Lines clip too: no discard.
+  - **Guesses** until a hardware draw: that a plane enabled with a 0.0
+    distance keeps everything (a point on the plane is inside); that the
+    result registers follow the enabled bits in order.
+  - `sgx_lower_clip_fs` (the per-pixel fallback) stays for a core without
+    the TA path.
+- **Polygon stipple**: `nir_lower_pstipple_fs` (a 32x32 texture read at
+  gl_FragCoord and a discard): nothing new for the compiler.
 - **Phases**: every finalized fragment program (main and secondary) starts
   with a `phas.i` (`phas.i #0, #0 [wait=7]` for a one-phase program;
   hardware) and ends with `end` on its last instruction or an appended
@@ -2522,7 +2468,7 @@ backed above; this section only collects it.
 ### Fragment shaders
 
 - **gl_FrontFacing** comes from special register g16: bit 0 is set for a
-  primitive that is clockwise in memory (**capture**, CE5310 board, one draw shape,
+  primitive that is clockwise in memory (**capture**, one draw shape,
   y-flipped window; other bits not examined). The DDK reads it with
   `test.and.ne p0, g16, #1` and a per-draw constant in sa9 (only 0 captured;
   nonzero presumably inverts). Our compiler: `xor r, g16, sa[front_sa]; and r,
@@ -2552,42 +2498,40 @@ backed above; this section only collects it.
 - **The output buffer** (what the TA reads per vertex) is: the position,
   o0-o3; then the enabled *texture coordinate sets* 0..9 in set order, each
   taking its size (1-4 dwords) with no gaps; then the point size, one
-  dword, when the shader writes it. The driver builds the TA words from the
-  vertex shader's compiled-object fields (glCompileShader copies them from
-  glslcompiler's UniFlex program +0x34..+0x84): +0x20 bits 3-12 = set 0-9
-  enabled, b13 (0x2000) = point size; +0x24.. = size per set; +0x4c.. =
-  precision per set. Output select = `dwords << 16 | 0x3000`, `| 0x100` with
-  point size (dwords = 4 + sizes + 1); TSP word 0 = 3 bits per set (1, 2, 3,
-  or 5 for 4 components); TSP word 1 = the sets with precision value < 3
-  (libGLESv2 at 0x2f4b0, `+0x248/+0x24c/+0x250`; docs/STATE.md). The USP
-  has none of this: its header has no output count. (**driver**)
-- **Varyings to sets**: glslcompiler (`FUN_00029ff0`, 10 sets × 4
-  components, "Failed to allocate varyings") takes the active varyings by
-  type, mat4, mat2, vec4, mat3, vec3, vec2, float (table 0x464c0), within
-  a type the largest first (by the symbol's +0x14, the array size: guess),
-  and gives each row a new set while sets remain; past 10 it
-  packs rows into free components of sets with the same precision
-  (our `sgx_pack_varyings` does this without the precision rule: each
-  stage is placed on its own, and their precisions may differ).
-  (**driver**; corpus: vo_vall's o0, o1, o2 (vec2), o3 (float) land at o4,
-  o8, o12, o14 = sets 0-3 of sizes 4, 4, 2, 1.) Unwritten varyings get no set.
-- **gl_PointSize**: when a vertex shader writes it, glslcompiler reserves
-  set 0 *before* allocating varyings: enabled, 2 components, precision 1
-  (`FUN_00029ff0`: `+0x218 = 1` first free set, component bits 0-1 used).
-  The shader never writes it, so o4-o5 are a hole and varyings start at
-  o6, with the point size last (vo_ps: o6; vo_psv: vec4 at o6-o9, size at
-  o10) (**driver**, **corpus**). Guess: set 0 is where the hardware puts
-  the point-sprite coordinate (gl_PointCoord) for points. The size is
-  clamped first: glslcompiler applies ICode op 0x24 with the constant 511.0
-  to it (`FUN_0003c5a0`; a min, guess) and libusc emits
-  `fminmax oN, x, x, saK.f16.lo` against the driver's range in sa.
+  dword, when the shader writes it (**corpus**; the open stack's programs
+  use this layout and pass dEQP-GLES2: **hardware**). The driver builds
+  the TA words from the vertex shader's sets: output select =
+  `dwords << 16 | 0x3000`, `| 0x100` with point size (dwords = 4 + sizes +
+  1); TSP word 0 = 3 bits per set (1, 2, 3, or 5 for 4 components); TSP
+  word 1 = the sets with precision value < 3 (**capture**, docs/STATE.md
+  "Output select and TSP words" and "Lines and points"). The USP has none
+  of this: its header has no output count.
+- **Varyings to sets**: the vendor compiler has 10 sets × 4 components. It
+  takes the active varyings by type, mat4, mat2, vec4, mat3, vec3, vec2,
+  float, within a type the largest first (by array size: guess), and gives
+  each row a new set while sets remain; past 10 it packs rows into free
+  components of sets with the same precision (**unconfirmed**; corpus:
+  vo_vall's o0, o1, o2 (vec2), o3 (float) land at o4, o8, o12, o14 = sets
+  0-3 of sizes 4, 4, 2, 1). Our `sgx_pack_varyings` does this without the
+  precision rule: each stage is placed on its own, and their precisions
+  may differ. Unwritten varyings get no set.
+- **gl_PointSize**: when a vertex shader writes it, the vendor compiler
+  reserves set 0 *before* allocating varyings: enabled, 2 components
+  (**corpus**; precision 1: **unconfirmed**). The shader never writes it,
+  so o4-o5 are a hole and varyings start at o6, with the point size last
+  (vo_ps: o6; vo_psv: vec4 at o6-o9, size at o10) (**corpus**). Guess: set
+  0 is where the hardware puts the point-sprite coordinate (gl_PointCoord)
+  for points. The size is clamped first: the vendor compiler emits
+  `fminmax oN, x, x, saK.f16.lo` against the driver's range in sa, a min
+  against 511.0 (**corpus** vo_ps; STATE.md "Lines and points").
 - **Matching the fragment shader**: each shader is allocated on its own;
-  GL's linker (0x2f4b0) matches varyings by name (type, size and
-  invariance must agree) and keeps a per-program table, program +0xb0[fs
-  set] = vs set (and +0xd8 the reverse). The draw-time DOUTI for a varying
-  takes source = +0xb0[its set] + 1, so the fragment program reads the
-  vertex shader's set into its own PA order. A compiler that compiles both
-  stages can give a varying the same set on both sides and needs no table.
+  the vendor GL linker matches varyings by name (type, size and
+  invariance must agree) and keeps a per-program table from each
+  fragment-side set to the vertex-side set. The draw-time DOUTI for a
+  varying takes source = the vertex-side set + 1, so the fragment program
+  reads the vertex shader's set into its own PA order (**unconfirmed**). A
+  compiler that compiles both stages can give a varying the same set on
+  both sides and needs no table.
 - **What a compiler must produce**: position in o0-o3; each varying in
   the o registers of its set (4 + the sizes of the lower sets); the point
   size, if written, after the last set, with set 0 reserved (2 dwords,
@@ -2596,3 +2540,104 @@ backed above; this section only collects it.
   read back as sources.
 - Vertex texture fetch is always a USSE `smp` with LOD (c48 = 0.0 for
   `texture2D`).
+
+## Gaps
+
+Facts above tagged **unconfirmed**, each with the hardware test or capture that would
+confirm it. Shipping code must not rely on one until it is confirmed. The USP
+container items matter only to the A/B harness that runs our programs under the
+vendor driver; the open stack doesn't use the container.
+
+### Registers and encoding
+
+- Registers: the pa budget is 0x80 minus USP header +0x3c → a hardware draw whose program uses pa registers right up to (and one past) that bound, or a capture of the DDK's PDS word 1 / attribute count for a program near it.
+
+### Float, moves, dual issue, pack, test, bitwise
+
+- Common fields: skipinv (h23) skips invalid instances → hwt draw over a partly covered triangle (helper/invalid instances) with an observable side effect (st to memory, or a predicate feeding o0), with and without h23.
+- Common fields: syncs (h20) is a sync start → hwt draw with a derivative or dependent sample after a divergent branch, with and without h20, checking the result per pixel.
+- Common fields: nosched (h11 in the float classes, h22 in pck/test/bitwise) stops the scheduler from descheduling → hwt run with an internal-register write, a long-latency op (smp or ld) and a read, with and without nosched, many pixels.
+- Float classes, fdpc: writes a clip-plane result to cp<n> (l15-17) → capture a vendor vertex program with user clip planes and its state, or an hwt vertex draw that toggles the cp operand and watches clipping.
+- Float classes, fddp/fddpc: what the two dot products sum (the second goes to the i<n> in h19: hardware), and fddpc's writes to the two cp operands → hwt fddp with vector inputs and a repeat; fddpc with distinct cp operands.
+- Moves, op0xf3 (h8-10 = 6, 7): writes an output → hwt draw of each form, reading o and r registers back.
+- fdual: internal registers don't survive a deschedule (not reproduced across loads and a wdf) → hwt draw that writes i0, runs a dependent smp, then reads i0, many pixels.
+- fdual, fssq: each source channel feeds the same destination channel → hwt fssq with rpt=2 (or a mask) over distinct registers, checking each destination.
+
+### Integer, fixed-point and multi-unit ops
+
+- efo: h22 (a0lneg) negates A0's left input (set for an add's other source negate) → hwt draw with `a` modes whose A0 left input is a product or I0 (a=0, 1, 2), a0lneg on and off, nonzero inputs
+- efo: earlier cores' EFO use h3-8 as three 2-bit source modifiers, with different control-field meanings → oracle sweep with a pre-SGX545 target, plus hardware on such a core
+- sop3: h11 (arev / arsop) negates the alpha result, swapping the roles to b - a → hwt_p6-style U8 draw of sop3 with arev on and off, distinct src alphas
+- ima16: the vendor compiler picks u8 format exactly when the source is an immediate → corpus/capture check of every ima16 with an immediate or register source (any with a non-u8 immediate or u8 register?)
+- hw 16 ssum16i, firh, op16s1, op1adrc (oracle, not emitted for SGX545): whether the SGX545 executes them at all, and what they compute → hwt draws of each word (watch for a hang/HWR), compare against candidate formulas
+
+### smp, ld/st and the special class
+
+- hw 1c: smp: pcf (h5) / pcf16 (h6) are a percentage-closer compare → hwt sample of a depth texture with compare state set, pcf on and off, F32 and F16 coordinates; compare the result to the reference compare.
+- hw 1d: eld: size 0 = dword, 1 = quad (what each size loads) → hwt eld.d / eld.q from a known buffer, count the registers written.
+- hw 1f: emit: t1 is a geometry-shader vertex emit and its f13 is "emit and cut" → capture of a vendor program using emit.t1, or a hwt draw on a core that runs geometry; low priority on the SGX545 (GLES2 has no geometry stage).
+- Open questions: br/ba h10 (f1_22) and op0xd7's limit are tied to the same core feature → hwt br with h10 set vs clear, and op0xd7 n sweep, looking for any behavior difference.
+
+### Phases, discard, constants and vertex shaders
+
+- What the finalizer prepares: USP header flags B 2 (last instruction can't carry `end`) makes the driver append `nop [end]` → a capture of the finalized program of a corpus binary with flags B 2 set.
+- What the finalizer prepares: USP header flags B 4 sets the phase-0 `phas` h13 → a capture of a finalized feedback program from a binary with flags B 4, and a hardware draw with h13 set and clear.
+- What the finalizer prepares: in a feedback program (flags A 8) whose blend code has a phase of its own, the driver adds one more `phas` → a capture of the DDK's program for a blended discarding shader.
+- What the finalizer prepares / The draw state: atst8's c is the color register after the finalizer's move → a capture of a DDK discard program whose USP color register is not pa0 (dc_gt: pa2).
+- The draw state: discard on points or lines gets ISPA pass type 5 from the stock driver → a capture of the ISPA word of a stock points+discard draw.
+- What the draw-time builder emits: blend and color-mask code sometimes gets a phase of its own (a `phas` to it, then `phas.i #0,#0`), and which draws do it → captures of the DDK's finalized programs for blended draws with and without discard, color mask on and off.
+- What the draw-time builder emits: h11 (`rate=1`) on the phase-0 `phas` when the blend code runs in a phase of its own → the same captures; the open stack uses `[wait=1]` without h11, so a hardware A/B of the two words.
+- What the draw-time builder emits: the feedback iteration is DOUTI `0x7c11000` (4 components) instead of `0x7811000` in the draws whose blend code has its own phase → a capture of the PDS primary of such a draw.
+- What the draw-time builder emits: for points or lines the stock driver adds a second iteration (`0x7800000`, source 0, 3 components), puts `mov pa0, pa0` in pcoeff's slot, leaves the discard `nop` in the program and corrupts its temporary count to 0xfb340404 → a capture of the stock driver's program, DOUTU and PDS words for a points+discard draw.
+- Constants past sa127: the DDK's list B (USP header 0x2c flag 1, 0x38, 0x52) is its way to keep constants in memory → a corpus shader with more uniforms than fit in SA, or a hand-built USP binary with list B entries finalized and drawn by the DDK, then the capture.
+- Vertex shaders: the vendor compiler assigns sets by type order (mat4, mat2, vec4, mat3, vec3, vec2, float), largest first within a type, and past 10 sets packs rows into free components of same-precision sets → corpus shaders with mixed types and with more than 10 varying rows at mixed precisions, decoded for their output registers.
+- Vertex shaders: the reserved gl_PointSize set 0 has precision 1 → the TSP word 1 bit 0 in a capture of a point draw (`ptattr`, `ptvar`).
+- Vertex shaders: the vendor GL linker maps each fragment-side set to the vertex-side set, and the DOUTI source is the vertex-side set + 1 → a capture of a draw whose vertex and fragment shaders declare the same varyings in different orders or types, reading the DOUTI sources.
+
+### The USP container and the vendor driver's finalizer (A/B harness only)
+
+- Where the blocks come from: the driver's loader treats block types 0 and 8 as an end of the stream → A/B: a USP whose stream ends with type 0 or 8 instead of 7, and check that it loads and draws.
+- Shared sub-records: MOE mode `0x4000|swz` (four 2-bit swizzle selects) → A/B: a USP with a swizzle-mode MOE word in a code block, and the vendor driver's finalized program captured.
+- Shared sub-records: iflags b0 makes the driver save and restore i0..i2 around inserted code → capture the finalized program of a corpus shader with ilive 3 (tx_dep_proj3) and look for the saves.
+- Shared sub-records: with iflags b2 clear, every driver-generated instruction gets skipinv → capture finalized tx_dep_chain vs tx_dep and compare skipinv on the generated smp/wdf/pck.
+- Shared sub-records: iflags b4-7 (meaning unknown, written only under a compile option) → A/B: set them in our USP and diff the finalized program.
+- Shared sub-records: 4-valued register types 2 = o and 4 = i → A/B: a block 6 whose destination is o or i, and check the result on the CE5300 board.
+- Block 5: flags b2 is matched against an iterator key (centroid guess) → A/B: set b2 on a non-dependent sample and capture the PDS DOUTI the driver builds.
+- Block 5: sampler > 15 rejected → A/B: a USP with sampler 16 and check the load fails.
+- Block 5: swizzle bits 12-15 must be 0; selects >= 4 unseen → A/B: swizzles with a select of 4-7 and with bit 12 set, capture the finalized unpack.
+- Block 5: usrc equal to the unpack's source and destination means unpack in place → A/B: usrc different from the unpack source, capture the finalized program.
+- Block 5: scratch pair is the first temporary the driver's own code uses → capture a finalized sample with live internal registers and check which r registers the saves use.
+- Block 5: ilive C10 subset saved with two instructions instead of a mov → A/B: a sample with a C10 value live in i0, capture the finalized program.
+- Block 5: forced format values other than 8 (f32, f16, c10, u8, 6, 7) → A/B: each value with an RGBA8 texture, read back the result.
+- Block 5: non-dependent coordinate iterator accepted range 1..10 → A/B: iterator 11 and check the load fails.
+- Block 5: the driver substitutes template `0x20000000 / 0xe0411000` for non-dependent chunks done by smp → capture the finalized program of a non-dependent read of a texel format wider than 32 bits.
+- Block 6: per-format byte-offset bounds checked by the loader → A/B: an out-of-range offset (f16 offset 1, u8 offset 4) and check the load fails.
+- Block 9: the whole 82-byte layout and its format codes → no GLES2 source; only an A/B with a hand-built block 9, or leave unsupported.
+- The finalizer: texture formats split into up to 4 chunks of ceil(bits/32) dwords; constant 0/1 channels need none → capture finalized programs for a dependent read of a 64-bit and a 128-bit format (e.g. RGBA16F, RGBA32F) and of LUMINANCE/ALPHA.
+- The finalizer: a YUV-like format adds a FIRH color conversion → capture a finalized program sampling a YUV texture (EGL image).
+- The finalizer: the PDS sample budget is `0x80 -` header 0x42 → A/B: header 0x42 non-zero with many non-dependent samples, capture the iterator list.
+- The finalizer: only the first needed chunk of a non-dependent sample comes from the PDS → capture a non-dependent read of a multi-chunk format (PDS program and USSE program).
+- The finalizer: texture state goes to memory when it doesn't fit below header 0x3c + 0x3e, then `ld` (hi `0xe8800000 | (n-1)<<12`) + `wdf`, merging chunks up to 16 dwords; which header field gives the base SA → A/B: a small 0x3e with dependent samples, capture the finalized program and the memory it reads.
+- The finalizer: non-default MOE state at a sample gets `smbo 0,0,0,0` / `smlsi 1,1,1,1` first and is restored after → capture finalized tx_dep_loop.
+- The finalizer: coordinate fix-up (`fsubflr`, `limm` 1/w and 0.5/w, multiply-add) for some samplers (NPOT/rectangle guess) → capture finalized programs for a POT and an NPOT texture with repeat wrap.
+- The finalizer: one texture format gets `and dst, dst, #0x7fffffff` on the result → capture finalized programs across the texture formats and find which one.
+- The finalizer: unpack paths for s8, u16, s16, f16, f32 texel channels, `mov` for f32, c10 targets, formats 6/7 (`limm 0xffff8000`, test) → capture finalized programs for each texel format and result precision.
+- The finalizer: how the driver writes the texture-state table into SA registers at draw time → capture the secondary program / PDS DOUTD of a draw with a dependent read.
+- The texture-sample sequence: LOD reads, gradient operand layout (how many registers, which order) → hwt: an smp.2d.grad with known derivatives against a mipmapped texture, read the level chosen.
+- The texture-sample sequence: vertex texture fetch with LOD c48 and skipinv → hwt or open-stack vertex texture test on the CE5300 board.
+- Header: version other than 0x23 rejected → A/B: version 0x22.
+- Header: program type 2 = geometry → none on GLES2; leave unsupported.
+- Header: flags A 4 (color may stay in pa0 in output mode 3) and 0x10 → A/B: set each and capture the finalized program.
+- Header: compile flags b5 = the driver inserts visibility feedback → A/B: a discard shader without b5, capture the finalized program.
+- Header: flags B 2 (last instruction cannot take `end`), 4 (draw-time `phas` h13), 8 / 0x10 (one more color register), finalizer's 0x100 on an out-of-range branch → A/B: toggle each and capture the finalized program and phas words.
+- Header: 0x20 accepted range 1..10 → A/B: value 11.
+- Header: workaround ids 0x54c1, 0x54d1, 0x5518 under compile options → A/B: a USP with one id, capture what changes in the finalized program.
+- Header: flags C 1 (list B) and 4 (memory area at 0x34/0x60), and fields 0x30, 0x38, 0x60 → A/B: a USP with a list B record and a memory area, capture where the constants land.
+- Header: 0x3e moves texture state to memory when exceeded → as the finalizer's memory fallback above.
+- Header: the finalizer raises 0x46 for its own code → capture the finalized program's temporary count (DOUTU) for a dependent read.
+- Header: color alternatives 0x6e/0x70/0x72 and output modes 0-3 (blend/color mask keep the color; otherwise moved to o) → A/B: draws with and without blending, capture the finalized color move.
+- Header: the loader opens a code block at the start label for the finalizer's placeholders → capture the finalized program's first instructions for a discard and a non-discard shader.
+- Lists and blocks: list A kinds 0xb/0xc iterate from DOUTI source 0x20 (color), 0xd-0xf from source 0 → capture the PDS program for a shader with each kind.
+- Lists and blocks: list C kind 4 (32-bit value, 8 bytes) and list B → A/B: a USP with a kind 4 record and one in list B.
+- Lists and blocks: list D entry bounds (<= 16, <= 4) → A/B: a USP with one list D entry.
+- Lists and blocks: vertex outputs renumbered by the output mask's set bits → A/B: a vertex USP with a sparse output mask, read the varyings.

@@ -33,12 +33,12 @@ Counts are rows of the tables below (one row per file or block of facts).
 | area | covered | partial | missing | n/a |
 |---|---|---|---|---|
 | gallium driver (`drivers/sgx`) | 44 | 27 | 2 | 12 |
-| winsys (`winsys/sgx`) | 44 | 34 | 2 | 3 |
+| winsys (`winsys/sgx`) | 45 | 33 | 2 | 3 |
 | compiler (`sgx/compiler`) | 33 | 26 | 0 | 5 |
 | USSE instruction set (`sgx/isa`) | 5 | 0 | 0 | 1 |
 | PDS (`sgx/pds`) | 4 | 0 | 0 | 1 |
 | kernel driver (`drm/`) | 33 | 44 | 5 | 2 (+ 7 test rows) |
-| **total** | **163** | **131** | **9** | **24** |
+| **total** | **164** | **130** | **9** | **24** |
 
 The instruction encodings (USSE and PDS) are generated from ISA.md and PDS.md
 and are covered. The gaps are in the state around them:
@@ -166,9 +166,11 @@ fixing.
 - **RT data header word 1:** STATE.md §6 says it is 1; the clients and the
   kernel driver leave it at 0. *Resolved:* it is a counter the microkernel
   advances, and its starting value doesn't matter (STATE.md §6 "RT data").
-- **`phas.i` target origin:** ISA.md's builder table says it counts from the
+- **`phas.i` target origin:** ISA.md's builder table said it counts from the
   code heap, while UAPI.md and ISA.md's `ba` say from the code base the task
-  runs from. The two differ past the first 512 KB.
+  runs from. The two differ past the first 512 KB. *Resolved:* from the task's
+  code base (ISA.md, `hwt_window`); a heap-relative relocation sent every
+  vertex program past the first window one window high.
 - **TA command +0x20:** UAPI.md §4.1 says it is 0; the kernel driver writes
   the frame index there.
 - **`share_kernel_heaps`:** DRM-DRIVER.md §4 says it maps the kernel heaps
@@ -259,6 +261,12 @@ re-read these rows against the sections named:
   - the pixel-event in1 bits;
   - where vertex uniforms start (the probe's vertex override didn't take);
   - points without gl_PointSize (the DDK drops the draw).
+- **Winsys: `copy_fs`** (2026-11-11, from `es1base`): covered. The color
+  source (DOUTI 0x20, b21 = 0) arrives as one packed BGRA8 dword in pa0
+  (STATE.md §3 "Output select and TSP words"; PDS.md "DOUTI"), and a U8
+  sample lands packed in pa0 (STATE.md §3 "The DDK's fragment programs for
+  a flat color and one sample"). Still open: what DOUTI b21 = 1 does to the
+  color's format.
 - **New:** UKERNEL.md §5 "Where the DDK microkernel raises the host
   interrupt": every SW_EVENT site and what triggers it, the fact that no
   completion waits for the timer, the hardware-done to IRQ times, and where
@@ -407,7 +415,7 @@ Counts (rows with hardware facts): **covered 44, partial 27, missing 2**; 12 row
 - A frame that samples a texture whose memory was freed before the frame reached the GPU locks up the 3D (st's bitmap cache freed at teardown). State it as hardware behavior (no fault reported / a 3D lockup), so a driver keeps sampled buffers alive until the render is done.
 
 ##### `sgx_texture.c:25-60` `sgx_tex_format` (partial) — TEX.md §1 "Texel formats"
-- RGBA8 textures (R, G, B, A bytes) sampled with T1 0x0c give GL-order texels through an xyzw unpack (byte-identical to the DDK on the CE5300 board: 16×16, 64×64, NPOT, nearest and linear); 0x0d is "0x0c with R and B swapped". TEX.md lists 0x0d for RGBA uploads (the DDK's choice, with libusc's zyxw reorder folded into the sample) and doesn't say what each code returns to the shader.
+- RGBA8 textures (R, G, B, A bytes) sampled with T1 0x0c give GL-order texels through an xyzw unpack (byte-identical to the DDK on the CE5300 board: 16×16, 64×64, NPOT, nearest and linear); 0x0d is "0x0c with R and B swapped". TEX.md lists 0x0d for RGBA uploads (the DDK's choice, with the DDK compiler's zyxw reorder folded into the sample: corpus) and doesn't say what each code returns to the shader.
 - T1 0x05 (RGB565): the channel order it hands the compiler's unpack (R and B swapped against GL, per `sgx_screen.c:190-192`).
 - sRGB: no T1 code decodes sRGB (the driver maps each sRGB format to its linear twin and decodes in the shader); say so with the formats probed.
 
@@ -516,7 +524,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 
 | file (lines) / area | what it encodes | doc section(s) | status |
 |---|---|---|---|
-| sgxws.h:49-64 GL enums, VDM prim codes | depth/stencil compare = GL enum - 0x200; VDM prim 0 tri, 1 lines, 2 points, 3 strip | STATE.md §3 "ISPA (ctx+0x780)" (b22-24), §3 "ISPC: stencil"; §2 draw word 0; §3 "Lines and points" | covered |
+| sgxws.h:49-64 GL enums, VDM prim codes | depth/stencil compare = GL enum - 0x200; VDM prim 0 tri, 1 lines, 2 points, 3 strip | STATE.md §3 "ISPA" (b22-24), §3 "ISPC: stencil"; §2 draw word 0; §3 "Lines and points" | covered |
 | sgxws.h:67-77 `sgxws_target` | BGRA8888 top-first; stride "even, or 1"; PBE format code; T1 format/layout 6 strided, 3 linear (pitch rounded to 8 texels), 0 twiddled with the PBE writing twiddled | STATE.md §4 "PBE words", "Format codes"; §5 T1 table; TEX.md §11 "Render targets the sampler reads directly", §4 "Render to texture" | partial |
 | sgxws.h:81-103 `sgxws_prog` | temporaries (DOUTU in fours), TSP sizes 3 bits per set, precision mask, point size as last output dword, up to 10 DOUTIs/sets | PDS.md "DOUTU" word 0 b24-31; STATE.md §3 "Output select ... and TSP words"; ISA.md "Vertex shaders" (sets 0-9) | covered |
 | sgxws.h:105-149 blend description, `sgxws_bsel`, `SGXWS_BLEND_CONST_SA` 2 | sop2 epilogue form, selector codes zero/s1/s2/s1a/s2a/asat, complement; sopwm color mask, byte order B b0 G b1 R b2 A b3; constant color in sa2 | STATE.md §3 "Blending and the color mask are shader code", "Constant-color blending"; ISA.md "sop2 (hw 10 ...)" | covered |
@@ -571,7 +579,7 @@ into `sgx_usse_progs.h`. A value that appears only in DRIVER-UPSTREAM.md
 | mkusse.py:59 `empty` | `phas.i #0,#0 [end wait=7]` | ISA.md "phase" (encoding) | covered |
 | mkusse.py:63-74 `clear_vs` | o0-o2 = pa0-2, o3 = c3 (1.0), o4-o7 = `pck.f32.u8 [scale]` of pa3 lanes 2, 1, 0, 3; 8 output dwords | NOTES.md "Findings" (clear vertex = x,y,z,ARGB8888); ISA.md "pck" (lanes, scale = /255), "Hardware constants" (c3); STATE.md §3 output select 0x00081800 | partial |
 | mkusse.py:77-85 `vpgen_vs` | `mov o0,pa0 [rpt=2]; mov o2,c3; mov o3,c3` | STATE.md §3 "Scissor and partial viewports" | covered |
-| mkusse.py:87-90 `copy_fs` | `mov o0, pa0 [skipinv end rcnt]`: the color iterator / background sample already the packed pixel | TEX.md §3 table (copy shader `phas.i; mov o0, pa0 [end]`); PDS.md "DOUTI" (0x20 color, 4 components) | partial |
+| mkusse.py:87-90 `copy_fs` | `mov o0, pa0 [skipinv end rcnt]`: the color iterator / background sample already the packed pixel | STATE.md §3 "Output select and TSP words" (the color source is one packed BGRA8 dword in pa0); STATE.md §3 "The DDK's fragment programs for a flat color and one sample" (a U8 sample lands packed in pa0); PDS.md "DOUTI" (0x20 color, 4 components, b21 = 0); TEX.md §3 table (copy shader `phas.i; mov o0, pa0 [end]`) | covered |
 | mkusse.py:94-115 `vs_xy`, `vs_xyz` | phase 0 (prologue, `limm pa3,#1.0`, `limm pa2,#0 [end]`), phase 1 `[wait=2]` copies pa0-3 to o0-3 | GEN.md "The API" / "Vertex programs end with an extra phase"; ISA.md `limm`, `phas.i` | partial |
 | mkusse.py:120-132 `fs_uniform_sec`, `fs_uniform` | secondary packs FP16 pa9/pa10 to BGRA8 in pa9 (`pck.u8.f16 dmask=6/9 scale`); main `mov o0, sa9 [skipinv end mask=1]` | NOTES.md "Findings" (FP16 uniform pairs); ISA.md "pck" (dmask lanes), "Program structure" (secondary pa = main sa), "What the draw-time builder emits" (probe's `mov o0, sa9 [end]`) | covered |
 | sgx_powervr_sgx.c:49-61 `TA_KICKS`, `heap_ids[]` | a scene = 2 TA kicks (stream, then terminate words); uAPI heap index → heap id | UAPI.md "SUBMIT_JOBS" (two elements, G9), §5; docs/uapi/powervr_sgx_drm.h | covered |
@@ -621,7 +629,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 - GEN.md "Smaller things": the code uses `PDS_ALIGN` 0x40 (64 bytes), but GEN.md and UAPI.md §5 say PDS programs go on 32 bytes. State the value used, and the hardware minimum once tested (G10).
 
 **`sgxws_usse_upload` phas.i relocation (partial)**
-- ISA.md "phase / 0xfe-0x100": what a `phas.i` pc counts from when the task's DOUTU names code base n > 0. ISA.md's builder table says "relative to the code heap". UAPI.md "UPLOAD_CODE" and ISA.md `ba` say "from the code base the task runs from". The code uses the heap base, so a pixel program past the first 512 KB depends on the heap-base reading.
+- ISA.md "phase / 0xfe-0x100": what a `phas.i` pc counts from when the task's DOUTU names code base n > 0. ISA.md's builder table says "relative to the code heap". UAPI.md "UPLOAD_CODE" and ISA.md `ba` say "from the code base the task runs from". The code used the heap base, so a program past the first 512 KB jumped one window high. *Resolved:* the code base (`hwt_window`); the relocation must be the offset from the DOUTU's window.
 
 **DOUTD control and chunking (partial)**
 - PDS.md "DOUTD": the b22-24 rule the code uses is (dwords - 1) & 3. It fits 12 → 3, 25 → 0, 10 → 1, 11 → 2, 27 → 2. Say whether it is a hardware field or only the DDK's value.
@@ -716,9 +724,6 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
   - o4-o7 = R, G, B, A as floats from the ARGB8888 word's bytes 2, 1, 0, 3 (`pck.f32.u8 [scale]`);
   - 8 output dwords to match output select 0x00081800.
 
-**`copy_fs` (partial)**
-- PDS.md "DOUTI": that the color iterator (source 0x20, 4 components) leaves the color packed as BGRA8 in pa0. The same for the background sample. That lets `mov o0, pa0` write the pixel unchanged.
-
 **CCB (partial)**
 - STATE.md §6 HW render context word 3: whether the 0x420 bytes after the 64 KB ring are control or room for a command that runs past the ring's end (the code assumes the latter).
 - STATE.md §6: the write offset wraps at 0x10000 (`(woff + 0x2c0) & 0xffff`), and the client writes it to CCB control word 0 before the kick.
@@ -783,7 +788,7 @@ Counts: 83 rows; 44 covered, 34 partial, 2 missing, 3 n/a.
 - Background block words 3-8: STATE.md §6 calls them a rotation matrix; TEX.md §10 measures them as texture coordinates.
 - CCB 0x10420: STATE.md §6 reads the 0x420 as control; the code comment reads it as room past the ring.
 - RT data header [1]: STATE.md §6 says 1; the client leaves it 0.
-- phas.i target origin: ISA.md's builder table says "relative to the code heap". UAPI.md and ISA.md `ba` say "the code base the task runs from".
+- phas.i target origin: resolved, from the task's code base (ISA.md, `hwt_window`).
 
 ### compiler: `mesa/src/sgx/compiler`
 
@@ -798,7 +803,7 @@ sections.
 | `meson.build` | build only | - | n/a |
 | `sgx_priv.h` (IR, `SGX_F_*`, `sgx_ins`, ctx) | IR structures; PRED3 codes 0/1/2/5/6 (`sgx_ins.pred`); `SGX_ITER_FRAGCOORD 14` | ISA.md "Common fields (all ALU classes)" (pred), "Lists and blocks" (list A: gl_FragCoord iterator 14) | covered |
 | `sgx_forms.h` (forms, fields) | form and field enum; operand roles | ISA.md class sections (names only) | n/a (encoding) |
-| `sgx_forms.c:16-23` slot file sets | generic dst = r o pa ix sa g idx i; src1/src2 = r o pa sa ix c g # i; src0 = r pa (no ext) or r pa o sa (smp/ld ext h18); one-bit dst bank r/pa (smp, ld) | ISA.md "Operand slots and bank codes", "Operands (generic encoder FUN_00107830)", "hw 1c: smp", "hw 1d: ld" | covered (see notes a, b) |
+| `sgx_forms.c:16-23` slot file sets | generic dst = r o pa ix sa g idx i; src1/src2 = r o pa sa ix c g # i; src0 = r pa (no ext) or r pa o sa (smp/ld ext h18); one-bit dst bank r/pa (smp, ld) | ISA.md "Operand slots and bank codes", "Operands", "hw 1c: smp", "hw 1d: ld" | covered (see notes a, b) |
 | `sgx_forms.c:32-45, 47-85` per-form slots and modifiers | FLOAT3 src0 abs only + fmt, src1/src2 neg+abs+fmt; FLOAT2 (fsubflr fdp fdsx fdsy) dst/src1/src2; hw1 single source in src1 with neg/abs, no fmt; fmad16 modifiers as hw0, no fmt; mov in src1; movc src0 r/pa; pck/bitwise no src0, no modifiers; test/testmask fmt, no modifiers, test dst = predicate; sop3/sop3l src0 r/pa; sopwm dst/src1/src2; ima16 src2 negate; imae; smp coord/state/lod; ld base/off; limm dst+imm; br target | ISA.md "Float classes" (slot table, modifiers), "Moves (hw 5)", "hw 08: pck", "hw 09 test, hw 0f testmask", "hw 0a-0e: bitwise", "sop3 family", "sopwm", "ima16", "imae", "hw 1c: smp", "hw 1d: ld", "other (h20-21 = 2)" (limm), "flow control" (br) | covered (notes c-e) |
 | `sgx_forms.c:102-117` `sgx_form_init` | default mask 1 (15 for sopwm); pck dmask 15; smp/ld src2 = unused pattern #0 | ISA.md "Unused slots and fixed patterns", "Text notation and defaults" (defaults), "Repeat or mask" | partial (notes f, g) |
 | `sgx_compile.c:52` `NUM_TEMPS 124` | allocatable r0-r123 (r124-127 = i0-i3) | ISA.md "Register files and operand limits", "Registers" | covered |
@@ -840,7 +845,7 @@ sections.
 | `sgx_compile.c:3905-3944` `far_f16_uniforms` | F16 constant past sa31 copied to r with `pck.f16.f16` (whole-register sources with lane) | ISA.md "Register files and operand limits" (F16 sources in r0-r31 / pa0-pa31; same limit for sa), "hw 08: pck" (lane row) | covered |
 | `sgx_compile.c:3946-4003` `phys_opd`, `:4005-4082` `sgx_encode_ins` | i<n> in a slot without the i bank = r(124+n), +60 under format control; pck 16-bit sources lane = 2*half; scalar F16 source -> h7 + chan; skipinv on every ALU instruction unless helper-needed; moe when all sources step else inc bits; hw1/mov/movc rcnt or mask 1; testmask mask (1<<n)-1; fmad16 rpt 1 | ISA.md "The number field" (i<n> alias, 60 + n under format control), "hw 08: pck" (lane row), "Float classes" (hw1 source format; Repeat paragraph), "Repeats", "hw 09 test" (testmask mask) | covered (note h) |
 | `sgx_compile.c:4101-4102` labels / sa_base | labels 3 start, 4 feedback, 5 phase 1; constants from sa9 (fragment) / sa10 (vertex) | ISA.md "Header" (0x3c constant SA base, 0x74/0x76/0x78 labels) | covered |
-| `sgx_program.c:26-63` `smp_template` | dependent smp: dst r0, state `#0`, src2 = bias, dim 1 (2D) / 2 (cube), lod 1 bias, cfmt F16, skipinv set, drc 0 | ISA.md "hw 1c: smp", "The smp instruction, as libusc's FUN_0010a3f0 writes it", "Block 5: SAMPLE" (template), "The texture-sample sequence" | partial (skipinv on smp) |
+| `sgx_program.c:26-63` `smp_template` | dependent smp: dst r0, state `#0`, src2 = bias, dim 1 (2D) / 2 (cube), lod 1 bias, cfmt F16, skipinv set, drc 0 | ISA.md "hw 1c: smp", "The smp instruction, as the vendor compiler writes it", "Block 5: SAMPLE" (template), "The texture-sample sequence" | partial (skipinv on smp) |
 | `sgx_program.c:154-167` branch fix-up | `br` target = label index - this index | ISA.md "flow control" (br, hardware), "Program structure" (Branches) | covered |
 | `sgx_program.c:169-186` fragment `n_pa` | iterations + color + depth; one extra PA register when nothing but gl_PointCoord is iterated (the DDK driver's placeholder color iteration) | COMPILER-UPSTREAM.md "3. DDK-compatibility code" (names the placeholder), ISA.md "Header" (0x44 PA count) | partial |
 | `sgx_program.c:188-204` vertex input mask | PA registers the program reads | ISA.md "Vertex shaders" (vertex bitmask = live pa), "Lists and blocks" item 6 | covered |
@@ -992,7 +997,7 @@ The target doc is named.
   (x low half, y high half; a cube's z in the next register's low half),
   starting at a whole register.
 - ISA.md "hw 1c: smp" or "The texture-sample sequence": whether the smp
-  itself must have skipinv clear for its LOD (libusc's `tx_dep` template
+  itself must have skipinv clear for its LOD (the DDK's `tx_dep` template
   has h23 clear, `tx_dep_if` / `vtx_lod` set); the compiler sets it.
 - ISA.md "The texture-sample sequence" / TEX.md: what raw data the sampler
   returns for formats other than RGBA8888 (565, 4444, 5551, L8, A8, LA88):
@@ -1108,7 +1113,7 @@ covers them.
 
 | file (lines) / area | what it encodes | doc section(s) | status |
 |---|---|---|---|
-| `pvrsgx_fw.c:40-41, 62, 708-723` names, `ddk_load` | file names; DDK image is exactly 0xcf68 bytes (libsrv_init .rodata 0x2000..0xef68) | DRM-DRIVER.md "3." step 2; SRVINIT.md "The firmware file"; UKERNEL.md "4a" | covered |
+| `pvrsgx_fw.c:40-41, 62, 708-723` names, `ddk_load` | file names; DDK image is exactly 0xcf68 bytes | DRM-DRIVER.md "3." step 2; SRVINIT.md "The firmware file"; UKERNEL.md "4a" | covered |
 | `pvrsgx_fw.c:66-100, 613-706` `ukfw_header`, `ukfw_parse`, `ukfw_table`, `ukfw_load` | open microkernel file: magic, header fields and offsets, header 0x60 min and multiple of 8, image multiple of 8, CRC-32 IEEE, interface major 1, feature bits 0/1 only, entry program 0..4, entry offset < image and 8-aligned, patch offset <= image-8 and 8-aligned, patch value 1..5, program 0 required, core_rev mismatch only warns; tables at most 64 pairs at 4-aligned offsets; image at most CODE_ARENA - 0x200 - 0x10 = 0xddf0 bytes | UKERNEL.md "4a. The firmware file" | partial: not stated: the 64-pair table limit, 4-byte table alignment, 8-byte alignment of entry and patch offsets, the image size limit 0xddf0, that a missing program-0 entry is refused, that core_rev mismatch is a warning not a refusal |
 | `pvrsgx_fw.c:214-227` `limm` | placeholder: word 0 low 21 bits 0xdbeef; DDK word 1 = 0xfc237150; open image: word 1 bits 4-8 and 12-17 clear; split b0-20 -> w0, b21-25 -> w1 b4-8, b26-31 -> w1 b12-17 | SRVINIT.md "Buffer contents" (Microkernel); UKERNEL.md "4a" (0x000dbeef in low 21 bits) | partial: the open image's word-1 check (bits 4-8, 12-17 zero) not stated |
 | `pvrsgx_fw.c:464-494` `fw_build_open` | five PDS programs, each a DOUTU (word 1 = 2) to its listed entry; programs not listed enter at program 0's offset; patches filled from value 1..5; host-kick table = identity | UKERNEL.md "4a" (program 0 bare DOUTU bit 27, values 1..5, identity); SRVINIT.md "PDS programs" (word 1 = 2) | partial: the fallback of unlisted programs 1-4 to program 0's offset not stated; SRVINIT.md "Loading the open microkernel" says the `-o` event program also DMAs the TA3D block (DOUTD 0x3c0003f), which conflicts with UKERNEL.md 4a's bare DOUTU that the driver builds |

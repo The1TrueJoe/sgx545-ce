@@ -4,19 +4,22 @@ From `AGENTS.md` §3.4/§3.5 and §5 M1. Recorded here so the DDK microkernel
 stays a drop-in A/B reference and the firmware is submittable to
 linux-firmware.
 
-## License: MIT (confirmed)
+## License: MIT OR Apache-2.0 (confirmed)
 
 The open microkernel (`ukernel/`) is written from `docs/` — behavior,
 encodings and register meanings found by tracing and hardware tests
 (`tools/isa/hwt_*`), never translated from Imagination's bytes or decompiled
 code (the clean-room discipline in `docs/CLEANROOM.md`, §3.6 and
-`ukernel/README.md`). It is therefore ours to license permissively. **MIT**
-(confirmed by Joseph, 2026-11-01): the simplest permissive license, what
-linux-firmware and Mesa expect, placing no obligation on redistributors (an
-ISO can ship the firmware blob freely). `ukernel/LICENSE` holds the MIT text
-with `Copyright © 2026 Joseph Telaak`, every `ukernel/*.py` carries an
-`SPDX-License-Identifier: MIT` + copyright header, and a `WHENCE` entry will
-name the built binary when it is submitted to linux-firmware.
+`ukernel/README.md`). It is therefore ours to license permissively. **MIT OR
+Apache-2.0** (MIT confirmed by Joseph 2026-11-01; dual-licensed 2026-11-12 to
+follow convention and satisfy linux-firmware's LICENSE-CRITERIA §3.1, which
+wants an explicit patent grant — Apache-2.0 §3 supplies one, and the `OR` lets
+redistributors keep to the plain MIT terms). Both are permissive, what
+linux-firmware and Mesa accept, and place no obligation on redistributors (an
+ISO can ship the firmware blob freely). `ukernel/LICENSE` holds both license
+texts with `Copyright © 2026 Joseph Telaak`, every `ukernel/*.py` carries an
+`SPDX-License-Identifier: MIT OR Apache-2.0` + copyright header, and a `WHENCE`
+entry will name the built binary when it is submitted to linux-firmware.
 
 Nothing in `ukernel/` is copied or mechanically derived from `kernel/src/`
 (GPL-2.0). The register and struct *knowledge* used by the microkernel comes
@@ -60,6 +63,6 @@ build-options and struct-size checks, so the DDK stays a drop-in.
 ## Reproducible build, no DDK inputs
 
 `ukernel/build.py` assembles the image from `ukernel/*.py` with
-`tools/isa/asm.py` alone — no firmware fetch, no DDK library, no extraction.
+`sgx-asm`, built from `sgx.xml` — no firmware fetch, no DDK library, no extraction.
 The build is deterministic (same bytes every run). `srvinit -o` needs only the
 built image and its `.pat` sidecar.

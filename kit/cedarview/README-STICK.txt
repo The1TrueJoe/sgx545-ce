@@ -5,4 +5,4 @@ from that computer, and never writes to its internal disk.
 
 When it finishes, a file named results-....tar.gz appears on this drive.
 Send that file to us as the guide says:
-https://github.com/The1TrueJoe/sgx545-ce/blob/main/docs/TESTING-CEDARVIEW.md
+https://github.com/The1TrueJoe/powervr_sgx/blob/main/docs/TESTING-CEDARVIEW.md

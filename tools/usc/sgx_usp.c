@@ -4,8 +4,8 @@
  */
 
 /*
- * The DDK 1.7 USP container (docs/ISA.md "The USP container"; usp.py
- * parses it), built from a compiled struct sgx_shader: header, list A
+ * The DDK 1.7 USP container (docs/ISA.md "The USP container"; sgx_usp.py
+ * reads it back), built from a compiled struct sgx_shader: header, list A
  * (iterated inputs), list C (constants in SA), the (empty) secondary update
  * program, masks and the block stream. Header values the compiler doesn't
  * decide are the ones libusc writes for the same kind of shader (corpus c1).
@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "compiler/shader_enums.h"
+#include "util/macros.h"
 
 #include "sgx_usp.h"
 
@@ -168,9 +169,10 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
 
    /* list A: iterated inputs; libusc puts a dummy colour iteration in a
     * shader with none (c1 `add`: 0xc, 0, 0xb, 4, 4, 1) */
-   unsigned n_a = 0;
+   unsigned n_a = 0, n_pa = s->n_pa;
    if (frag) {
       bool real = false;
+      unsigned end = 0;
       for (unsigned i = 0; i < s->n_iters; i++) {
          const struct sgx_iter_info *it = &s->iters[i];
          if (it->sample) {
@@ -180,18 +182,21 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
             u16(&b, 4); u16(&b, 0); u16(&b, it->set + 1); u16(&b, it->comps); u16(&b, it->f16 ? 2 : 1); u16(&b, it->regs);
          }
          real |= !it->pointcoord;
+         end = MAX2(end, it->pa + it->regs);
          n_a++;
       }
       /* gl_PointCoord alone counts as nothing and comes first (DDK capture) */
       if (!real) {
          u16(&b, 0xc); u16(&b, 0); u16(&b, 0xb); u16(&b, 4); u16(&b, 4); u16(&b, 1);
          n_a++;
+         n_pa = MAX2(n_pa, end + 1); /* its PA register, after the others */
       }
    }
    /* list C: constant k -> sa slot: kind 1 f32, 2 F16 half (shift 0/16),
     * 3 C10 channel (10-byte record: kind, k, 0, slot, shift); ours: 0x10
     * F16 of a C10 value (kind 2's record), 0x11 a literal (kind, value low,
-    * value high, slot, shift) */
+    * value high, slot, shift), 0x12 a vec4 packed to BGRA8 (kind 2's record,
+    * k its first constant) */
    for (unsigned i = 0; i < s->n_consts; i++) {
       const struct sgx_const_map *m = &s->consts[i];
       if (m->fmt == 3) {
@@ -213,7 +218,8 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
    }
    u32(&b, 0xffffffff); u32(&b, 0xffffffff); u32(&b, 0); u32(&b, 0);
 
-   /* blocks: start label 3; discard's feedback nop between labels 4 and 5 */
+   /* blocks: start label 3; discard's feedback nop between labels 4 and 5;
+    * the compiler's labels from 6 */
    u32(&b, 4); u16(&b, 3);
    for (unsigned i = 0; i < s->n_blocks; i++) {
       const struct sgx_block *k = &s->blocks[i];
@@ -222,11 +228,11 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
          code(&b, s->code + k->at, k->n);
          break;
       case SGX_BLOCK_LABEL:
-         u32(&b, 4); u16(&b, k->label);
+         u32(&b, 4); u16(&b, k->label + 6);
          break;
       case SGX_BLOCK_BRANCH:
          /* the branch as encoded, offset 0: the finalizer fills it in */
-         u32(&b, 3); inst(&b, s->code[k->at] & ~0x3ffffull); u16(&b, k->label);
+         u32(&b, 3); inst(&b, s->code[k->at] & ~0x3ffffull); u16(&b, k->label + 6);
          break;
       case SGX_BLOCK_FEEDBACK:
          u32(&b, 4); u16(&b, 4);
@@ -262,7 +268,7 @@ sgx_write_usp(const struct sgx_shader *s, uint8_t **usp, size_t *size)
    put16(&b, 0x3c, s->sa_base);
    put16(&b, 0x3e, frag ? 0x77 : 0x1f6);
    put16(&b, 0x40, 0xffff);
-   put16(&b, 0x44, s->n_pa);
+   put16(&b, 0x44, n_pa);
    put16(&b, 0x46, s->n_temps);
    put16(&b, 0x4e, n_a);
    put16(&b, 0x50, s->n_consts);

@@ -1,0 +1,6 @@
+# SGX545 serial microkernel image (UK_OVERLAP off), built by ukernel/build.py.
+# The image itself is never checked in (ukernel/.gitignore ignores every *.bin);
+# this hash + size is the byte-for-byte golden the ukernel-golden CI enforces.
+# Regenerate after an intentional change: python3 ukernel/golden/check.py --write
+sha256 83b5b0a7d3c4b74eba6524c24c962cd235eb700b158ede6339503046f96e7d79
+bytes  14536

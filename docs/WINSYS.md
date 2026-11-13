@@ -28,18 +28,20 @@ There is nothing to configure: the device decides.
   same Mesa build runs on either: on pvrsrvkm the boot images today, on powervr_sgx
   a RAM-booted kernel with the module loaded (`drm/ci/ea-ramboot`).
 
-`sgx_frame_test -d <node>` runs the winsys without Mesa on either driver. On the CE5310 board under
+`sgx_frame_test -d <node>` runs the winsys without Mesa on either driver. On a CE5300 board under
 powervr_sgx (2026-11-04, kernel c95e32d) it draws the probe's clear and triangle at 720x480,
 pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 
 ## Building the backends
 
 - **powervr_sgx** is always built. It needs the uAPI header in Mesa's
-  `include/drm-uapi/` and the stream packers `powervr_sgx_kmd_stream.h`, which
-  `mesa/build.sh` copies from `drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h`
-  and generates with `docs/uapi/gen_stream.py user` from
-  `docs/uapi/powervr_sgx_kmd_stream.xml`. Upstream, the header comes from drm-next
-  (`AGENTS.md` 3.1), and the generator's home is G26 in UAPI.md.
+  `include/drm-uapi/` and the stream packers `powervr_sgx_kmd_stream.h`.
+  `mesa/build.sh` copies the header from
+  `drm/powervr_sgx/include/uapi/drm/powervr_sgx_drm.h`, and
+  `docs/uapi/powervr_sgx_kmd_stream.xml` with `docs/uapi/gen_stream.py` into
+  `src/sgx/kmd_stream`, where meson generates the packers (`gen_stream.py
+  user`), as csbgen does for the state words. Upstream, the header comes from
+  drm-next (`AGENTS.md` 3.1), and the generator's home is G26 in UAPI.md.
 - **services** is built only when `libpvr/` is in the winsys directory, which
   `mesa/build.sh` links in. It is compiled against `kernel/src`'s bridge headers
   with the kernel's defines, into objects of its own, so no other winsys file
@@ -58,7 +60,7 @@ pixel-identical to `drm/tests/powervr_sgx_frame`, 300 frames at 2.8 ms each.
 | a frame | one `SUBMIT_JOBS` render job: a `CMD_RENDER` stream and two `CMD_TA_KICK` streams (the scene, then the terminate words), written by the generated packers | the TA command in the CCB, `SGX_DOKICK` |
 | completion | each job signals the next point of one timeline syncobj per device; waits are syncobj waits | the target's sync object, polled |
 | shared buffers | dma-buf import and export; a shared buffer is named in each job's BO list (the frame's target as written, sampled ones as read), so the kernel orders the job against its other users (implicit sync) and flushes the CPU cache of an imported one, which the SGX doesn't snoop | not supported (`-ENOTSUP`); the fbdev framebuffer is wrapped user memory |
-| scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0006`) | the fbdev platform |
+| scanout (kmsro) | the render target is ours, exported to the display device (simpledrm on the EA, card0; `mesa/patches/0004`) | the fbdev platform |
 | debugging aids | `SGX_DRY_RUN` (a dry-run frame's point is signaled from the CPU) | also `SGX_TRACE` (pvrtrace) and `SGX_DEBUG=flushrt` |
 
 Kick numbers stay per context in both, so the driver's fences, the ring slots and

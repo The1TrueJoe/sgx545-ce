@@ -40,6 +40,28 @@ struct sgx_const {
 };
 
 #define SGX_MAX_CONSTS 256 /* SA dwords of constants (sa127 ends them) */
+/* fragment constants the driver fills: texture unit u's level-0 width and
+ * height at SGX_K_TEXSIZE + 2u (st's textureSize, as its rectangle lookups
+ * scale by it); past every uniform (128 vec4) and under the compiler's 1024 */
+#define SGX_K_TEXSIZE       1000
+#define SGX_K_TEXSIZE_UNITS 8
+/* the vertex constant the draw fills with gl_InstanceID, as a float
+ * (sgx_program.c lower_instance_id) */
+#define SGX_K_INSTANCE 1016
+/* The driver's block of constant numbers for programs compiled with the
+ * compiler's native integers (docs/GL3.md, "Crossing the driver/compiler
+ * line"): unit u's base-level width, height and depth at SGX_K_SIZE + 3u,
+ * gl_InstanceID at SGX_K_INSTANCE_INT, all raw integers; uniform block n's
+ * GPU address at SGX_K_UBO + n */
+#define SGX_K_SIZE         1024
+#define SGX_K_SIZE_UNITS   16
+#define SGX_K_INSTANCE_INT 1072
+#define SGX_K_UBO          1080
+#define SGX_UBO_BYTES      65536 /* a block's size, GL_MAX_UNIFORM_BLOCK_SIZE */
+#define SGX_MAX_UBOS       12 /* load_ubo's blocks 0-11: constant buffers 1-12 */
+/* unit u's level count (textureQueryLevels, and the compiler's own level
+ * choice for word-by-word fetches) at SGX_K_LEVELS + u, a raw integer */
+#define SGX_K_LEVELS       1096
 
 #define SGX_MAX_DEP_SAMPLES 8
 
@@ -66,17 +88,32 @@ struct sgx_pipe_shader {
     * epilogue is the blend, sgxws_blend) */
    uint64_t *code; /* with the dependent samples' smp put in */
    unsigned n_code, color_reg, temps;
+   /* split around its discard (unless SGX_DEBUG=nophasesplit): code is phase 0
+    * (the test), code1 phase 1 (the colour, into pa<color_reg>) */
+   uint64_t *code1;
+   unsigned n_code1;
    int discard_pa; /* discards: the depth plane's first PA register; -1 doesn't */
+   /* writes gl_FragDepth: in pa<depth_pa> at the feedback nop for a depthf;
+    * -1 doesn't */
+   int depth_pa;
    /* dependent samples: the SA register of each one's 4 texture state words,
     * and its sampler */
    unsigned dep_sa[SGX_MAX_DEP_SAMPLES], dep_sampler[SGX_MAX_DEP_SAMPLES],
       n_deps;
+   /* the texel comes back F16 into two registers (T3 01028800) */
+   bool dep_f16[SGX_MAX_DEP_SAMPLES];
+   /* its plane of an RG32 / RGBA32 texture (the state's address moves) */
+   uint8_t dep_plane[SGX_MAX_DEP_SAMPLES];
+   /* a texelFetch (sgx_sample_info.fetch): sampled NEAREST, clamped */
+   bool dep_fetch[SGX_MAX_DEP_SAMPLES];
    struct {
       struct sgxws_blend key;
       uint32_t code;
    } variants[32];
    unsigned n_variants, next_variant;
    bool uses_front_face;      /* fragment: reads SGX_SA_FRONT */
+   bool native_integers;      /* compiled with them: its driver constants in
+                                 the SGX_K_SIZE block, raw integers */
    bool reads_pointcoord;     /* fragment: its varyings start at set 1,
                                  gl_PointCoord is set 0 */
    struct sgx_varyings *vary; /* compiled: the varyings' sets (a variant's: its
@@ -88,11 +125,29 @@ struct sgx_pipe_shader {
    /* vertex: the input formats it unpacks (sgx_compile_options.vtx_fmt; all
     * 0, f32 x 4, unless SGX_DEBUG=zerocopy picked a variant) */
    uint8_t vtx_fmt[16];
+   /* vertex: st's program writes gl_PointSize, and this variant keeps it as
+    * an output (points draws; the others drop it, sgx_vs_for) */
+   bool writes_psize, points;
    /* fragment: the same decoding what the samplers in its mask sample as
     * sRGB, and swizzling what each sampler view's swizzle says (formats st
     * stores in another, GL_R16 as RGBA8; 0: none) (sgx_fs_for) */
    unsigned srgb;
+   uint32_t srgb_filter; /* of those, the ones it filters (lower_srgb_filter) */
    uint16_t swz[PIPE_MAX_SAMPLERS];
+   uint32_t not_bgra; /* units bound to a texture not sampled B, G, R, A
+                         ordered (sgx_tex_bgra) */
+   uint32_t depth;    /* units bound to a depth texture (sgx_tex_depth) */
+   /* colour buffer 0 is an integer format (pack_int_outputs): 0 not, 1 one of
+    * 8 bits a channel, 2 R32, 3 + c channel c's plane of RG32 / RGBA32 */
+   uint8_t rt_int;
+   /* MRT: 1 + the colour buffer this variant draws into, its DATA output
+    * made output 0 (remap_outputs); 0 a single buffer */
+   uint8_t rt_target;
+   /* units bound to an RGBA32 / RG32 texture, read a plane at a time (the
+    * compiler's tex_r32x4 / tex_r32x2) */
+   uint32_t r32x4, r32x2;
+   /* shadow samples: each unit's compare function (lower_shadow) */
+   uint8_t compare[PIPE_MAX_SAMPLERS];
    struct sgx_pipe_shader *variants_srgb[8];
    unsigned next_variant_srgb;
 };
@@ -134,10 +189,28 @@ struct sgx_context {
    struct sgxws_rt *rts[SGX_MAX_RTS];
    uint32_t rt_va[SGX_MAX_RTS]; /* the target each was made for */
    uint32_t rt_w[SGX_MAX_RTS], rt_h[SGX_MAX_RTS]; /* and its size */
+   uint8_t rt_samples[SGX_MAX_RTS];                /* and samples, 1 or 4 */
+   /* the depth and stencil of a 4x target with no depth buffer bound: a 4x
+    * render needs a ZLS buffer, one per sample (sgx_draw.c zls_target) */
+   struct sgxws_bo ms_zls;
+   uint32_t ms_zls_bytes;
+   /* the colour buffer of a framebuffer with none (depth only): renders
+    * need a target, so they write this one, which nothing reads.  Sized in
+    * set_framebuffer_state to the framebuffer, with its depth buffer's
+    * samples. */
+   struct pipe_resource *dummy_cb;
    uint64_t rt_used[SGX_MAX_RTS], rt_clock;       /* when each was last taken */
    unsigned num_rts;
    struct sgx_resource *recording; /* the target of the frame being recorded */
    struct sgx_resource *recording_zs; /* and its depth/stencil buffer */
+   /* An RG32 or RGBA32 colour buffer is rendered a pass a channel into its
+    * planes (sgx_tex_plane_stride): the plane the draw or clear is on, the
+    * frame's plane, and whether an earlier pass of this draw already wrote
+    * depth and stencil (a later one tests depth EQUAL, writes neither) */
+   unsigned rt_plane, recording_plane;
+   bool rt_later_pass;
+   /* MRT, a pass a colour buffer: the one this pass draws or clears into */
+   unsigned rt_index;
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_viewport_state viewport;
@@ -152,16 +225,25 @@ struct sgx_context {
    struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
    unsigned num_vertex_buffers;
    struct pipe_constant_buffer constants[MESA_SHADER_STAGES];
+   /* constant buffers 1-12, uniform blocks 0-11 (ubos[s][block]), and the
+    * draw's copies of them (fill_consts) */
+   struct pipe_constant_buffer ubos[MESA_SHADER_STAGES][SGX_MAX_UBOS];
+   struct sgxws_ubo draw_ubos[SGXWS_MAX_UBOS];
+   unsigned n_draw_ubos;
    struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS]; /* fragment */
    struct pipe_sampler_view *views[PIPE_MAX_SHADER_SAMPLER_VIEWS]; /* fragment */
 
    /* SGX_STATS=1: where the time goes, printed every 2 s */
+   /* objects the frame being recorded has from clears (the stats tell a frame
+    * of clears alone) */
+   unsigned frame_clears;
    struct {
       bool on;
       uint64_t t0, cpu0, draw_ns, flush_ns, tex_ns, compile_ns, rb_ns, rb_bytes;
       unsigned frames, draws, verts, flushes, tex_writes, tex_flushes;
       unsigned fl_eof, fl_other, fl_switch, fl_read,
-         fl_deferred; /* flushes by cause */
+         fl_deferred;           /* flushes by cause */
+      unsigned fl_switch_clear; /* of the switches, of a frame of clears only */
       unsigned vc_hits, vc_misses, vc_uncacheable, zc_draws;
       unsigned blit_gpu, blit_copy, blit_cpu;
       uint64_t blit_cpu_px, blit_cpu_ns;
@@ -186,6 +268,9 @@ struct sgx_context {
    uint32_t *mem_consts[2]; /* a draw's constants in memory, vertex and fragment
                                (sgx_draw.c) */
    unsigned idx_staging_size;
+   /* the instance this draw is (an instanced draw is one draw per instance,
+    * sgx_draw_vbo): gl_InstanceID, and the draw's first instance */
+   unsigned instance, base_instance;
    bool warned_shader, warned_prim, warned_blend, warned_varyings, warned_cube,
       warned_frag_depth;
 };
@@ -219,6 +304,18 @@ void sgx_flush_resource_writes(struct sgx_context *ctx,
  * context's frame on the shared render context ends ours (sgxws_begin).
  * Compares addresses only: the resource may be gone. */
 struct sgx_resource *sgx_recording(struct sgx_context *ctx);
+
+/* the colour buffer the draw or clear pass is on (MRT: a pass a buffer,
+ * rt_index), or an empty surface */
+static inline const struct pipe_surface *
+sgx_cbuf(const struct sgx_context *ctx)
+{
+   static const struct pipe_surface none;
+
+   return ctx->rt_index < ctx->framebuffer.nr_cbufs
+             ? &ctx->framebuffer.cbufs[ctx->rt_index]
+             : &none;
+}
 void sgx_check_reset(struct sgx_context *ctx);
 
 #endif

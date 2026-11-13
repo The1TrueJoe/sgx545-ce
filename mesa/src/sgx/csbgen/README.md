@@ -5,8 +5,6 @@ format of Imagination's csbgen. `src/imagination/csbgen/gen_pack_header.py`,
 the generator the PowerVR Vulkan driver uses, turns each `<name>.xml` into
 `csbgen/<name>.h`, with a struct, `_header` defaults, `_pack()` and
 `_unpack()` per word. The same layout as `src/imagination/csbgen/rogue`.
-The words are documented in `docs/STATE.md` of the sgx545-ce repository
-(sections 2-5).
 
 | file | prefix | words |
 |---|---|---|
@@ -15,7 +13,7 @@ The words are documented in `docs/STATE.md` of the sgx545-ce repository
 | `pbe.xml` | `SGX_PBE_` | the pixel back end's four words and its sideband word |
 | `tex.xml` | `SGX_TEXSTATE_` | the four texture words a DOUTT sends (T0, strided T0, T1, T2, T3) |
 | `sgx_csb.h` | | the address type the generated code needs, the four headers, and `sgx_pack()` |
-| `tests/sgx_csb_test.c` | | packs and unpacks words the documentation quotes |
+| `tests/sgx_csb_test.c` | | packs and unpacks known words |
 
 ## Use
 

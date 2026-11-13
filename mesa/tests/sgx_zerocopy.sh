@@ -2,7 +2,7 @@
 # Copyright © 2026 Joseph Telaak
 # SPDX-License-Identifier: MIT
 #
-# Zero-copy vertex fetch against the gather (SGX_DEBUG=zerocopy), on the
+# Zero-copy vertex fetch against the gather (SGX_DEBUG=nozerocopy), on the
 # box in /tmp/mesa (lib/, probe-x86_64, gpuwatch.sh): client arrays whose
 # DMA sources are 16-byte aligned (separate arrays) and only 4-byte aligned
 # (interleaved strides 12, 20, 28, 32).  IDENTICAL for every case, with
@@ -12,7 +12,7 @@ FS="precision mediump float; varying vec4 v; void main() { gl_FragColor = v; }"
 run() {
 	name=$1; shift
 	for mode in gather zerocopy; do
-		dbg=draw; [ $mode = zerocopy ] && dbg=draw,zerocopy
+		dbg=draw; [ $mode = gather ] && dbg=draw,nozerocopy
 		env "$@" PROBE_FS="$FS" SGX_DEBUG=$dbg LD_LIBRARY_PATH=/tmp/mesa/lib \
 			PROBE_OUT=/tmp/mesa/zc-$mode-$name.rgba ./gpuwatch.sh ./probe-x86_64 > /tmp/mesa/zc-$mode-$name.log 2>&1
 	done

@@ -27,49 +27,49 @@ With `--check CAPTURE` it compares them with what the DDK wrote:
 
     python3 tools/state/build.py --check CAPTURE.bin [--w W --h H --pbuffer --cull 0x405 ...]
 
-Every field is tagged:
+## How each fact is established
 
-- **[C] confirmed by a replay:** flipped in the blob-free replay
-  (`tools/decode/mkreplay.py --poke`) on a CE5300 board, and the pixels changed as
-  predicted. The runs are listed under "Hardware proof" at the end.
-- **[D] confirmed by a diff:** two probe captures that differ in one GL call
-  differ in exactly this field. Also used for a field read straight from the
-  DDK code that writes it, when the captures agree with it.
-- **[G] guess.**
+Every fact carries one of these tags:
+
+- **hardware**: confirmed on a CE5300 board. Most come from a blob-free
+  replay (`tools/decode/mkreplay.py --poke`) that changed one field, with the
+  pixels changing as predicted; the runs are listed under "Hardware proof"
+  at the end. Others name the run in the text (a lockup, a dEQP run).
+  **hardware (open driver)** means the open Mesa driver in this repo
+  (`mesa/src/gallium/drivers/sgx`, its winsys in
+  `mesa/src/gallium/winsys/sgx`, words packed from
+  `mesa/src/sgx/csbgen/*.xml`) programs the field from GL state and renders
+  correctly on the board. That backs the values the driver writes, not the
+  values it never uses.
+- **capture**: seen in the vendor driver's output: the command streams and
+  state words of a capture, a diff of two one-change probe captures, or the
+  vendor microkernel's memory trace over a frame.
+- **unconfirmed**: stated, but no hardware run or capture backs it yet.
+  Each one is listed in "Gaps" at the end with the test that would confirm
+  it. Shipping code must not rely on one.
+- **guess**: a name or meaning that fits but has no other backing.
+
+A table's tag column uses the same words. Where a fact has parts with
+different backing, each tag names its part.
 
 ## Where the knowledge comes from
 
-- **libGLESv2 decompiled** (Ghidra, `tools/pds/DumpDecomp.java`; addresses are
-  Ghidra's, image base 0x10000):
-  - `FUN_0004a3a0` (0x3a3a0): the draw. It emits the TA state block and the
-    VDM index/vertex words.
-  - `FUN_00049a00` (0x39a00): computes the ISP words, MTE control and
-    stencil words.
-  - `FUN_0004e7a0` (0x3e7a0): the PBE (pixel back end) words.
-  - `FUN_00037670` (0x27670): glTexParameter to texture-word bits.
-  - `FUN_00049180`, `FUN_000497f0`: the VDM terminate and state words.
-  - `FUN_00017c20`: the VDM vertex-program words.
-  - `FUN_0002e2d0` (0x1e2d0): fills the kick structure, which is ctx+0x160,
-    and calls SGXKickTA.
-  - glDepthFunc, glStencil*, glColorMask, glCullFace and friends: the
-    context fields each of these feeds.
-- **libsrv_um decompiled** (same script; output in
-  `<scratchpad>/gp/srv_kick.c`):
-  - `SGXKickTA` (0xd1f0): builds SGXMKIF_CMDTA, the render details and the
-    deferred render-details updates.
-  - `SGXAddRenderTarget` (0x10860) and its helper `FUN_0001f990`: the macrotile
-    and TE numbers, the region headers, the tail pointers and the RT data.
-  - `SGXCreateRenderContext` (0xf040): the 68-byte HW render context.
-  - `FUN_0001e980`: the PB descriptor and the free list.
-  - `FUN_000301d0` (srv_pds.c): the end-of-tile USSE program.
-- **Captures.** `tools/probe/probe.c` has a knob for each piece of state (see
-  its header). One-change captures were taken on a CE5300 board on 2026-10-28 and
-  are listed under "Captures".
+- **Captures.** `tools/probe/probe.c` (ES2) and `tools/probe/probe1.c` (ES1)
+  have a knob for each piece of state (see their headers). The DDK ran them
+  on a CE5300 board under pvrtrace. The one-change captures of 2026-10-28
+  are listed under "Captures"; later sets (2026-11-02, 2026-11-08) are named
+  where they are used.
+- **Microkernel traces.** The vendor microkernel's memory reads and writes
+  over a generated frame (`tools/ukernel/run.py`).
+- **Replays.** A capture replayed with no DDK loaded, one word poked per
+  run ("Hardware proof").
+- **The open driver**, and frames built from scratch by `tools/gen`
+  (`docs/GEN.md`), on the same board.
 
 The GPL kernel's `sgx545defs.h` names only the BIF, USE code-base, PDS
 exec/invalidate and event registers. It has no ISP, TSP, TE, MTE or PBE
-registers, so the names used here come from the DDK code, or from the
-Eurasia register conventions where marked [G].
+registers, so the other names used here are descriptive. A name with no
+other backing is tagged guess.
 
 ## A frame, end to end
 
@@ -96,30 +96,30 @@ A single-triangle frame (the probe) is two TA kicks into one scene:
 ## 1. The TA command (SGXMKIF_CMDTA, client part)
 
 The command sits in the kernel-data CCB, starting 0x58 bytes before
-`ui32CCBOffset`. This is SGXKickTA's `local_878` structure, 0x2a8 bytes plus
-the deferred updates.
+`ui32CCBOffset`. The client part is 0x2a8 bytes, followed by the deferred
+updates.
 
 ### Header, cmd+0x00 to +0x58
 
 | off | ref.bin | field | tag |
 |---|---|---|---|
-| 0x00 | 0x2c0 | command size, rounded up to 64 bytes (`0x2b0 + 8·n` deferred updates) | D |
-| 0x04 | 0x71 / 0x62 | TA flags, from kick flags (ctx+0x164); see "TA flags" below | D |
-| 0x08 | 04001800 | background object, PDS secondary word (kick +0x108) | D |
-| 0x0c | 00030001 | background object, PDS middle word | D |
-| 0x10 | 0c00060e | background object, PDS primary (0x2e0060e0: samples the render target itself, i.e. "load the old contents") | D |
-| 0x14 | 0x50000000 | `0x40000000 + 0x10000000` if kick flag 0x2000000 is clear; else `n<<27` from the render context +0x40 | D |
-| 0x18 | 0x50000000 | constant | D |
-| 0x1c | 0 / 0x400 / 0x580 | 3D flags: b0 = !kick.b1, b1 = kick.b11, b3 = kick.b12-13, b4, b7 = kick.b19, b8 = kick.b20 (b7 \| b8 are needed for a ZLS store or load to happen, `docs/TEX.md` section 7), b10 = kick.b10/b9 (render), b12 = kick.b10; b14 and up = the RT dataset's frame index on the kick that renders (0x4400 on frame 2, GEN.md). The microkernel copies it to render details +0xd4 at every kick (pc 0x07b1-0x07b5) and acts on it there (section 6, "Render details") | D |
-| 0x20 | 0 | the RT dataset's frame index (1 on frame 2, GEN.md). The microkernel copies it to TA3D +0xa4 and render details +0x140 at every kick (pc 0x07bc-0x07bf) | D |
-| 0x24 | 3200e000 | **PB descriptor** (kdata) | D |
-| 0x38 | 3200e560 | **render details** (kdata, 0x1ec) | D |
-| 0x3c | 3200e7a0 | **HW device sync list** (kdata, 0x28; `SGXMKIF_HWDEVICE_SYNC_LIST`), below. The microkernel copies it to render details +0xe0 at every kick (pc 0x07c3-0x07c5) | D |
-| 0x40 | 3200aac0 | **RT data** (kdata) | D |
-| 0x44 | 3200ab10 | RT data entry for this render (`+0x18 + idx·0x38`) | D |
-| 0x48 | 0 | kick +0x08 (with kick flag 0x20) | G |
-| 0x4c, 0x50 | 0 | multi-RT values (kick +0x60, +0x64) | G |
-| 0x54 | 0 / 6 | number of deferred render-details updates at +0x2a8 | D |
+| 0x00 | 0x2c0 | command size, rounded up to 64 bytes (`0x2b0 + 8·n` deferred updates) | capture; hardware (open driver) |
+| 0x04 | 0x71 / 0x62 | TA flags; see "TA flags" below | capture |
+| 0x08 | 04001800 | background object, PDS secondary word | capture; hardware (open driver) |
+| 0x0c | 00030001 | background object, PDS middle word | capture; hardware (open driver) |
+| 0x10 | 0c00060e | background object, PDS primary (0x2e0060e0: samples the render target itself, i.e. "load the old contents") | capture; hardware (open driver) |
+| 0x14 | 0x50000000 | `0x40000000 + 0x10000000` in every capture. The DDK can put `n<<27` there instead, under a render-context setting no capture has | capture (0x50000000); unconfirmed (`n<<27`) |
+| 0x18 | 0x50000000 | constant | capture |
+| 0x1c | 0 / 0x400 / 0x580 | 3D flags. b0, b1, b3, b4 and b12 follow client kick flags. b7 \| b8 are needed for a ZLS store or load to happen (`docs/TEX.md` section 7). b10 is set on the kick that renders. b14 and up = the RT dataset's frame index on the kick that renders (0x4400 on frame 2, GEN.md). The microkernel copies the word to render details +0xd4 at every kick and acts on it there (section 6, "Render details") | capture; hardware (open driver: b7, b8, b10, b14 and up); unconfirmed (b0, b1, b3, b4, b12) |
+| 0x20 | 0 | the RT dataset's frame index (1 on frame 2, GEN.md). The microkernel copies it to TA3D +0xa4 and render details +0x140 at every kick | capture; hardware (open driver) |
+| 0x24 | 3200e000 | **PB descriptor** (kdata) | capture; hardware (open driver) |
+| 0x38 | 3200e560 | **render details** (kdata, 0x1ec) | capture; hardware (open driver) |
+| 0x3c | 3200e7a0 | **HW device sync list** (kdata, 0x28; `SGXMKIF_HWDEVICE_SYNC_LIST`), below. The microkernel copies it to render details +0xe0 at every kick | capture; hardware (open driver) |
+| 0x40 | 3200aac0 | **RT data** (kdata) | capture; hardware (open driver) |
+| 0x44 | 3200ab10 | RT data entry for this render (`+0x18 + idx·0x38`) | capture; hardware (open driver) |
+| 0x48 | 0 | a client value, under a client kick flag | guess |
+| 0x4c, 0x50 | 0 | multi-RT values | guess |
+| 0x54 | 0 / 6 | number of deferred render-details updates at +0x2a8 | capture |
 
 ### HW device sync list (cmd+0x3c, kdata, 0x28 bytes)
 
@@ -136,11 +136,10 @@ time; 0x28 bytes hold two objects.
 | 5 + 4n | `sWriteOpsCompleteDevVAddr` |
 
 At the end of the render the microkernel writes `ui32WriteOpsPendingVal + 1`
-to object n's `sWriteOpsCompleteDevVAddr`, n being render details +0x108
-(pc 0x0f45-0x0f54), and zeroes the access word (pc 0x0fc7-0x0fcb) [D, code
-and trace]. A render is done for the host when the write-complete word
-reaches the pending value plus one. The host compares the two as wrapping
-32-bit counters.
+to object n's `sWriteOpsCompleteDevVAddr`, n being render details +0x108,
+and zeroes the access word [capture: microkernel trace]. A render is done
+for the host when the write-complete word reaches the pending value plus
+one. The host compares the two as wrapping 32-bit counters.
 
 ### CMDTA_SHARED, cmd+0x58 to +0x238
 
@@ -149,73 +148,75 @@ The kernel fills it at kick time; the client leaves it zero. The layout is
 
 | off | field | what the microkernel does with it |
 |---|---|---|
-| 0x00 | `ui32CtrlFlags`: READY = 1, set on every kick | read at the kick (pc 0x0648, 0x0728) |
+| 0x00 | `ui32CtrlFlags`: READY = 1, set on every kick | read at the kick |
 | 0x04, 0x08 | `ui32NumTAStatusVals`, `ui32Num3DStatusVals` | the counts of the status lists at the end of the struct |
-| 0x0c-0x18 | the TA TQ sync: write-ops pending, write-complete address, read-ops pending, read-complete address | read at TA start (pc 0x064c, 0x0730) |
-| 0x1c-0x28 | the 3D TQ sync, in the same order | copied to render details +0xe4..+0xf0 at every kick (pc 0x07c0-0x07c2). At the 3D end the read-complete address gets read-ops pending + 1. The write-complete address gets write-ops pending + 1 only when render details +0xd4 b9 (0x200) is set (pc 0x0f5c-0x0f6c) |
-| then | the source sync list, `sTA3DDependency`, `sCtlTAStatusInfo[]`, `sCtl3DStatusInfo[]` | the TA-finished handler writes each TA status value to its address. The 3D end writes the 3D list from its render-details copy (count at +0x144, pairs from +0x148; pc 0x0f7d-0x0f89) |
+| 0x0c-0x18 | the TA TQ sync: write-ops pending, write-complete address, read-ops pending, read-complete address | read at TA start |
+| 0x1c-0x28 | the 3D TQ sync, in the same order | copied to render details +0xe4..+0xf0 at every kick. At the 3D end the read-complete address gets read-ops pending + 1. The write-complete address gets write-ops pending + 1 only when render details +0xd4 b9 (0x200) is set |
+| then | the source sync list, `sTA3DDependency`, `sCtlTAStatusInfo[]`, `sCtl3DStatusInfo[]` | the TA-finished handler writes each TA status value to its address. The 3D end writes the 3D list from its render-details copy (count at +0x144, pairs from +0x148) |
 
-All [D] from the structure and the DDK microkernel trace.
+All [capture]: the layout is the GPL kernel header's, and what the
+microkernel does is from its memory trace.
 
 ### TA flags (cmd+0x04)
 
 The values the clients use:
-- 0x63 for a scene in one kick, 0x73 on a render target's first frame;
-- 0x71 and 0x62 for the first and last of two kicks;
-- 0x61 for the first kick after frame 1 (GEN.md);
-- 0x60 for a middle kick (no capture).
+- 0x63 for a scene in one kick, 0x73 on a render target's first frame
+  [capture];
+- 0x71 and 0x62 for the first and last of two kicks [capture];
+- 0x61 for the first kick after frame 1 (GEN.md) [capture];
+- 0x60 for a middle kick [unconfirmed: no capture].
 
-Bits 5 and 6 are set on every kick. What the DDK microkernel does with each
-bit (`ddk-uk.bin`; pc = the test):
+Bits 5 and 6 are set on every kick [capture]. What the microkernel does
+with each bit:
 
-| bit | DDK microkernel | tag |
+| bit | what the microkernel does | tag |
 |---|---|---|
-| 0 (0x1) | first kick of the scene: pulses SOFT_RESET's TA bit (0x80 = 4, then 0) before the PB check (pc 0x091b). Also tested with b2 (mask 0x5) at TA finish (0x0673), scene setup (0x0755) and 0x0a77 | D (code) |
-| 1 (0x2) | last kick of the scene: the TA-finished handler starts the 3D (pc 0x0676) | D (code; the open microkernel's `do_3d` gates on it, 2026-11-03) |
-| 2 (0x4) | only ever tested with b0 (mask 0x5); no client sets it | G (resume) |
-| 3 (0x8) | tested with b0 (mask 0x9) before the stored-scene DPM load (pc 0x09fa); no client sets it | G |
-| 4 (0x10) | writes 0xa08 = 1, once per kick: the USE code-cache invalidate (pc 0x09b1) | D (code) |
-| 5 (0x20) | invalidates the TA-side caches: 0xad0 = 1 and 0xae0 = 1, then waits for 0x138 & 0x27 and acks 0x140 = 0x27 (pc 0x09a7) | D (code) |
-| 6 (0x40) | sets a bit in 0x804, then runs the MADD (texture) cache invalidate: waits for EVENT_STATUS b26 (`MADD_CACHE_INVALCOMPLETE`), acks it, then a USE data-cache flush (`op0xff #3`) (pc 0x0998). The 0x04000000 edge shows in the DDK's register sample at every render kick | D (code, regsample) |
-| 10 (0x400) | compares a sync value named by the command (+0x10c) before going on (pc 0x073c) | G |
-| 12 (0x1000), 13 (0x2000) | tested (pc 0x06b1 / 0x0ac6, 0x0790); no client sets them | G |
+| 0 (0x1) | first kick of the scene: pulses SOFT_RESET's TA bit (0x80 = 4, then 0) before the PB check. Also tested together with b2 (mask 0x5) at TA finish, at scene setup and in one other place | capture (set on every first kick); unconfirmed (the reset) |
+| 1 (0x2) | last kick of the scene: the TA-finished handler starts the 3D | capture (set on the kick that renders); hardware (the open microkernel's `do_3d` gates on it, 2026-11-03) |
+| 2 (0x4) | only ever tested together with b0 (mask 0x5); no client sets it | guess (resume) |
+| 3 (0x8) | tested together with b0 (mask 0x9) before the stored-scene DPM load; no client sets it | guess |
+| 4 (0x10) | writes 0xa08 = 1, once per kick: the USE code-cache invalidate | unconfirmed |
+| 5 (0x20) | invalidates the TA-side caches: 0xad0 = 1 and 0xae0 = 1, then waits for 0x138 & 0x27 and acks 0x140 = 0x27 | unconfirmed |
+| 6 (0x40) | sets a bit in 0x804, then runs the MADD (texture) cache invalidate: waits for EVENT_STATUS b26 (`MADD_CACHE_INVALCOMPLETE`), acks it, then a USE data-cache flush (`op0xff #3`). The 0x04000000 edge shows in the DDK's register sample at every render kick | capture (the register sample); unconfirmed (the rest) |
+| 10 (0x400) | compares a sync value named by the command (+0x10c) before going on | guess |
+| 12 (0x1000), 13 (0x2000) | tested; no client sets them | guess |
 
 One kick with both b0 and b1 set (0x63) renders: the services backend and
 powervr_sgx send every frame that way, and m2's smoke tests pass with it
-(10/10 frames on a CE5300 board, 2026-11-04; hardware, not a replay poke).
+(10/10 frames on a CE5300 board, 2026-11-04) [hardware; not a replay poke].
 
 ### Tail, cmd+0x238 to +0x2a8
 
-Most of these come from the render target (`SGXAddRenderTarget`); see
-section 6 for the formulas.
+Most of these come from the render target; see section 6 for the
+formulas.
 
 | off | ref.bin | field | tag |
 |---|---|---|---|
-| 0x238 | 20000000 | TE AA: `0x20000000`, b31 = x2 multisample in X, b30 = in Y | D (formula) |
-| 0x23c | 82010018 | TE MTILE1: b31 = 4×4 macrotile mode, macrotile X boundaries (in 32-px tiles) at b22 / b12 / b0 = 8, 16, 24 | D |
-| 0x240 | 02010018 | TE MTILE2: macrotile Y boundaries (in 16-px tiles) = 8, 16, 24 | D |
-| 0x244 | 0001d016 | TE screen: last tile X (b0-11) = 22, last tile Y (b12-) = 29 | D |
-| 0x248 | 0x40 | tiles per macrotile (8 × 8) | D |
-| 0x24c | 0 / 0x2400000 | TA flags 2: b22-23 from kick flag 0xa00, b19, b25. The microkernel loads it into the TA register 0x218 at TA start (pc 0x095c-0x0963, with +0x238..+0x248 into 0x204-0x214). b22 (0x400000) is set on the kick that renders: the DDK's kick 2 carries 0x400000, kick 1 0 | D (formula, trace) |
-| 0x250 | 3e518000 | **VDM control stream base** for this kick | C |
-| 0x254 | 0xa2 | kick +0x104 | G |
-| 0x258 | 20006000 | region header array of this render (TE PSG region base) | D |
-| 0x25c | 20000000 | tail pointer array (TE TPC base) | D |
-| 0x260, 0x264 | 358637bd | two 1e-6 floats, constants in SGXKickTA | D (constant) |
-| 0x268 | 01df02cf | screen size `(h-1)<<16 \| (w-1)` | D |
-| 0x26c, 0x270 | 0 | kick +0xec, +0xe8 | G |
-| 0x274 | 10000000 | 3D params heap base (PB base & 0xfff00000) | D |
-| 0x278 | 0 | kick +0x20 << 24 | G |
-| 0x27c-0x298 | 0 | kick +0x1c..+0x40 (multisample / output values) | G |
-| 0x29c | 0 | number of RT data entries - 1 | D |
-| 0x2a0 | 0 | RT +0x68 << 12 | D (formula) |
-| 0x2a4 | 0x88 | RT +0x14 (0x88 when RT flag b0 and no AA) | D (formula) |
-| 0x2a8.. | | deferred render-details updates: (device address, value) pairs, `count` at +0x54 | D |
+| 0x238 | 20000000 | TE AA: `0x20000000`, b31 = x2 multisample in X, b30 = in Y; 4x MSAA sets both (`e0000000`, "Multisampling" below) | capture (0x20000000; `e0000000` with 4 samples) |
+| 0x23c | 82010018 | TE MTILE1: b31 = 4×4 macrotile mode, macrotile X boundaries (in 32-px tiles) at b22 / b12 / b0 = 8, 16, 24 | capture; hardware (open driver) |
+| 0x240 | 02010018 | TE MTILE2: macrotile Y boundaries (in 16-px tiles) = 8, 16, 24 | capture; hardware (open driver) |
+| 0x244 | 0001d016 | TE screen: last tile X (b0-11) = 22, last tile Y (b12-) = 29 | capture; hardware (open driver) |
+| 0x248 | 0x40 | tiles per macrotile (8 × 8) | capture; hardware (open driver) |
+| 0x24c | 0 / 0x2400000 | TA flags 2: b22-23 and b25 follow client kick flags, and b19; b25 is set with 4x MSAA (`02400000`). The microkernel loads it into the TA register 0x218 at TA start (with +0x238..+0x248 into 0x204-0x214). b22 (0x400000) is set on the kick that renders: the DDK's kick 2 carries 0x400000, kick 1 0 | capture (b22, the register loads); hardware (open driver: b22); unconfirmed (b19, b23, b25) |
+| 0x250 | 3e518000 | **VDM control stream base** for this kick | hardware |
+| 0x254 | 0xa2 | a client value, 0xa2 in every capture | guess |
+| 0x258 | 20006000 | region header array of this render (TE PSG region base) | capture; hardware (open driver) |
+| 0x25c | 20000000 | tail pointer array (TE TPC base) | capture; hardware (open driver) |
+| 0x260, 0x264 | 358637bd | two 1e-6 floats, constants | capture |
+| 0x268 | 01df02cf | screen size `(h-1)<<16 \| (w-1)` | capture; hardware (open driver) |
+| 0x26c, 0x270 | 0 | client values | guess |
+| 0x274 | 10000000 | 3D params heap base (PB base & 0xfff00000) | capture; hardware (open driver) |
+| 0x278 | 0 | a client value << 24 | guess |
+| 0x27c-0x298 | 0 | client values (multisample / output values) | guess |
+| 0x29c | 0 | number of RT data entries - 1 | capture |
+| 0x2a0 | 0 | a render-target value << 12 | capture (0); unconfirmed (the formula) |
+| 0x2a4 | 0x88 | a render-target value: 0x88 with no AA; `eaa26e26` in both 4x captures (meaning unknown) | capture |
+| 0x2a8.. | | deferred render-details updates: (device address, value) pairs, `count` at +0x54 | capture |
 
 The deferred updates exist because the render details are written in full
-only when SGXKickTA starts a new render (kick flag 0x4). Later kicks into
-the same render send only the words that changed. In the probe frame with
-a depth buffer, kick 2 sends six:
+only when the client starts a new render. Later kicks into the same render
+send only the words that changed. In the probe frame with a depth buffer,
+kick 2 sends six [capture]:
 
 - ZLS control;
 - the ZLS request base;
@@ -228,22 +229,21 @@ points at the part that kick runs.
 
 | words | meaning | tag |
 |---|---|---|
-| `4 \| addr>>4`, info | **state program** (PDS vertex heap): info b26-31 = data rows of 16 B; low bits `0x2022400 \| buffer index (0-3, rotating) + ((attribute dwords+3)>>2)` for a TA state block, `0xe100 \| ((n+3)>>2)` for a plain state/secondary DMA | D (rows), G (low bits) |
-| `6 \| addr>>4`, info | state program, second form (the TA terminate: 4 × DOUTA + DOUTU) | D |
-| `8…`, idx, w2, w3, `n \| addr>>4`, info | **draw**: see below | D |
-| `c0000000` | terminate | D |
+| `4 \| addr>>4`, info | **state program** (PDS vertex heap): info b26-31 = data rows of 16 B; low bits `0x2022400 \| buffer index (0-3, rotating) + ((attribute dwords+3)>>2)` for a TA state block, `0xe100 \| ((n+3)>>2)` for a plain state/secondary DMA | capture; hardware (open driver) (rows); guess (low bits) |
+| `6 \| addr>>4`, info | state program, second form (the TA terminate: 4 × DOUTA + DOUTU) | capture |
+| `8…`, idx, w2, w3, `n \| addr>>4`, info | **draw**: see below | capture; hardware (open driver) |
+| `c0000000` | terminate | capture; hardware (open driver) |
 
-The draw is six words. libGLESv2 emits them in `FUN_0004a3a0`, with the
-counts from `FUN_00017c20`:
+The draw is six words:
 
 | word | ref.bin | meaning |
 |---|---|---|
-| 0 | 80c00003 | `0x80000000 \| 0x00c00000 \| prim<<26 \| index count`. prim from libGLESv2's table: triangles 0, lines 1, points 2, strip 3, fan 4 (the bits are `0x4000000·k`) [D] |
-| 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices, bits 0-1 for 32-bit [D] |
-| 2 | f0000000 | `(batch-1)<<28`, \| 0x1000000 for 32-bit indices, \| index offset [D]. The batch is 16 in every DDK draw: triangles, lines, strips and fans, 3 to 192 indices, 1 to 8 draws a frame (2026-11-08 captures). What it batches is G |
-| 3 | 003fffff | max index (constant) [D] |
-| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [D]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [D, captures of 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (2026-10-28; hardware, not a replay poke). The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16. Why the clear uses 8 is G |
-| 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [D]. b22-23 is 3 in every DDK draw, over the same range as word 2; what n is stays G |
+| 0 | 80c00003 | `0x80000000 \| 0x00c00000 \| prim<<26 \| index count`. prim: triangles 0, lines 1, points 2, strip 3, fan 4 (the bits are `0x4000000·k`) [capture; hardware, open driver] |
+| 1 | 3e517004 | index buffer address; bit 0 is cleared for 16-bit indices [capture; hardware, open driver], bits 0-1 for 32-bit [unconfirmed] |
+| 2 | f0000000 | `(batch-1)<<28` [capture], \| 0x1000000 for 32-bit indices [unconfirmed], \| index offset [unconfirmed]. The batch is 16 in every DDK draw: triangles, lines, strips and fans, 3 to 192 indices, 1 to 8 draws a frame (2026-11-08 captures). What it batches is [guess] |
+| 3 | 003fffff | max index (constant) [capture] |
+| 4 | f3040d82 | vertex PDS program `addr>>4`, top nibble = (vertices per USSE task - 1). **It is not a type nibble**: the VDM knows from the draw header that this word follows [capture]. For compiled shaders the DDK's count is `min(16, 128 / round4(output dwords))`, and input dwords don't count: 4 or 8 output dwords give 16, 12 → 10, 16 → 8, 20 → 6, 24 → 5 [capture: 4-24 output dwords, log `2026-10-28-1530-gl4es-ctest`; the e1tex capture's 12-output shader runs 10]. `64 / output dwords` hung the GPU at 12 output dwords (2026-10-28) [hardware; not a replay poke]. The DDK's built-in clear programs don't follow the rule: they run 8 per task at 8 and at 4 output dwords (`0x3c008080` and `0x3c008100` in the base4 and vp5 captures), while a 4-output compiled shader in the same captures runs 16 [capture]. Why the clear uses 8 is [guess] |
+| 5 | 01c00082 | b0-6 = PDS data rows, b7-21 = ceil(input attribute bytes/16), b22-23 = min(n,3), b24-31 = ceil(output dwords/4) [capture; hardware, open driver]. b22-23 is 3 in every DDK draw, over the same range as word 2; what n is stays [guess] |
 
 `glDrawArrays` draws through a static 16-bit identity index buffer.
 
@@ -253,7 +253,7 @@ counts from `FUN_00017c20`:
 |---|---|---|---|
 | 0x3040e000 (`43040e00 0e022403`) | 12 dw from 0x30401000, secondary attributes, kind 3 | 0x3c008700 | the clear's TA state block |
 | 0x3040e080 (`43040e08 0e022405`) | 25 dw from 0x30401080, kind 0 | 0x3c008a00 | the triangle's TA state block |
-| 0x30401120 (`43040112 0800e103`) | 10 dw from 0x304010e0, kind 1 | 0x3c000080 | vertex secondary attributes: sa0 = the block's own address, sa1 = 0, sa2-sa5 = the driver constants 2/255, 1/255, 2/65535, 1/65535 (`3c008081 3b808081 38000080 37800080`), sa6-sa9 = 0, then the vertex shader's uniforms [D: every DDK capture on disk, 24 of them, has this 10-dword block; none has vertex uniforms, so where they start is G] |
+| 0x30401120 (`43040112 0800e103`) | 10 dw from 0x304010e0, kind 1 | 0x3c000080 | vertex secondary attributes: sa0 = the block's own address, sa1 = 0, sa2-sa5 = the driver constants 2/255, 1/255, 2/65535, 1/65535 (`3c008081 3b808081 38000080 37800080`), sa6-sa9 = 0, then the vertex shader's uniforms [capture: every DDK capture on disk, 24 of them, has this 10-dword block; none has vertex uniforms, so where they start is a guess] |
 | 0x30400060 (`43040006 0400e100`) | none | 0x3c000080 | empty secondary update (the end of the stream) |
 | 0x30400000 (`63040000 0e022401`) | DOUTA (0x2000,0), 3 × (0x16000e, 0x100) | 0x3c000000 | TA terminate |
 
@@ -263,27 +263,16 @@ counts from `FUN_00017c20`:
   picks one of four copies.
 - **The state-emit USSE programs are just `emit` instructions.** They copy
   the DMA'd attributes to the MTE (macro tiling engine). The block is the
-  state; the program only forwards it. The DDK's, from the base4 capture
-  (`0x3c008700` for 12 dwords, `0x3c008a00` for 18):
-
-      phas.i #0, #0 [wait=7]                         fa440700 00000000
-      nop [nosched]                                  f8000940 00000000
-      test.and.ne p0, #0, #0 [skipinv]               48831280 a00c0000
-      (p0) ld.a.d pa0, pa0, #0 [skipinv rpt=4]       e9833084 a0000000
-      wdf                                            f9200000 00000000
-      mov o0, pa0 [skipinv rcnt rpt=n]               rpt at most 16 per mov: 18 dwords
-                                                     are `rpt=16` then `mov o16, pa16 rpt=2`
-      emit.t3 r0, #0, #0                             fb23c000 a0000000
-      op0xd6 #0                                      ff200000 00000000
-      emit.t1 o0, #0, #0 [end f3_20]                 fb2f4000 a0200000
-
-  [D, capture]. The triangle's block is DMAed as 25 dwords, but its program
+  state; the program only forwards it: it waits for the DMA, moves the
+  attributes to the outputs (`mov o0, pa0` with a repeat count, at most 16 per
+  `mov`), then emits them to the MTE and ends
+  [capture]. The triangle's block is DMAed as 25 dwords, but its program
   forwards 18 (pa0-pa17). The clear's DMA and program both cover 12.
 - **The TA terminate's USSE task (`0x3c000000`) is the same program for two
   dwords** (`mov o0, pa0 [rcnt rpt=2]`). It forwards the two attributes the
   terminate's DOUTAs wrote: pa0 = 0x2000 (ctrl 0) and pa1 = 0x0016000e
   (ctrl 0x100, written three times). What those two words mean, and whether
-  the three repeats are needed, is G.
+  the three repeats are needed, is [guess].
 - **The vertex secondary task (`0x3c000080`) is one instruction,**
   `phas.i #0, #0 [end wait=7]` (`fa4c0700 00000000`): the DMA itself loads
   the secondary attributes, and nothing is forwarded.
@@ -295,33 +284,33 @@ counts from `FUN_00017c20`:
     (9, 10, 11, 12, 15, 25 and 27 dwords). This is the "kind" in the table above;
   - with b25 clear it is 0;
   - b24 was set once, on a 15-dword TA state block in vp5 (`0x0380000e`);
-    its meaning is G. [D, capture]
+    its meaning is a guess. [capture]
 
 ## 3. The TA state block (ISP/TSP/MTE)
 
 The block is the first word of a state-program DMA. The header word says
-which groups follow, in this order. libGLESv2 `FUN_0004a3a0` writes it,
-with the context dirty bits in parentheses:
+which groups follow, in this order:
 
-| header bit | words | group | source | tag |
-|---|---|---|---|---|
-| 0x1 | 1 | ISPA | ctx+0x780, objtype bits 15-18 replaced per draw | D |
-| 0x2 | 1 | ISPB (present when ISPA b9) | ctx+0x784 | D |
-| 0x4 | 1 | ISPC, front stencil (present when ISPA b8) | ctx+0x788 | D |
-| 0x8, 0x10, 0x20 | 3 | second-face ISPA, ISPB, ISPC (two-sided stencil). Each face has its own ISPA reference. In a y-flipped window the first group (0x1, 0x2, 0x4) holds GL's **back** face's words and this one GL's front: the first group is the faces wound CCW in the target's memory (`stencil2`, header `df7f`, 2026-11-02) | ctx+0x78c..0x794 | capture |
-| 0x40 | 3 | PDS: secondary, middle word, primary | ctx+0xcac/cb0, frag+0x64, ctx+0xc9c/ca0 | D |
-| 0x80 | 2 | region clip, sticky until the next one (clears, driver objects, draws without a clear before them): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles | RT+0x114, +0x118 or the scissor | C |
-| 0x100 | 6 | viewport (dirty 0x100) | ctx+0x13c..0x150 | C |
-| 0x200 | 1 | always 0 (dirty 0x200) | | D |
-| 0x400 | 1 | output select (dirty 0x1000) | vertex program +0x248 | D |
-| 0x800 | 1 | W clamp, `0x3727c5ac` = 1e-5 (dirty 0x200) | | D |
-| 0x1000 | 1 | MTE control (dirty 0x400) | ctx+0x798 | D |
-| 0x4000 (+0x8000) | 2 | TSP texcoord sizes, texcoord precision mask (dirty 0x1000) | program +0x24c, +0x250 | D |
+| header bit | words | group | tag |
+|---|---|---|---|
+| 0x1 | 1 | ISPA, object type bits 15-18 replaced per draw | capture; hardware (open driver) |
+| 0x2 | 1 | ISPB (present when ISPA b9) | capture; hardware (open driver) |
+| 0x4 | 1 | ISPC, front stencil (present when ISPA b8) | capture; hardware (open driver) |
+| 0x8, 0x10, 0x20 | 3 | second-face ISPA, ISPB, ISPC (two-sided stencil). Each face has its own ISPA reference. In a y-flipped window the first group (0x1, 0x2, 0x4) holds GL's **back** face's words and this one GL's front: the first group is the faces wound CCW in the target's memory (`stencil2`, header `df7f`, 2026-11-02) | capture; hardware (open driver) |
+| 0x40 | 3 | PDS: secondary, middle word, primary (from the fragment program) | capture; hardware (open driver) |
+| 0x80 | 2 | region clip, sticky until the next one (clears, driver objects, draws without a clear before them): `b31 \| xmin<<16 \| xmax`, `ymin<<16 \| ymax`, in 32×16-px tiles; the target's tiles or the scissor's | hardware |
+| 0x100 | 6 | viewport | hardware |
+| 0x200 | 1 | always 0 | capture |
+| 0x400 | 1 | output select (from the vertex program) | capture; hardware (open driver) |
+| 0x800 | 1 | W clamp, `0x3727c5ac` = 1e-5 | capture |
+| 0x1000 | 1 | MTE control | capture; hardware (open driver) |
+| 0x4000 (+0x8000) | 2 | TSP texcoord sizes, texcoord precision mask (from the program) | capture; hardware (open driver) |
 
 - The clear's header is `d4c3` and the triangle's `df43`.
 - The type-4 VDM info word's low bits follow this block's length:
-  `(dwords+3)>>2` (12 → 3, 13 → 4, 18 → 5), ORed with the DDK's 2-bit
-  counter (`ctx+0xc80`) [D].
+  `(dwords+3)>>2` (12 → 3, 13 → 4, 18 → 5) [capture], ORed with a 2-bit
+  counter the DDK keeps [unconfirmed: never seen nonzero, see "Field
+  layouts for packing"].
 - The DMA reads 25 dwords for the triangle's 18-word block. The extra words
   are whatever follows; the header alone says where the block ends.
 - The two-sided block (22 words, header `df7f`) is read with 27 dwords
@@ -329,45 +318,48 @@ with the context dirty bits in parentheses:
   DMA length is the part that matters: at 25 or 24 dwords the two-sided
   draws come out blank or with wrong channels, differently from run to run;
   at 27 or 28 they draw, whatever the info word says (dEQP
-  `fragment_ops.random`, 2026-11-02). The driver reads `max(25, words + 5)`.
+  `fragment_ops.random`, 2026-11-02) [hardware]. The driver reads
+  `max(25, words + 5)`.
 
-### ISPA (ctx+0x780)
-
-| bits | field | tag |
-|---|---|---|
-| 0-7 | stencil reference (single-sided; front/back in ISPC otherwise) | D (code) |
-| 8 | ISPC follows (stencil enabled with a stencil buffer) | D |
-| 9 | ISPB follows: always set | D |
-| 11 | two-sided stencil: set in both the front and the back group's ISPA | capture (`stencil2`, 2026-11-02) |
-| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord); see "Lines and points" | C (1, 4) |
-| 20 | depth write disable | D |
-| 21 | no color write: color mask 0, or a blend that keeps the destination (ZERO, ONE) | D |
-| 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | C (greater) |
-| 25-27 | pass type: 0 opaque, 1 translucent (any glBlendFunc; `b1`/`b2`/`b3` captures), 2 translucent + discard, **3 viewport/scissor generate** (`viewport`/`scissor` captures), 4 punch-through (discard/alpha test), 5 depth-only (stencil/discard special case) | D |
-
-### ISPB (ctx+0x784)
+### ISPA
 
 | bits | field | tag |
 |---|---|---|
-| 4-7 | color write mask: R = 8, G = 4, B = 2, A = 1 | D |
-| 8-15 | line width × 16 (1.0 → 0x10, 9.5 → 0x98); points keep 0x10, their size is a vertex output | C |
-| 23 | depth bias (POLYGON_OFFSET_FILL) | D |
+| 0-7 | stencil reference (single-sided; front/back in ISPC otherwise) | capture (`s1`..`s6`); hardware (open driver) |
+| 8 | ISPC follows (stencil enabled with a stencil buffer) | capture; hardware (open driver) |
+| 9 | ISPB follows: always set | capture |
+| 11 | two-sided stencil: set in both the front and the back group's ISPA | capture (`stencil2`, 2026-11-02); hardware (open driver) |
+| 15-18 | object type, set per draw: 0 triangles, 1 lines, 3 points, 4 point sprites (generates gl_PointCoord), 5 a triangle's edges, 6 a triangle's vertices; 7 locks up the 3D core; see "Lines and points" and "Polygon mode and edge flags" | hardware (1, 4, 5, 6, 7); capture (0, 3); hardware (open driver) |
+| 20 | depth write disable | capture (`dmask0`); hardware (open driver) |
+| 21 | no color write: color mask 0, or a blend that keeps the destination (ZERO, ONE) | capture (`cmask0`); hardware (open driver) |
+| 22-24 | depth compare, `GL enum - 0x200`: never, less, equal, lequal, greater, notequal, gequal, always. Depth test off, or no depth buffer, gives always + no write (`0x01d00000`) | hardware (greater); capture (`dless`, `dnever`, `dgreater`); hardware (open driver) |
+| 25-27 | pass type: 0 opaque, 1 translucent (any glBlendFunc; `b1`/`b2`/`b3` captures), 2 translucent + discard, **3 viewport/scissor generate** (`viewport`/`scissor` captures), 4 punch-through (discard/alpha test), 5 depth-only (stencil/discard special case) | capture (0, 1, 3); hardware (4: run a5; 0, 1, 3, 4: open driver); unconfirmed (2, 5) |
 
-### ISPC: stencil (ctx+0xa0 front, +0xa4 back)
+### ISPB
 
 | bits | field | tag |
 |---|---|---|
-| 0-7 | write mask (glStencilMask) | D |
-| 8-15 | compare mask (glStencilFunc mask) | D |
-| 16-18 | zpass op | D |
-| 19-21 | zfail op | D |
-| 22-24 | sfail op | D |
-| 25-27 | compare, `GL enum - 0x200`; 7 (`0xe000000`) when stencil is off | D |
+| 4-7 | color write mask: R = 8, G = 4, B = 2, A = 1 | capture (`cmask`); hardware (open driver) |
+| 8-15 | line width × 16 (1.0 → 0x10, 9.5 → 0x98); points keep 0x10, their size is a vertex output | hardware |
+| 23 | depth bias (POLYGON_OFFSET_FILL) | capture (`polyoff`); hardware (open driver) |
+
+### ISPC: stencil
+
+The front face's word and the back face's word.
+
+| bits | field | tag |
+|---|---|---|
+| 0-7 | write mask (glStencilMask) | capture; hardware (open driver) |
+| 8-15 | compare mask (glStencilFunc mask) | capture; hardware (open driver) |
+| 16-18 | zpass op | capture; hardware (open driver) |
+| 19-21 | zfail op | capture; hardware (open driver) |
+| 22-24 | sfail op | capture; hardware (open driver) |
+| 25-27 | compare, `GL enum - 0x200`; 7 (`0xe000000`) when stencil is off | capture; hardware (open driver) |
 
 The op codes are 0 keep, 1 zero, 2 replace, 3 incr, 4 decr, 5 invert,
 6 incr_wrap and 7 decr_wrap.
 
-Confirmed field by field by the `s1`..`s6` captures:
+Seen field by field in the `s1`..`s6` captures:
 
 - `0400f0ff` = EQUAL, compare mask 0xf0, write mask 0xff;
 - `0453f0ff` = ops ZERO/REPLACE/INCR;
@@ -375,23 +367,25 @@ Confirmed field by field by the `s1`..`s6` captures:
 
 **glClearStencil** is the clear object getting ISPC `0e0200ff` (always,
 zpass = replace, write mask 0xff) with the clear value as its ISPA
-reference (`cstencil`).
+reference (`cstencil`) [capture].
 
 ### PDS words
 
 - **Word 0 (secondary) and word 2 (primary):**
-  `(data bytes/16)<<26 | (addr - 0x2e000000)>>4` [D].
+  `(data bytes/16)<<26 | (addr - 0x2e000000)>>4` [capture; hardware, open
+  driver].
   - The secondary program DMAs the fragment uniforms and runs the secondary
     USSE program.
   - The primary program runs the fragment shader: DOUTU, plus DOUTI and
     DOUTT per input.
-- **Word 1:** from the fragment program object +0x64.
-  - b18-24 = (secondary attribute dwords + 3)>>2 [D].
+- **Word 1:** from the fragment program.
+  - b18-24 = (secondary attribute dwords + 3)>>2 [capture; hardware, open
+    driver].
   - b0-15 = the primary attributes in units of 4 dwords, at least 1. A
     program that reads more attributes than the word declares locks the GPU:
     two F32 vec4 varyings under a constant `…0001` (2026-10-28, log
-    `2026-10-28-1530-gl4es-ctest`; hardware).
-  - b16-17 = 3 in every capture [D].
+    `2026-10-28-1530-gl4es-ctest`) [hardware].
+  - b16-17 = 3 in every capture [capture].
   - b25-28 = `12 / units` (integer) when the program has no secondary
     attributes (b18-24 = 0), and 0xb when it has some. The DDK's built-in
     clear program has 0. From the 2026-11-08 captures, with n vec4 varyings
@@ -406,8 +400,8 @@ reference (`cstencil`).
     | 2 highp | `0c030002` | 2 | 0 | 6 |
 
     A mediump or lowp vec4 varying takes 2 dwords (F16) and a highp one 4,
-    so units = ceil(attribute dwords / 4). [D, captures]. Gap: the rule with
-    both secondaries and more than one unit.
+    so units = ceil(attribute dwords / 4). [capture]. The rule with both
+    secondaries and more than one unit is [unconfirmed].
 
 ### The DDK's fragment programs for a flat color and one sample
 
@@ -451,7 +445,7 @@ uniform; SRC_ALPHA, ONE_MINUS_SRC_ALPHA).
 
 So for these two cases the DDK does no per-pixel format conversion. The
 color is packed per draw, and the texel stays in the U8 format the sampler
-delivers. [D, capture]
+delivers. [capture]
 
 ### Viewport (6 floats)
 
@@ -462,20 +456,24 @@ z scale.
 - On a window, y scale = -h/2 and y offset = H - (y + h/2). On a pbuffer
   (EGL type 4), y scale = +h/2 and y offset = y + h/2.
 - z offset = (n+f)/2, and z scale = (f-n)/2.
-- Status: x offset [C]; the rest [D] (`viewport`, `drange` and `pb`
-  captures).
+- Status: x offset [hardware: p1]; the rest [capture: `viewport`, `drange`
+  and `pb` captures; hardware, open driver].
 
-### MTE control (ctx+0x798)
+### MTE control
 
 - **b0-1, cull:** 0 = none, 1 = cull CW-in-screen, 2 = cull CCW-in-screen.
   - GL CCW front with cull BACK gives 1; cull FRONT gives 2.
   - With CW front the two swap.
   - FRONT_AND_BACK is 0 here; GL drops those draws itself.
-  - Status: C. On the replay, 2 removes the probe triangle and 1 keeps it.
-    In the captures, `cullb` gives 1, and `cullf` and `cullcw` give 2.
-- **The rest is a GL constant, `0x1555620`** [G]. The clear object uses `0x40`.
+  - Status: hardware. On the replay, 2 removes the probe triangle and 1
+    keeps it. In the captures, `cullb` gives 1, and `cullf` and `cullcw`
+    give 2.
+- **The rest is a constant, `0x1555620`** [capture: every draw; any meaning
+  is a guess]. The clear object uses `0x40` [capture]. The DDK's ES1 draws
+  use `0x15555620`, and `0x3a0` with flat shading ("Flat shading" below)
+  [capture].
 
-### Output select (vertex program +0x248) and TSP words
+### Output select and TSP words
 
 - **Output select:** `(vertex output dwords)<<16 | 0x3000`, with `| 0x100`
   when the shader writes the point size.
@@ -483,42 +481,72 @@ z scale.
   - The clear's own value is `0x00081800` (8 dwords: position and color).
     Its texcoord-size word is 5 (one 4-component set: the color) and its
     MTE control 0x40.
-  - Status: D.
-- **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
-  base4 capture; 4 input dwords from one vertex stream, 8 output dwords):
-
-      phas.i #<phase 1>, #0 [wait=2]; then the prologue (nop / test / ld pa / wdf)
-      mov o0, pa0 [skipinv rcnt rpt=3]                o0-o2 = x, y, z
-      mov o3, c3 [skipinv rcnt]                       o3 = 1.0 (w)
-      pck.f32.u8 o4, pa3.l2, pa3.l2 [skipinv rcnt scale]   R = byte 2 of the ARGB8888 word
-      pck.f32.u8 o5, pa3.l1, pa3.l1 [...]                  G = byte 1
-      pck.f32.u8 o6, pa3,    pa3    [...]                  B = byte 0
-      pck.f32.u8 o7, pa3.l3, pa3.l3 [...]                  A = byte 3
-      emit.t3 r0, #0, #0 [end f12 f10]
-      phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12 f10 f3_20]
-
+  - **The vertex color.** ES1 draws with a color have `0x00083800`: the usual
+    `0x3000` plus b11, which the clear's `0x1800` has too. Their vertex
+    program writes the color as 4 F32 dwords in o4-o7, right after the
+    position; TSP word 0 counts it as one 4-component set (5) and word 1
+    is 0. The pixel program iterates it with DOUTI source 0x20, 4
+    components (`27c10000`), not as tc0 (capture: `es1base`, 2026-11-11).
+    It arrives as **one packed dword in pa0**, not as 4 F32: the DDK's whole
+    pixel program is `mov o0, pa0` after the `phas.i`, so pa0 is the pixel
+    as the PBE takes it, BGRA8 (B in bits 0-7, A in 24-31), and the frame is
+    right. Its DOUTU word 1 iterates one dword (`01000004`); the DOUTI has
+    b21 = 0 (capture: `es1base`). What b21 = 1 does to the format is not
+    captured.
+  - **The open stack draws GL's flat colors this way** (**hardware**, a
+    CE5300 board, 2026-11-12): output select `0x00083800`, the color as
+    4 F32 in o4-o7, TSP word 0 = 5, DOUTI `25c10000`, and the pixel program
+    unpacking pa0 with `pck.f32.u8` (lanes R = 2, G = 1, B = 0, A = 3). MTE
+    control stays at the ES2 value `01555620`. The flat-shademodel test
+    probe reads (0, 255, 0), the provoking vertex's color; the 96 clipflat
+    subtests and gl-1.0-dlist-shademodel pass, with no GPU resets.
+  - **With a texture as well** (capture: `e1tex`, ES1 GL_MODULATE, an 8×8
+    RGBA texture, per-vertex color):
+    - The texture coordinate follows the color. Output select is
+      `0x000a3800`: o0-o3 position, o4-o7 color, o8-o9 the coordinate.
+    - TSP word 0 = `0x15`: set 0 = 5 (the color), set 1 = 2.
+    - One merged DOUTI, `67c10201`, iterates the color and samples the
+      texture. Its sample half's set field (bits 0-4, set + 1) is **1**:
+      the value tc0 gets in a draw without a color, though TSP word 0 counts
+      this coordinate as set 1 (which would give 2). So the sample index
+      counts the coordinate sets with the color left out.
+    - DOUTU word 1 is `03000004` (one iteration, one sample). The pixel
+      program is `sop2 o0, pa0, pa1`: the color in pa0, the texel in pa1.
+    - Not covered: a coordinate set *iterated* (not sampled) next to the
+      color, so whether the iterate half's source leaves the color out as
+      well is unknown.
+  - That b11 is what turns the first set into the color source is a
+    **guess**: every working draw has it, and none has been run without it.
+    No second color source (0x21) has been seen.
+  - Status: capture; hardware (open driver).
+- **The clear's vertex program** (the DDK's built-in; 4 input dwords from one
+  vertex stream, 8 output dwords) moves the position, sets w to 1.0 and unpacks
+  the color word's four bytes to floats.
   So the vertex stream is x, y, z (floats) and the color as one ARGB8888
   word, and the outputs are position (4) then color as 4 floats in 0-1
-  [D, capture].
+  [capture].
 - **TSP word 0:** 3 bits per texcoord set: 1, 2, 3 components, or 5 for 4
-  components [D].
-- **TSP word 1:** a bitmask of the sets whose precision value is at most 2 (libGLESv2 0x203bc: `cmpl $0x2, 0x4c(set)`, `ja` skips) [D].
+  components [capture; hardware, open driver].
+- **TSP word 1:** a bitmask of the sets iterated at F16: mediump and lowp
+  sets, not highp [capture].
   - In the 2026-11-08 captures, 1-5 mediump vec4 varyings give 0x1, 0x3, 0x7,
     0xf and 0x1f, two lowp give 0x3, and two highp give 0.
   - TSP word 0 is 5 per set throughout (`2d`, `16d`, `b6d`, `5b6d`).
   - The output select is `(4 + 4n)<<16 | 0x3000` whatever the precision: the
-    vertex outputs stay 32-bit. [D, captures]
+    vertex outputs stay 32-bit. [capture]
 
 ### Blending and the color mask are shader code
 
 - **The SGX545 has no fixed-function blender.**
-  - glBlendFunc and glBlendEquation only change ctx+0xf8/+0xfc. Those feed
-    the fragment-shader variant, which gets blend code appended. They also
-    set ISPA's pass type (translucent) and b21.
-  - The clear color and glBlendColor go into the variant's constants.
+  - glBlendFunc and glBlendEquation change no state word but ISPA's pass
+    type (translucent) and b21. The fragment shader gets blend code
+    appended. [capture]
+  - The clear color and glBlendColor go into the shader's constants
+    [capture].
 - **The color mask is both shader code and ISPB.** It is ISPB b4-7, plus a
-  masked `0x90b00601 | mask<<11` move appended to the shader
-  (libGLESv2 `FUN_000459.. `, 0x35b00), plus ISPA b21 when the mask is 0.
+  masked move appended to the shader, plus ISPA b21 when the mask is 0
+  [capture]. That the appended move's word is `0x90b00601 | mask<<11` is
+  [unconfirmed].
 
 So reproducing GL blending means generating the shader epilogue, not
 setting a state word.
@@ -532,7 +560,8 @@ setting a state word.
   clear changes nothing).
 
 **Decoded on a CE5300 board** (`b1`, `cm1`-`cm3` captures of probe-st; the Mesa
-driver draws them the same way, byte-identical to the DDK):
+driver draws them the same way, byte-identical to the DDK) [capture;
+hardware, open driver]:
 
 - **The blend** is one `sop2` after the color:
   `sop2 o0, pa0, o0 [skipinv end c1=s1a c2=1-s1a cop=add a1=s1a a2=1-s1a aop=add]`
@@ -550,18 +579,19 @@ driver draws them the same way, byte-identical to the DDK):
   R b2, A b3). It comes with ISPB's mask, and ISPA stays opaque.
 - **Blend and mask together.** The DDK's sop2 loses `end` and writes `r0`,
   then the sopwm reads pa0. One more word changes, 0x2e018020 in `cm2`
-  (0x00010700 → 0x01010700), perhaps a temporary count for that r0. The Mesa driver writes the blend
-  back to pa<c> instead, with the same pixels.
+  (0x00010700 → 0x01010700), perhaps a temporary count for that r0 [guess].
+  The Mesa driver writes the blend back to pa<c> instead, with the same
+  pixels.
 
 ### Constant-color blending
 
-`sgxs_blend_const` in `tools/state/sgxstate.h` builds the five
-instructions. They are bit-exact with the DDK's for k1-k5, k7 and k8.
+The Mesa winsys (`blend_const_words` in `sgx_frame.c`) builds the five
+instructions [hardware, open driver].
 
 sop2's selectors can't name a constant. With any CONSTANT_COLOR /
 ONE_MINUS_CONSTANT_COLOR / CONSTANT_ALPHA / ONE_MINUS_CONSTANT_ALPHA
-factor, libGLESv2 (`FUN_000457d0`, the tables at `DAT_0006d000`-`d100`)
-multiplies each side out with sopwm and adds the halves:
+factor, the DDK multiplies each side out with sopwm and adds the halves
+[capture: k1-k8]:
 
     sopwm r1, Y, o0      [c1=zero c2=Fd]           dst * Fd (all four bytes)
     sopwm r1, Y, o0      [mask=8 c1=zero c2=Fda]   alpha byte: dst.a * Fda
@@ -573,10 +603,10 @@ multiplies each side out with sopwm and adds the halves:
   factor reads.
 - **The constant is the blend color, packed BGRA8 like the color, in a
   fragment secondary attribute.** The DDK puts it in sa2 of its 11-dword
-  constant DMA: glBlendColor(0.25, 0.5, 0.75, 0.375) = `604080bf` [D].
-- Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [D].
+  constant DMA: glBlendColor(0.25, 0.5, 0.75, 0.375) = `604080bf` [capture].
+- Products round to nearest: 204 × 64/255 = 51.2 gives 51 (`k1`) [capture].
 - Turning k1's src-RGB sopwm into 1-s2 or s2a reproduces the DDK's own
-  ONE_MINUS_CONSTANT_COLOR and CONSTANT_ALPHA frames [C, b2 b3].
+  ONE_MINUS_CONSTANT_COLOR and CONSTANT_ALPHA frames [hardware: b2, b3].
 - The final sop2 carries the blend equation (2026-11-08 captures, src
   CONSTANT_COLOR, dst ONE_MINUS_CONSTANT_COLOR):
   - FUNC_ADD: `sop2 o0, r0, r1 [... cop=add aop=add]` (`81848805 00000001`);
@@ -585,10 +615,11 @@ multiplies each side out with sopwm and adds the halves:
     `sop2 o0, r1, r0` (`81848805 00050080`).
 
   The four sopwm products are the same in all three. With CONSTANT_ALPHA /
-  ONE_MINUS_CONSTANT_ALPHA the factors become `s2a` / `1-s1a`. [D, captures]
+  ONE_MINUS_CONSTANT_ALPHA the factors become `s2a` / `1-s1a`. [capture]
 
 **k18/k19 are not a constant.** In `kb0` (ONE, ZERO) the sop2 was turned
-into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery):
+into `c1=k18`, `c2=k19`, `a1=k18` and `a2=k19` (`kk1`-`kk4`, discovery)
+[hardware: kk1-kk4]:
 
 - k19 reads 0 in color and alpha.
 - k18 as c1 reads a different value per 4×4 block, zero in R and G. The
@@ -601,30 +632,29 @@ So neither can carry a blend color. The sopwm form above is what to use.
 
 ### Alpha test (ES1)
 
-The ES1 driver (libGLES_CM, `tools/probe/probe1.c` captures `e1*`) needs
+The DDK's ES1 driver (`tools/probe/probe1.c` captures `e1*`) needs
 no state words for it. The fragment program ends in one visibility-test
 instruction instead of its final `mov o0, color`:
 
     atst8 o0, p0.nw, pa0, sa0, sa1  [end]      f0000001 f934000d   (e1gt5)
 
-with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
-`sgxs_atst8`, `sgxs_atst_depth_word` and `sgxs_atst_alpha_word`.
+with ISPA pass type 1 (`03d00200`).
 
 **The operands.** The secondary program writes sa0 and sa1 with DOUTA:
 
 | word | value | fields | tag |
 |---|---|---|---|
-| sa0, depth | `0000e00f` | `0xe000 \| depth func (GL - 0x200, 7 with no depth test) \| 8 when depth writes are off` | D |
-| sa1, alpha | `80008e00` (GREATER 0.5) | `ref8 << 24 \| alpha func (GL - 0x200) << 13 \| 0xe00`, ref8 = round(ref × 255): 0.5 → 128, 0.25 → 64 | C |
+| sa0, depth | `0000e00f` | `0xe000 \| depth func (GL - 0x200, 7 with no depth test) \| 8 when depth writes are off` | capture |
+| sa1, alpha | `80008e00` (GREATER 0.5) | `ref8 << 24 \| alpha func (GL - 0x200) << 13 \| 0xe00`, ref8 = round(ref × 255): 0.5 → 128, 0.25 → 64 | hardware |
 
 - From `e1gt5`, changing sa1 to the reference 0.25 reproduces the DDK's
   own `e1gt25` frame. Changing it to LESS or GEQUAL reproduces `e1lt5` and
-  `e1ge5`. All 0 pixels off [C, a1-a3].
-- ALWAYS (`8000ee00`) draws the frame with no alpha test [C, a7].
+  `e1ge5`. All 0 pixels off [hardware: a1-a3].
+- ALWAYS (`8000ee00`) draws the frame with no alpha test [hardware: a7].
 - The Mesa driver's discard `atst8` (`f9340406`, sa3/sa4) carries these
   same two words with the alpha function ALWAYS (`0xee00`). So its discard
   program does an alpha test as soon as sa4 has another function and
-  reference.
+  reference [unconfirmed].
 
 **The instruction.** atst8 fields:
 
@@ -637,13 +667,13 @@ with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
 
 The DDK's ES1 words also set **h3** (`sel36` in dis.py). With h3 cleared
 the replay's render stalls (447 ms) and leaves the right part of the frame
-unwritten, with no SGX recovery [C, a6]. Keep it.
+unwritten, with no SGX recovery [hardware: a6]. Keep it.
 
 **Pass type.** It must not be opaque. With pass type 0 the failing pixels
-are drawn with garbage [C, a4]. Pass type 4 (punch-through, the Mesa
-driver's discard) works exactly like the DDK's 1 [C, a5].
+are drawn with garbage [hardware: a4]. Pass type 4 (punch-through, the Mesa
+driver's discard) works exactly like the DDK's 1 [hardware: a5].
 
-**Variants** [D]:
+**Variants** [capture]:
 
 - **Textured** (`e1texat`, GL_MODULATE): `sop2 r0, pa0, pa1` modulates,
   then `atst8 o0, p0.nw, r0, sa0, sa1 [end]` (`f9340009`).
@@ -662,7 +692,6 @@ per pixel**, and every object is drawn only where it is set. Pass type 3
 ("viewport generate") objects write the bit and draw nothing else. The
 **region clip** (group 0x80) limits which tiles the TA bins an object into,
 and it is **sticky**: an object without group 0x80 keeps the last one.
-`tools/state/sgxstate.h` builds all of it (`sgxs_scissor_objects`).
 
 **The two objects** (TA block header `d485`: ISPA, ISPC, region clip,
 output select, MTE, TSP; 9 dwords, DMA kind 0; no PDS group, so no pixel
@@ -674,23 +703,24 @@ program runs):
 | set | `07e00100` | `02000000` (b25-27 = 1) | the rectangle's tiles | 4-vertex strip TL TR BL BR, VDM prim 3 |
 
 - ISPA `07e00100`: pass type 3, b21 no color write, depth always with
-  write, ISPC follows [D].
-- ISPC b25-27: 0 resets the bit under the object, 1 sets it [C, q1 q4].
+  write, ISPC follows [capture; hardware, open driver].
+- ISPC b25-27: 0 resets the bit under the object, 1 sets it [hardware: q1,
+  q4].
 - The vertices are 2 dwords (x, y). The vertex program is
   `mov o0, pa0 [rpt=2]; mov o2, c3; mov o3, c3` (z = w = 1.0), output
-  select `0x00040000`, MTE `0x40` [D]. The words are in `sgxstate.h`.
+  select `0x00040000`, MTE `0x40` [capture; hardware, open driver].
 - Pixel centers inside the strip get the bit: moving its left edge from
-  x 100 to 150 moved the scissor's edge [C, q2].
-- The set object only reaches its region clip's tiles [C, q3].
+  x 100 to 150 moved the scissor's edge [hardware: q2].
+- The set object only reaches its region clip's tiles [hardware: q3].
 - **Region clip words:** `0x80000000 | x0/32 << 16 | (x1-1)/32`,
   `y0/16 << 16 | (y1-1)/16`, for a rectangle `[x0,x1) × [y0,y1)` in target
   pixels. `glScissor(37, 23, 101, 57)` on 720×480 = x 37..138, y 400..457 =
-  `80010004 0019001c` [D, sc2].
+  `80010004 0019001c` [capture: sc2; hardware, open driver].
 - **Draws inherit it:** with the reset turned into a set (everything
   visible), the triangle was still cut to the tiles of the clear before it
-  (columns 3-9, rows 20-26), 0 pixels off that prediction [C, q1].
+  (columns 3-9, rows 20-26), 0 pixels off that prediction [hardware: q1].
 
-**What libGLESv2 emits** (captures `sc1`-`sc6`, `vp1`, `nc0`) [D]:
+**What the DDK emits** (captures `sc1`-`sc6`, `vp1`, `nc0`) [capture]:
 
 1. A render that doesn't start with a full-target clear starts with a
    **load object**: a full-target triangle (0,0) (1440,0) (0,960), x y z u v
@@ -718,20 +748,19 @@ program runs):
    `d481`, full region clip). The next draw's block then carries only the
    changed groups (header `d483`: ISPA, ISPB, a full region clip), with no
    PDS or viewport group. So every group of the TA state block is sticky,
-   not just the region clip [D].
+   not just the region clip [capture].
 8. A partial glViewport (`vp1`, no scissor): the clear stays full-target;
    the draw is preceded by reset + set over the viewport rectangle and has
    the viewport transform of section 3.
 
 ### Lines and points
 
-`tools/state/sgxstate.h` has the words (`sgxs_prim`, `sgxs_ispa_objtype`,
-`sgxs_ispb_width`, `sgxs_point_size_word`, `sgxs_line_list_indices`).
 
 **Primitives.** The VDM index-list word is
 `0x80000000 | 0x00c00000 | prim << 26 | count`. prim is 0 triangles,
 1 lines, 2 points, 3 triangle strip, and b28 makes prim 0 a fan
-(`90c00004`) [D]. There is no line strip or loop. The DDK's GL_LINE_STRIP of
+(`90c00004`) [capture; hardware, open driver]. There is no line strip or
+loop. The DDK's GL_LINE_STRIP of
 4 vertices is a prim-1 list of count 6 over the identity indices
 (`lstrip`): its 2(n-1) vertices are the strip's n plus n-2 that follow them
 in memory, so its frame equals GL_LINES' (`cmp` identical) and with real
@@ -741,21 +770,22 @@ GL_LINE_LOOP is right: count 8 over its own indices 0 1 1 2 2 3 3 0
 loop does.
 
 **ISPA object type** (b15-18, replaced per draw): 0 triangles, 1 lines, 3
-points, 4 point sprites [D].
+points, 4 point sprites [capture].
 
 - A line list with object type 0 draws nothing, whether the VDM prim is
-  turned into lines (`tri2`) or the type turned off (`ln1`) [C, l3 l4].
+  turned into lines (`tri2`) or the type turned off (`ln1`) [hardware: l3,
+  l4].
 - Object type 4 is what generates gl_PointCoord: with 3 instead, the same
-  points are drawn the same size but the coordinate reads 0 [C, p4].
+  points are drawn the same size but the coordinate reads 0 [hardware: p4].
 
 **Line width** is ISPB b8-15 = width × 16, truncated, at most `ff`: 1.0
 `10`, 1.06 `10`, 4 `40`, 9.5 `98`, 16 `ff`. The DDK's other draws all carry
-`10` [C, l1 l2; D, `ln106` `ln16`]. glLineWidth clamps to [1, 16]
-(libGLESv2 0x255b0) [D].
+`10` [hardware: l1, l2; capture: `ln106`, `ln16`]. glLineWidth clamps to
+[1, 16] [unconfirmed].
 
 **Points.** A point draw's vertex program writes one output dword after
 the position and the varyings: **the size as an f32**, clamped to 511.0, the
-largest point size [D; no draw of ours has run this yet].
+largest point size [capture; no draw of ours has run this yet].
 
 - A computed size: `fminmax o6, pa4, pa4, sa10.f16.lo [fmt]` (corpus `vo_ps`;
   `ptattr`), which is min(x, 511) with sa10's low half = 0x5ffc. The fminmax
@@ -766,40 +796,200 @@ largest point size [D; no draw of ours has run this yet].
   pa10.f16.hi, pa10.f16.lo` (corpus `vo_psk`), which leaves min(size, 511) in
   sa10 as an f32 before the vertex program reads it.
 - Changing the loaded word's size from 8.0 to 16.0 draws the DDK's own
-  16-pixel frame [C, p1]. That replay still runs the secondary program, so
-  it doesn't show the output format by itself.
-- Output select gets 0x100 (`00073100`) [D].
+  16-pixel frame [hardware: p1]. That replay still runs the secondary
+  program, so it doesn't show the output format by itself.
+- Output select gets 0x100 (`00073100`) [capture].
 - The ES2 driver gives every point draw a two-component texcoord set ahead
   of the size (TSP words 2 and 1). The vertex program doesn't write it
-  (o4-o5 stay unwritten), so output select counts 4 + 2 + 1 = 7 [D].
+  (o4-o5 stay unwritten), so output select counts 4 + 2 + 1 = 7 [capture].
 - The ES1 driver adds that set only for a sprite. `e1pt` has none (output
   select 9 = position 4 + color 4 + size 1). `e1spr` puts it after the
-  vertex color (11, TSP word `0x15`) [D]. So it is only needed when
+  vertex color (11, TSP word `0x15`) [capture]. So it is only needed when
   gl_PointCoord is read.
 - The coordinate set comes first, as tc0. A shader's own varyings follow it
   (a varying vec2 is iterated as tc1), and the size comes last: `ptvar` /
-  `sprvar` have output select `00093100`, 4 + 2 + 2 + 1, size in o8 [D].
+  `sprvar` have output select `00093100`, 4 + 2 + 2 + 1, size in o8
+  [capture].
 - In a sprite (object type 4) the ISP writes gl_PointCoord there, and the
   pixel program iterates it as tc0 (`DOUTI iterate tc0 x2 f16`, DOUTU w1
-  b24) [D]. The values are `(i + 0.5) / size` across the point, origin top
-  left. As `round(255 × value)` this predicts the DDK's 16-pixel sprites
-  exactly, and resized ones at 8 and 32 [C, p2 p3].
-- A point's square is `[c - size/2, c + size/2)` around its center [C].
-- Without gl_PointSize written (`pt1`) the DDK draws nothing.
+  b24) [capture]. The values are `(i + 0.5) / size` across the point, origin
+  top left. As `round(255 × value)` this predicts the DDK's 16-pixel sprites
+  exactly, and resized ones at 8 and 32 [hardware: p2, p3].
+- A point's square is `[c - size/2, c + size/2)` around its center
+  [hardware: p1-p3].
+- Without gl_PointSize written (`pt1`) the DDK draws nothing [capture].
+
+### Clip planes, shading, polygon and line state: native or lowered
+
+What GL 2.1 asks of rasterization, against what the hardware is known to do.
+"Native" means a state word does it; the rest is lowered in the shader or
+on the CPU. The driver already gathers vertices on the CPU (`sgx_screen.c`,
+vertex buffers), so CPU expansion costs a copy it already makes.
+
+| GL state | how | tag |
+|---|---|---|
+| cull face, front face | native: MTE control b0-1 | hardware |
+| polygon offset (fill) | native: ISPB b23 per state block; units and factor are render details +0x14/+0x18, **one pair per render**, so a change of values splits the render (`depth_bias` in the winsys) | capture (`polyoff`); hardware (open driver) |
+| line width | native: ISPB b8-15 = width × 16, at most 16 | hardware |
+| point size, sprites | native: a vertex output; ISPA object type 4 generates gl_PointCoord | hardware |
+| line strips and loops | lowered: no strip primitive; expanded to line lists | hardware |
+| scissor, viewport | native: region clip plus pass-type-3 objects | hardware |
+| user clip planes | native: `fdpc` into cp<n> in the vertex program, enabled by output select b0-5 | capture (`cp1`, `cp2`, `cp6`, `cpnone`) |
+| flat shading, provoking vertex | native for the color source (0x20): pixel PDS DOUTI b25-26 = 2; coordinate sets have no flat switch; the last vertex provokes | hardware (`fl-douti` replay); capture (`flat`) |
+| logic ops | shader code: pass type 1, and the program combines its color with o0, which holds the destination | capture (`lxor`, `lcinv`) |
+| polygon mode LINE/POINT, edge flags | native for the mode: ISPA object type 5 draws a triangle's edges, 6 its vertices; edge flags not known | hardware (`ot5`, `ot6` replays) |
+| polygon offset for LINE/POINT modes | follows polygon mode: ISPB b23 on an object type 5 or 6 draw is untried | unconfirmed |
+| line stipple | no ES state, so no DDK capture; no field known; lowered | — |
+| polygon stipple | no ES state, no field known; lowered | — |
+| line and point smooth | no hardware antialiasing seen: the DDK draws a smooth line 1 px wide and a smooth point 1 px | capture (`lsmooth`, `psmooth`) |
+
+**User clip planes are native** (**capture**: `probe1` with
+`PROBE_CLIPPLANE`, 2026-11-11: one plane `1 0 0 0` (`cp1`), two (`cp2`), six
+(`cp6`) and one that cuts nothing, `1 0 0 1` (`cpnone`)). The read-backs
+clip exactly: `cp1` keeps the triangle's x ≥ 0 half, `cp2` its x, y ≥ 0
+quarter, `cp6` less again, and `cpnone` matches the base pixel for pixel.
+Against the base, the DDK changes three things and nothing else (no MTE
+control, TA header or ISP word):
+
+- **The vertex program** computes the eye-space position and, for plane n,
+  ends with `fdpc o(7+n), cp<n>, pa0, c52 [rpt=2 inc0 inc1]` (as `dis.py`
+  prints it). Six planes give `cp0` to `cp5`, one `fdpc` each; no `fddpc`.
+  The planes' coefficients arrive as constants in the PDS vertex program's
+  data (the values 1, -1, 0.4 and 0.2 of `cp6` are there).
+- **Output select** (TA block word, `0x304110b4` in these captures) gets
+  one bit per plane in b0-5 and one more output dword per plane:
+  `00083800` with none, `00093801` with one, `000a3803` with two,
+  `000e383f` with six. The `fdpc` result is that extra output. Which output
+  register it lands in (o7+n as printed, or o8+n after the repeat) is
+  **unconfirmed**: the count says 8 + n dwords.
+- **The VDM draw words** follow the bigger program: the vertex PDS
+  program's address and data size.
+
+So the TA clips against the `fdpc` results of the planes whose bit is set.
+The driver sets `caps->clip_planes = 0` today, so st/mesa lowers user planes
+into the vertex shader (`nir_lower_clip_vs` writes gl_ClipDistance). The
+native path is: the compiler emits each distance with an `fdpc` into cp<n>
+as an extra output, and the driver sets output select's mask and count. How
+the compiler gets a gl_ClipDistance through `fdpc` (a dot product of the
+distance with a unit vector, or of the position with the plane) is its
+choice (**guess** until the hardware test below). Clipping in the TA works
+on lines too, so the discard fallback, which can't run on lines, isn't
+needed.
+
+- **Test (open stack):** a replay or `sgx_hwt` frame with one `fdpc` into
+  cp0 and output select `00093801`, drawing a triangle and a line across
+  the plane, read back. It confirms the output slot and that lines clip.
+- **Fallback, if the test fails:** `nir_lower_clip_fs` turns the distances
+  into varyings and a discard. That costs the punch-through pass and a
+  varying per four planes, and **not on lines:** any program with
+  visibility feedback breaks a frame drawn with lines, whether or not the
+  discard is taken (ISA.md, "Phases, visibility feedback and discard":
+  hardware). Clipped lines would have to be drawn as thin triangles.
+
+**Flat shading.** ES1 has `glShadeModel(GL_FLAT)`, so a `probe1` capture with
+`PROBE_SHADEMODEL=0x1D00` against the base (`0x1D01`) (**capture**, `flat`,
+2026-11-11). The whole triangle reads back (0, 0, 255), the third vertex's
+color: the last vertex provokes, as GL wants. Three words change, each by
+itself in its own buffer:
+
+| word | smooth (base) | flat |
+|---|---|---|
+| pixel PDS DOUTI for the color (`0x2e01802c`) | `27c10000` (b25-26 = 3) | `25c10000` (b25-26 = 2) |
+| MTE control (TA block, `0x304110bc`) | `15555620` | `000003a0` |
+| VDM draw word 2 (`0x3e519038`) | `f0000000` | `f4000000` (b26) |
+
+**DOUTI b25-26 alone is the switch** (**hardware**: replays of the base on a
+CE5300 board, 2026-11-11, one word changed at a time). With `25c10000` the
+dump matches the `flat` capture pixel for pixel. The MTE control and VDM
+draw word changes, alone, leave the dump byte for byte equal to the base.
+PDS.md has b25-26 as 3 on every shader entry and 0 on the clear's and
+background's iterations, so the field is the iteration's shading mode,
+with 2 flat and 3 smooth (Gouraud), **for the color source (0x20) only**.
+On a texture-coordinate set (source 1, F16 or F32) b25-26 = 2 still
+interpolates (**hardware**, the open stack on a CE5300 board, 2026-11-11).
+So GL's flat colors go through the color source, and a GLSL `flat` varying
+on a coordinate set has no known switch (CPU de-indexing with the provoking
+vertex's values is the fallback). What the MTE
+control word and VDM b26 change is unknown. Neither selects the provoking
+vertex: replays of `flat` with the MTE word set back to `15555620`, with
+VDM b26 cleared, and with both, all give the capture's dump byte for byte,
+the last vertex's color (**hardware**, 2026-11-11). A first-vertex
+convention has no known field; rotating each triangle's indices is the
+fallback. The MTE control word was a constant in every ES2
+capture (`01555620`); what its other fields mean is still a **guess**.
+
+**Logic ops.** The ES1 has `glLogicOp`. Blending and the color mask are
+fragment-shader code here (§3, "Blending and the color mask are shader
+code"), and a logic op is too (**capture**: `probe1` `PROBE_LOGICOP=0x1506`
+(XOR, `lxor`) and `0x150C` (COPY_INVERTED, `lcinv`), 2026-11-11). Against the
+base, two things change: ISPA goes from pass type 0 to 1 (`01d00200` →
+`03d00200`), and the pixel program's one instruction, `mov o0, pa0`,
+becomes `xor o0, pa0, o0` for XOR and `and.inv o0, c56, pa0` for
+COPY_INVERTED (c56 holding all ones). Under pass type 1, o0 starts as the
+destination pixel, packed 8888. The read-backs agree: the centre's
+(63, 64, 128, 160) over the background (0, 0, 128, 255) gives (63, 64, 0, 95)
+for XOR and (192, 191, 127, 95) for COPY_INVERTED. `nir_lower_blend` already
+takes a logic op (`logicop_enable`, `logicop_func`). The compiler's side, a bitwise table of
+the 16 ops after the color, is in ISA.md "What a compiler needs".
+
+**Polygon mode and edge flags.**
+- **The ISP has polygon modes** (**hardware**: replays of the base triangle
+  on a CE5300 board, 2026-11-11, with ISPA b15-18 changed):
+  - Type 5 draws the triangle's three edges as 1-pixel lines, with the
+    vertex colors interpolated along each edge: 840 pixels, two per row
+    down the sides and the whole bottom row.
+  - Type 6 draws its three vertices as single pixels, in the vertex colors.
+  - Types 1 (lines), 2 and 3 (points) draw nothing from triangle data, as a
+    line list drawn with type 0 draws nothing (§3, "Lines and points").
+  - Type 7 locks up the 3D core (HWR, `lockup_3d`). Never write it.
+- So GL_LINE and GL_POINT polygon modes are type 5 and type 6 on a
+  triangle draw. Front and back can differ, since ISPA is per side.
+  Unknown: the width and size these draw with (1 pixel at line width 1 and
+  no point size here), whether ISPB's line width applies, whether a vertex
+  output gives type 6 a point size, and how edge flags are given. Polygon
+  offset on them is untried (the table above).
+- **Lowered, for edge flags:** `u_unfilled_indices` (gallium aux) rewrites
+  triangle indices into line or point lists, and the CPU expansion has the
+  per-vertex flag to hand.
+
+**Line and polygon stipple.**
+- **Line stipple:** the CPU already expands strips and loops, so it can add
+  a per-vertex distance along the line, in pixels. The fragment shader then
+  discards by the pattern and factor, both uniforms.
+- **Polygon stipple:** `util_pstipple` (gallium aux) puts the 32×32 pattern
+  in a texture and adds a discard to the fragment shader.
+- Both discard, so both pay for the punch-through pass. A discard breaks a
+  frame with lines (see "User clip planes" above), so stippled lines have to
+  be drawn as thin triangles: two per segment, from the same CPU expansion.
+
+**Line and point smooth.** ES1 has `GL_LINE_SMOOTH` and `GL_POINT_SMOOTH`.
+The DDK antialiases neither (**capture**: `lsmooth`/`lsharp`, a width-3
+line, and `psmooth`/`psharp`, a 16-px point, 2026-11-11):
+- with `GL_LINE_SMOOTH` the only change is ISPB's width, `30f0` → `10f0`
+  (3.0 → 1.0), and the line reads back 1 px wide (360 pixels against
+  1080);
+- with `GL_POINT_SMOOTH` the only change is the point size the vertex
+  program writes, 16 → 1, and the point reads back as one pixel.
+
+So no state word for smoothing shows up. GL lets a driver report a smooth
+line width range and point size range of 1 to 1, which fits what the DDK
+draws (**guess**: the DDK's ranges weren't queried). Mesa's
+`nir_lower_poly_line_smooth` gives real coverage in the shader, at the cost
+of a blend.
 
 ## 4. The render target
 
 ### The end-of-tile program (pixel event → EOT USSE program)
 
 - Render details +0x5c points at the pixel event PDS program (0x2e006000,
-  from libsrv_um's static template).
+  the same program in every capture).
 - Its ds1[1] is a DOUTU word for the end-of-tile USSE program, here
   0x37004000.
 - The program starts with `phas.i #0, #0 [wait=7]` (`fa440700 00000000`).
   The pixel event's DOUTU starts it with w0 = ds1[1] = `0x01008000`
-  (w0[31:22] = 4, the temporaries for r0-r3) [D, capture].
-- `FUN_000301d0` builds that program as four LIMMs that load the PBE words
-  into r0-r3, then two EMITPIX. The disassembler shows them as
+  (w0[31:22] = 4, the temporaries for r0-r3) [capture].
+- The program is four LIMMs that load the PBE words into r0-r3, then two
+  EMITPIX [capture; hardware, open driver]. The disassembler shows them as
   `emit.t0 r0, r1, r0 [f3_20 imm=2048]` and
   `emit.t0 r2, r3, r0 [end f3_20 imm=1536]`, the second imm being the
   sideband word (0x600):
@@ -811,42 +1001,37 @@ largest point size [D; no draw of ours has run this yet].
 
 ### The pixel event program (render details +0x5c)
 
-The DDK's, from the base4 capture (0x2e006000, data 0x50 bytes, 29
-instructions). The data rows:
+The 3D runs it for pixel events with the event word in in1, the tile position
+in in0 and a word to forward in in2. What it must do, by in1:
 
-| word | value | what |
-|---|---|---|
-| ds0[0], ds0[1] | `00010400`, 0 | DOUTU of the ptoff task (`0x37008200`) |
-| ds1[0] | 0 | compare operand for in1's b8 test |
-| ds1[1] | `01008000` | DOUTU w0 of the end-of-tile task (`0x37004000`, temps 4) |
-| ds0[2], ds0[3] | `01010500`, `00c00000` | DOUTU of the pixel-event emit task (`0x37008280`, temps 4), w1 = b22 \| b23 |
-| ds1[2], ds1[3], ds1[4] | 8, 2, 4 | the in1 bit masks |
-| ds0[4]..ds0[8] | `00000100 00000ff8 00800000 003ff000 00400000` | masks for building the end-of-tile DOUTU w1 |
-
-The code, by in1 (the event word the hardware passes):
-
-- in1 & 8 → DOUTU the **ptoff** task, then halt. That task is
-  `phas.i #0, #0 [wait=7]; ptoff [end]`.
-- else in1 & 2 → test `op0xd(in1, ds1[0]) & 0x100`:
-  - if set → `douta in2 → attr 0`, then DOUTU the **end-of-tile** task with
-    w1 = `(in0<<3 & 0xff8) | 0x00800000 | (in0<<3 & 0x3ff000) | (in1<<20 & 0x400000)`;
-  - else → the emit task below.
-- else in1 & 4 → DOUTU the **pixel-event emit** task, which is
+- in1 & 8 → start the **ptoff** task (`phas.i #0, #0 [wait=7]; ptoff [end]`),
+  then halt.
+- else in1 & 2:
+  - with in1 b8 **clear** → `douta in2 → attr 0`, then start the
+    **end-of-tile** task with DOUTU w1 =
+    `(in0<<3 & 0x3ffff8) | 0x00800000 | (in1<<20 & 0x400000)`;
+  - with b8 set → the emit task below.
+  [hardware: the open program; with the b8 test reversed nothing is drawn]
+- else in1 & 4 → start the **pixel-event emit** task,
   `phas.i #0, #0 [wait=7]; limm r0, #0; emit.t0 r0, #0, r0 [end f3_20 imm=512]`.
 - else halt.
 
-[D, capture]. What each in1 bit is (end of tile, end of render, …), and
-what in0 and in2 carry, is G. `docs/PDS.md` has the instruction encodings.
+The end-of-tile and emit tasks take 4 temporaries; the emit task's DOUTU w1
+is b22 | b23.
 
-### PBE words (`FUN_0004e7a0`)
+[capture]. What each in1 bit is (end of tile, end of render, …), and
+what in0 and in2 carry, is [guess]. `docs/PDS.md` has the instruction
+encodings.
+
+### PBE words
 
 | word | ref.bin | field | tag |
 |---|---|---|---|
-| 0 | 00000000 | clip min `y0<<16 \| x0` | D |
-| 1 | 01df02cf | clip max `y1<<16 \| x1` (719, 479) | C |
-| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px). The DDK pads a pbuffer's or FBO's pitch to a multiple of 8 pixels, at least 8, and a window's to 32: widths 1, 2, 3 → 8 (field 3), 16 → 16, 17 → 24, 33 → 40, FBO 64 → 64, FBO 65 → 72, window 720 → 736. So the field is always odd, and a pitch of 1 or 2 pixels is never encoded [D, 2026-11-08 captures]; b15 = set unless the surface's `param_1[6]` is non-zero: set for the back buffer *and* for fb0 (the swap), and with it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag. It is set on every surface the 2026-11-08 captures render to: window, pbuffers and both FBOs; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | C (stride) |
-| 3 | 3e265000 | address, & ~3 (moved for rotated surfaces) | D |
-| side | 0x600 | b0-5 = PBE format code (format table +0x84: 0 BGRA8888, 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, see `docs/TEX.md`); b9 = always; b10 = dither (GL_DITHER); b12 = `param 7`; **b13 = twiddled destination** (table `DAT_0006d5bc` = {0, 0x2000} by memory layout; the transfer queue's texture uploads set it) [C]; b6-11 += `param_2[5]<<6` for format codes 3-14 | D |
+| 0 | 00000000 | clip min `y0<<16 \| x0` | capture |
+| 1 | 01df02cf | clip max `y1<<16 \| x1` (719, 479) | hardware |
+| 2 | 016f8000 | b16-27 = (stride in pixels)/2 - 1 (367 → 736 px). The DDK pads a pbuffer's or FBO's pitch to a multiple of 8 pixels, at least 8, and a window's to 32: widths 1, 2, 3 → 8 (field 3), 16 → 16, 17 → 24, 33 → 40, FBO 64 → 64, FBO 65 → 72, window 720 → 736. So the field is always odd, and a pitch of 1 or 2 pixels is never encoded (2026-11-08 captures); b15 = set on every surface the 2026-11-08 captures render to: window, pbuffers and both FBOs, the back buffer *and* fb0 (the swap). With it cleared the PBE writes nothing at the address (replay, `docs/TEX.md` section 6), so it is not a scanout flag; b28-29 = rotation (0x10000000·k), b30-31 = downscale/AA (0x40000000·k) | hardware (stride: p6; b15 cleared: TEX.md section 6); capture (padding, b15 set); unconfirmed (b28-31) |
+| 3 | 3e265000 | address, & ~3 (moved for rotated surfaces) | capture; hardware (open driver); unconfirmed (rotated surfaces) |
+| side | 0x600 | b0-5 = PBE format code (0 BGRA8888, 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, see `docs/TEX.md`); b9 = always; b10 = dither (GL_DITHER); b12 = set by the DDK under a condition not identified, never seen set; **b13 = twiddled destination** (set by the destination's memory layout; the transfer queue's texture uploads set it); for format codes 3-14 a per-surface value is added at b6-11 (0 in every capture) | capture (`dither0`, codes 0, 1, 3, 5); hardware (b13; codes 0, 1, 3); unconfirmed (code 4, b12, the b6-11 add) |
 
 - The back buffer of a window is BGRA8888, top row first, with a pitch of
   720 rounded up to 32 = 736 px: 0x159000 bytes = 736 × 480 × 4.
@@ -857,51 +1042,53 @@ what in0 and in2 carry, is G. `docs/PDS.md` has the instruction encodings.
 - Every surface EGL gave the probe was BGRA8888, PBE format code 0:
   windows, and pbuffers whether 5 6 5 or 8 8 8 8 was requested (`pb`,
   `pb8888`, `pbd`).
-- So code 0 = BGRA8888 [D]. The other codes are in libGLESv2's per-format
-  table (`DAT_0006d5e4`, 0x8c bytes per entry, PBE code at +0x84, which is
-  static data): 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, 0x18 8-bit,
-  0x1b LA88. FBO render targets confirm 1, 3 and 5 (sideband 0x2601,
-  0x2603, 0x2605: twiddled + dither), and RGBA8888 and RGB565 render-to-texture
-  replays are pixel-exact (`docs/TEX.md` section 4) [C].
+- So code 0 = BGRA8888 [capture]. The DDK's per-format table gives the
+  other codes: 1 RGBA8888, 3 RGB565, 4 RGBA5551, 5 RGBA4444, 0x18 8-bit,
+  0x1b LA88 [unconfirmed]. FBO render targets confirm 1, 3 and 5 (sideband
+  0x2601, 0x2603, 0x2605: twiddled + dither) [capture], and RGBA8888 and
+  RGB565 render-to-texture replays are pixel-exact (`docs/TEX.md` section 4)
+  [hardware].
 
 ### Screen and tiles
 
-- The TE tile is 32 × 16 pixels. SGXAddRenderTarget computes
-  `xtiles = (w+31)/32` and `ytiles = (h+15)/16`.
+- The TE tile is 32 × 16 pixels. The render target's tile counts are
+  `xtiles = (w+31)/32` and `ytiles = (h+15)/16` [capture; hardware, open
+  driver].
 - **Region clip** (TA block group 0x80):
   - word 0 = `0x80000000 | xmin tile << 16 | xmax tile`;
   - word 1 = `ymin tile << 16 | ymax tile`;
   - the whole 720×480 target is 0..22, 0..29;
-  - sticky TA state, see "Scissor and partial viewports" [C].
+  - sticky TA state, see "Scissor and partial viewports" [hardware].
 - glScissor is not a hardware rectangle; see "Scissor and partial
   viewports" in section 3.
 - **Pbuffers** (`pb` 64×32, `pb2` 128×48): 2×2 macrotile mode
   (MTILE1 = MTILE2 = `01004004`, 16 tiles per macrotile), positive viewport
   y scale, and PBE stride = width rounded up to 32. All of it is
-  reproduced by `build.py`.
+  reproduced by `build.py` [capture].
 
 ## 5. Texture state (DOUTT, 4 words per sample)
 
 The pixel PDS program sends DOUTT right after the DOUTI that starts the
-sample. libGLESv2 `FUN_00047b90` builds each word as `(per-unit state & mask)
-| override`. The per-unit state is ctx+0xa00 + unit·0x40, copied from the
-texture object.
+sample. Each word combines the texture's state with a part the sample
+instruction sets, `(texture state & mask) | sample part` [unconfirmed as a
+rule for all four words; T3 below is the case the captures show].
 
 | word | field | tag |
 |---|---|---|
-| 0 | see the table below: filter (min, mag, mip), wrap S/T, format | D |
-| 1 | b0-11 = height-1, b12-23 = width-1; b24-31: see the table below | D |
-| 2 | texture base address (texture heap 0xf0000000; the render target for the background object) | D |
-| 3 | see the table below | D |
+| 0 | see the table below: filter (min, mag, mip), wrap S/T, format | capture; hardware (open driver) |
+| 1 | b0-11 = height-1, b12-23 = width-1; b24-31: see the table below | capture; hardware (open driver) |
+| 2 | texture base address (texture heap 0xf0000000; the render target for the background object) | capture; hardware (open driver) |
+| 3 | see the table below | capture |
 
-From the texture object (glTexParameter, `FUN_00037670`):
+glTexParameter sets these T0 bits [capture: the `t*` captures below;
+hardware, open driver]:
 
-- **wrap S:** texobj+0x1c b6-8: 0 repeat, 1 mirror (0x40), 2 clamp (0x80);
-- **wrap T:** texobj+0x1c b3-5: 0 repeat, 1 mirror (8), 2 clamp (0x10);
-- **min filter** (texobj+0x50): NEAREST `0x1e0000`, LINEAR `0x1e0400`,
+- **wrap S:** b6-8: 0 repeat, 1 mirror (0x40), 2 clamp (0x80);
+- **wrap T:** b3-5: 0 repeat, 1 mirror (8), 2 clamp (0x10);
+- **min filter:** NEAREST `0x1e0000`, LINEAR `0x1e0400`,
   N_MIP_N `0x1a0000`, L_MIP_N `0x1a0400`, N_MIP_L `0x1a0200`,
   L_MIP_L `0x1a0600`;
-- **mag filter** (texobj+0x54): NEAREST 0, LINEAR `0x1000`.
+- **mag filter:** NEAREST 0, LINEAR `0x1000`.
 
 ### Texture words, measured
 
@@ -927,39 +1114,42 @@ named otherwise; each differs from `t8888` in one thing.
 | tmip2 (LINEAR_MIPMAP_LINEAR, mag LINEAR) | 07f**a1600** | | | |
 | tmipb (mipmaps generated, min NEAREST) | 07fe0000 | | | |
 
-**T0** (the texture object's +0x1c | +0x50 | +0x54, ORed with the unit's
-constant):
+**T0** (the wrap bits, the min filter bits and the mag filter bit, ORed
+with a constant):
 
 | bits | field | tag |
 |---|---|---|
-| 3-5 | wrap T: 0 repeat, 1 mirror, 2 clamp | C (mirror) |
-| 6-8 | wrap S: 0 repeat, 1 mirror, 2 clamp | C (mirror) |
-| 9 | mip filter linear | D |
-| 10 | min filter linear | D |
-| 12 | mag filter linear | C |
-| 17-20 | 0xf without mipmaps, 0xd with (b18 = mipmapping off) | D |
-| 21-26 | **LOD bias**, one 6-bit field v in 1/8 levels: bias = (v - 63)/8, so the DDK's 0x3f is no bias. Level sampled = floor(λ + bias + 0.5). On a CE5300 board, for 16- to 128-texel chains, the shift is the same at every size: v 63..59 → 0, 58..51 → -1, 47/43 → -2, 39/35 → -3, 19 → -5, 3 → -7. Not a clamp: GL's MAX_LEVEL/MAX_LOD need another mechanism. Whether a positive bias reaches into b27 is untested | C |
-| 30 | set for L8, A8 and LA88 (channel replication?) | D |
+| 3-5 | wrap T: 0 repeat, 1 mirror, 2 clamp | hardware (mirror: p9); capture; hardware (open driver) |
+| 6-8 | wrap S: 0 repeat, 1 mirror, 2 clamp | hardware (mirror: p9); capture; hardware (open driver) |
+| 9 | mip filter linear | capture; hardware (open driver) |
+| 10 | min filter linear | capture; hardware (open driver) |
+| 12 | mag filter linear | hardware |
+| 17-20 | 0xf without mipmaps, 0xd with (b18 = mipmapping off) | capture; hardware (open driver) |
+| 21-26 | **LOD bias**, one 6-bit field v in 1/8 levels: bias = (v - 63)/8, so the DDK's 0x3f is no bias. Level sampled = floor(λ + bias + 0.5). On a CE5300 board, for 16- to 128-texel chains, the shift is the same at every size: v 63..59 → 0, 58..51 → -1, 47/43 → -2, 39/35 → -3, 19 → -5, 3 → -7. Not a clamp: GL's MAX_LEVEL/MAX_LOD need another mechanism. Whether a positive bias reaches into b27 is untested | hardware |
+| 30 | set for L8, A8 and LA88 (channel replication?) | capture; hardware (open driver); guess (the meaning) |
 
 **T1:**
 
 | bits | field | tag |
 |---|---|---|
-| 0-11 | height - 1 | D |
-| 12-23 | width - 1 | D |
-| 24-28 | format: 0x02 RGBA4444 (stored ARGB4444), 0x04 RGBA5551 (stored ARGB1555), 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | D |
-| 29-31 | layout: 2 cube map (`cube`, T1 `4d00f00f`, 2026-11-02), 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch - 1) low 3 bits in b9-11, the rest in b17-26 [D], `docs/TEX.md` section 3; counted in 32-bit words, the same as texels for 32-bit formats, see §5 background). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | D |
+| 0-11 | height - 1 | capture; hardware (open driver) |
+| 12-23 | width - 1 | capture; hardware (open driver) |
+| 24-28 | format: 0x02 RGBA4444 (stored ARGB4444), 0x04 RGBA5551 (stored ARGB1555), 0x05 RGB565, 0x0c BGRA8888 (render target), 0x0d RGBA8888 (RGB888 is uploaded as 8888), 0x19 A8, 0x1a L8, 0x1b LA88 | capture; hardware (open driver) |
+| 29-31 | layout: 2 cube map (`cube`, T1 `4d00f00f`, 2026-11-02), 0 twiddled (power of two), 3 linear (NPOT; no stride field), 6 strided (T0 then holds the pitch: (pitch - 1) low 3 bits in b9-11, the rest in b17-26, `docs/TEX.md` section 3; counted in 32-bit words, the same as texels for 32-bit formats, see §5 background). Memory layouts 0 and 3 are in `docs/TEX.md` section 1 | capture; hardware (open driver) |
 
 **T2:** the base address. The mip levels follow the base level; the chain
 length is implied by the size, since no word changed with the level count.
 
-**T3:** the shader half of `(state & mask) | override`. It depends on the
-sample instruction, not the texture: `tex1` gives `00800800` and `tex2`
-`01028800` [D]. The background object's load of the render target (its pixel program
-`0x2e0060e0` in the base4 capture: DOUTU, one DOUTI sampling tc0, then
-DOUTT) gives `00800000`, with T0 `00b60e90`, T1 `cc2cf1df` and T2 = the render
-target's address [D, capture]. Gap: what the 0x800 part that the shader
-samples add, and the background lacks, does.
+**T3:** the shader's half of the word. It depends on the sample
+instruction, not the texture: `tex1` gives `00800800` and `tex2`
+`01028800` [capture]. The background object's load of the render target
+(its pixel program `0x2e0060e0` in the base4 capture: DOUTU, one DOUTI
+sampling tc0, then DOUTT) gives `00800000`, with T0 `00b60e90`, T1
+`cc2cf1df` and T2 = the render target's address [capture]. What the 0x800
+part that the shader samples add, and the background lacks, does is
+[unconfirmed]. Three fields are known from open-stack runs [hardware;
+TEX.md §14-15]: b29-31 the shadow compare function, b16-17 the compare
+result format, and the low bits (b0-6 at least) a volume's depth - 1.
 
 **The background's T0 and T1 follow the surface**, from the 2026-11-08
 pbuffer and FBO captures:
@@ -975,71 +1165,73 @@ pbuffer and FBO captures:
     which is pitch − 1 in 32-bit words, not texels.
 
   So the pitch field counts 32-bit words; for the 32-bit surfaces the two
-  are the same. One 16-bit data point. [D, captures]
+  are the same. One 16-bit data point. [capture]
 
 ## 6. HW render context, render details, parameter buffer
 
 ### HW render context (68 bytes, SGX_REGISTER_HW_RENDER_CONTEXT)
 
-`SGXCreateRenderContext` builds it. The kernel copies it, writes the PD
-physical address at byte offset 8, and returns its device address (here
-0x3000e000).
+The client builds it. The kernel copies it, writes the PD physical address
+at byte offset 8, and returns its device address (here 0x3000e000).
 
 | word | ref.bin | field |
 |---|---|---|
-| 0 | 0x21 | flags: b0 = 1, b5 = per-context PB [D] |
+| 0 | 0x21 | flags: b0 = 1, b5 = per-context PB [capture; hardware, open driver (0x21); unconfirmed (b5's meaning)] |
 | 1 | 0 | |
-| 2 | 0 | page directory, filled by the kernel (`ui32OffsetToPDDevPAddr` = 8) [D] |
-| 3 | 3200f000 | CCB base (kdata, 0x10420 bytes: a 0x10000-byte ring and 0x420 bytes of room past its end, so a command that starts near the end runs on contiguously; the control words are word 4's block, not this) [D] |
-| 4 | 3200aa40 | CCB control: write offset, read offset (kdata, 8 bytes) [D] (0x3200aa60 is a transfer context's) |
-| 5 | 0 | commands in progress: the microkernel adds 1 when it takes a kick (pc 0x0122) and subtracts 1 when it advances the read offset (pc 0x0808) [D, trace] |
-| 6 | 3200e000 | PB descriptor (kdata, 0x3c) [D] |
-| 7 | 10462000 | 0x40-byte scratch block in the 3D params heap (the microkernel's per-context data) [D] |
+| 2 | 0 | page directory, filled by the kernel (`ui32OffsetToPDDevPAddr` = 8) [capture; hardware, open driver] |
+| 3 | 3200f000 | CCB base (kdata, 0x10420 bytes: a 0x10000-byte ring and 0x420 bytes of room past its end, so a command that starts near the end runs on contiguously; the control words are word 4's block, not this) [capture; hardware, open driver] |
+| 4 | 3200aa40 | CCB control: write offset, read offset (kdata, 8 bytes) [capture; hardware, open driver] (0x3200aa60 is a transfer context's) |
+| 5 | 0 | commands in progress: the microkernel adds 1 when it takes a kick and subtracts 1 when it advances the read offset [capture: microkernel trace] |
+| 6 | 3200e000 | PB descriptor (kdata, 0x3c) [capture; hardware, open driver] |
+| 7 | 10462000 | 0x40-byte scratch block in the 3D params heap (the microkernel's per-context data) [capture; hardware, open driver] |
 | 8-15 | 0 | |
-| 16 | pid | creating process ID (replaying the captured one is harmless) [D] |
+| 16 | pid | creating process ID (replaying the captured one is harmless) [capture; hardware, open driver] |
 
 **The command ring.** The client writes each command at the control's write
 offset and then sets the write offset to `(woff + size) & 0xffff`, with size
 the command's word 0 (0x2c0 for a TA command). The microkernel reads the
 command at CCB base + read offset and advances the read offset by the same
-size, `& 0xffff` (pc 0x07fc-0x0804). A command is never split at the ring's
-end: one that starts near it runs into the 0x420 bytes of room. The transfer
-context's ring has 0x4c8 bytes of room. [D, code and trace]
+size, `& 0xffff`. A command is never split at the ring's end: one that
+starts near it runs into the 0x420 bytes of room. The transfer context's
+ring has 0x4c8 bytes of room. [capture: microkernel trace; hardware, open
+driver]
 
-### PB descriptor (kdata, 0x3c, `FUN_0001e980`)
+### PB descriptor (kdata, 0x3c)
 
 The PB is allocated as the requested size + 0x22000 bytes in the 3D params
 heap. Here that is 0x400000 + 0x22000 = 0x422000 bytes = 0x422 pages.
 
 | off | ref.bin | field |
 |---|---|---|
-| 0x00 | 0 | flags: b1-4 = app-hint thresholds overridden |
+| 0x00 | 0 | flags: b1-4 = app-hint thresholds overridden [unconfirmed] |
 | 0x04 | 0x422 | pages in the PB |
 | 0x08 | 04210000 | free list head: `last page<<16 \| first page` |
 | 0x0c | 04200000 | `(last page - 1)<<16` |
 | 0x10 | 10422000 | free list address |
-| 0x14 | 0 | 0 at kick 1; 0x19 after the first TA (pages in use?) [G] |
+| 0x14 | 0 | 0 at kick 1; 0x19 after the first TA (pages in use?) [guess] |
 | 0x18, 0x1c | | copies of 0x08, 0x0c |
 | 0x28 | 0x432 | TA threshold = pages + 0x10 |
 | 0x2c | 0x400 | ZLS threshold = pages - 0x22 |
 | 0x30 | 0x400 | global threshold = pages - 0x22 |
 | 0x34 | 0x300 | PDS threshold = min(ZLS, TA) - 0x100 |
-| 0x38 | 3200e03c | PB block list (kdata, 0x10 bytes): {pages, first page \| last page<<16, PB descriptor address, 0} (`FUN_0001e980`; the capture has 0x3200e000) |
+| 0x38 | 3200e03c | PB block list (kdata, 0x10 bytes): {pages, first page \| last page<<16, PB descriptor address, 0} (the capture has 0x3200e000 there) |
 
-All [D] (formula and capture agree).
+All other rows [capture; hardware, open driver]: the formulas match the
+captures, and the open driver writes them.
 
-**Free list** (3D params heap, 0x40000 bytes, `FUN_0001e980`): one u32 per
+**Free list** (3D params heap, 0x40000 bytes): one u32 per
 page, `prev<<16 | next`, indexed by page number from the heap base. Page 0 has prev 0xffff, and the last page has next
 0xffff: `ffff0001 00000002 00010003 … 041f0421 0420ffff`. The client writes
-it once, before the first kick.
+it once, before the first kick. [capture; hardware, open driver]
 
-### Render target (`SGXAddRenderTarget`)
+### Render target
 
-For w × h, no multisampling:
+For w × h, no multisampling [capture: the probe's 720×480 window (mode 1)
+and the pbuffers (mode 0); hardware, open driver]:
 
 - `xt = (w+31)>>5` and `yt = (h+15)>>4`. For 720×480 that is 23 × 30.
-- **Macrotile mode 0** (w·h < 0x4b000 pixels, the MTModePixelThreshold
-  hint): 2×2 macrotiles.
+- **Macrotile mode 0** (w·h < 0x4b000 pixels, a DDK threshold setting):
+  2×2 macrotiles. The exact threshold is [unconfirmed].
   - `mx = ((xt+1)>>1 + 3) & ~3` and `my = ((yt+1)>>1 + 3) & ~3`.
   - MTILE1 = `mx | mx<<12 | mx<<22`, and MTILE2 likewise from my.
 - **Mode 1** (larger): 4×4 macrotiles.
@@ -1049,19 +1241,56 @@ For w × h, no multisampling:
 - TE screen = `(yt-1)<<12 | (xt-1)`.
 - Tiles per macrotile = mx·my (tail +0x248).
 
+### Multisampling (4x)
+
+The DDK's ES2 gives a window config with `EGL_SAMPLES` 4 (sample buffers 1,
+samples 4) and renders it as 2×2 samples per pixel, resolved to one sample
+per pixel at the end of each tile (**capture**: `ms1` / `ms4` and `ms1d` /
+`ms4d`, 720×480, one triangle, clear + draw + swap, 2026-11-11; `msaa-2026-11-11`).
+
+- **The read-back is a box resolve.** The 4-sample frame has 480 edge pixels
+  at exactly 1/4, 2/4 and 3/4 of the triangle's green over the clear's blue
+  (green `3f`, `7f`, `bf`), and the 1-sample frame none.
+- **The color target is unchanged:** same address, stride (736), clip
+  (720×480) and sideband. Only PBE word 2 changes, `016f8000` →
+  `416f8000`: b30, the field the decoder calls rot/aa, = 1. That is the
+  downscale (**guess** from the read-back: the PBE writes the resolved
+  pixel).
+- **TE and tiling** (tail): TE AA `20000000` → `e0000000` (b31 and b30:
+  2x in X and in Y). MTILE1 `82010018` → `8180c012`: the macrotile X
+  boundaries go from 8/16/24 to 6/12/18. Tiles per macrotile 0x40 → 0x30
+  (6 × 8). MTILE2, TE screen (`0001d016`, 23 × 30 tiles) and the screen
+  size are unchanged. So the tile grid stays in pixels, and the X
+  macrotiles shrink.
+- **Region headers and tail pointers grow:** the arrays are 0x9000 and
+  0x4000 bytes against 0x3000 and 0x1000 (RT data's sizes go along:
+  +0x8 0x20 → 0x30, +0x20 4 → 0xc, +0x24 0x300 → 0x900, +0x3c 0x1000 →
+  0x4000). The PB descriptor's +0x14 goes 0x19 → 0x59 after the frame.
+- **Depth and stencil are per sample, and always there.** Even without a
+  depth config (`ms4`), the DDK allocates a 0x6bd000-byte buffer, 4 × the
+  1-sample depth+stencil buffer (`ms1d`: 0x1af400 = 736 × 480 × 5 bytes).
+  It turns on ZLS through the deferred render-details updates: control
+  `0017116c` (with `ms1d`'s `001710b4`, the x-tiles field goes from 22 to
+  45, twice as wide), store offsets 0x81000, and loads with b31.
+- **Other words:** 3D flags (+0x1c) 0x400 → 0x580 (b7 | b8, the ZLS
+  bits), render details +0x10 `80000000` → `80000002` (b1), and the TA
+  command grows to 0x300 bytes for the six deferred updates.
+- Not seen: 2 or 8 samples (only 4 was captured), a multisampled FBO, and
+  whether the 2x-wide ZLS layout is sample-interleaved per pixel.
+
 ### RT data (kdata, `nbuf·0x38 + 0x18` bytes; nbuf = 2)
 
 - **Header:**
   - [0] = the address of a 4-byte kdata word, the frame word. The client
     writes the frame index + 1 there before each scene. The microkernel never
-    reads it (DDK trace): it is the client's own record of which entry is next;
+    reads it [capture: microkernel trace]: it is the client's own record of
+    which entry is next;
   - [1] = a completion counter the microkernel advances. +1 at the finish of
-    a TA that does not end the scene (pc 0x069e-0x06a3), +1 at the end of a
-    render whose render details +0xd4 has b10 (pc 0x0fb1-0x0fb6). The DDK
-    trace shows 0, 1, 2 over a two-kick frame. Its starting value doesn't
-    matter to the microkernel: the DDK client writes 1, the open clients and
-    powervr_sgx write 0, and both render. The DDK's debug output calls it
-    "RT frames";
+    a TA that does not end the scene, +1 at the end of a render whose render
+    details +0xd4 has b10. The DDK trace shows 0, 1, 2 over a two-kick frame
+    [capture]. Its starting value doesn't matter to the microkernel: the DDK
+    client writes 1, the open clients and powervr_sgx write 0, and both
+    render [hardware]. The DDK's debug output calls it "RT frames";
   - [2] = padded tiles in X (mx·4 = 0x20);
   - [5] = nbuf.
 - **Per entry (0x38 bytes from +0x18):**
@@ -1083,25 +1312,25 @@ For w × h, no multisampling:
   | 12 | 4-byte kdata word |
   | 13 | 0x10 |
 
-  All [D] from the code and the capture; the purposes of the 0x40, 0x50
-  and 0x88 TA-data blocks are [G].
+  All [capture; hardware, open driver]; the purposes of the 0x40, 0x50
+  and 0x88 TA-data blocks are [guess].
 
 - **Which entry renders.** The client names the entry in the TA command
   (+0x44, which the microkernel reads as render details +0xdc). It alternates
   by frame: the frame word's value & 1 picks the entry. Entry word 1 holds
   the render in flight on that entry; the render's end clears it and sets the
   entry's state word (+0x34) to `0x10 | (render details +0xd4 >> 14) << 12`
-  (pc 0x0fa1-0x0fab). If the alternation and the frame word disagree, the
-  frames retire the wrong entry: their PB pages are never freed, and the 3D
-  locks up on the fourth frame (2026-10-28).
+  [capture: microkernel trace]. If the alternation and the frame word
+  disagree, the frames retire the wrong entry: their PB pages are never
+  freed, and the 3D locks up on the fourth frame (2026-10-28) [hardware].
 - **Renders in flight.** The microkernel tracks two renders in flight in
-  the TA3D control block (+0x50 and +0x54; the kick picks a free slot at
-  pc 0x09b7-0x09d3, and the render's end clears its slot at 0x0fbe-0x0fc5).
-  So one RT data set with its two entries holds two renders in flight. The
-  open clients keep one set per render target they draw to back to back
-  (the back buffer, then the swap's front buffer), so a render never waits
-  on the other target's. Gap: what a third kick does while both entries
-  have a render in flight is untested.
+  the TA3D control block (+0x50 and +0x54; the kick picks a free slot, and
+  the render's end clears its slot) [unconfirmed]. So one RT data set with
+  its two entries holds two renders in flight. The open clients keep one set
+  per render target they draw to back to back (the back buffer, then the
+  swap's front buffer), so a render never waits on the other target's. What
+  a third kick does while both entries have a render in flight is
+  [unconfirmed].
 
 ### Region headers and tail pointers (TA data heap)
 
@@ -1115,78 +1344,83 @@ For w × h, no multisampling:
   them. After kick 2 a region header reads `00000000 00001000 00000000`
   (offset of that tile's control stream in the PB, 0x80 apart), and the
   tail pointers `8040xxxx`.
+- [capture; hardware, open driver]
 
 ### Background object block (3D params heap, 0x200 bytes)
 
-`FUN_0001f990` fills it once per RT. The render details point at it as
+The client fills it once per RT. The render details point at it as
 `0x2000000 | (addr - PB base)>>4` (+0x48).
 
-- [0-2] = 0 from the client. The microkernel writes them at every 3D start
-  (pc 0x128d-0x1296): [0] = render details +0x130 and [1] = +0x134 (the
-  background object's PDS secondary and middle words, cmd+0x08 and +0x0c),
-  and [2] = the word at render details +0x114 + 4 × (+0x108) (its PDS
-  primary). [D, trace]
-- [3-8] = a 2-D rotation matrix (identity + RT+0x30 for no rotation).
+- [0-2] = 0 from the client. The microkernel writes them at every 3D start:
+  [0] = render details +0x130 and [1] = +0x134 (the background object's PDS
+  secondary and middle words, cmd+0x08 and +0x0c), and [2] = the word at
+  render details +0x114 + 4 × (+0x108) (its PDS primary). [capture:
+  microkernel trace]
+- [3-8] = a 2-D rotation matrix (the identity, plus a per-target value, for
+  no rotation) [capture (no rotation); unconfirmed (as a rotation)].
 - [10] = 0x202.
 - [15] = 0x100000.
 - [16] = 0x1000, [17] = 0x3f80.
 - [18] = `((w+0x1000)·0x100)<<8 | 0x10`, and [19] = 1.0.
 - [20] = `(h+0x1000)·0x100`, [21] = 0x1000, [22] = 0x3f80.
-- These are screen-space vertices in fixed point, offset by 0x1000.
+- [10]-[22]: [capture; hardware, open driver].
+- These are screen-space vertices in fixed point, offset by 0x1000 [guess].
 
-### Render details (kdata, 0x1ec; SGXKickTA copies 0xd0 bytes of it)
+### Render details (kdata, 0x1ec)
+
+The client writes the first 0xd0 bytes.
 
 | off | ref.bin | field | tag |
 |---|---|---|---|
-| 0x00 | 10000000 | 3D request base (PB base & 0xfff00000) | D |
-| 0x04 | 0 / 3e500000 | ZLS request base: lowest of the depth/stencil load/store addresses & 0xfff00000 | D |
-| 0x08 | 0x80 | kick +0x90 \| 0x80 | G |
-| 0x0c | 000f0000 | kick +0x70 \| +0x18 | G |
-| 0x10 | 80000000 | RT +0x10 \| b31 | D |
-| 0x14 | 0 / 2 | depth bias units (glPolygonOffset units, rounded; ctx+0xdc) | D (`polyoff`) |
-| 0x18 | 0 / 1.0 | depth bias factor (float) | D (`polyoff`) |
-| 0x1c | 0 | kick +0x7c | G |
-| 0x20 | 20006000 | region headers of this render | D |
-| 0x24 | 0 | kick +0x4c | G |
-| 0x28 | 20003000 | region headers of the next render | D |
-| 0x2c | 0 / 001710b4 | ZLS control: `drawable bits & 0xf80ee007 \| 0x111000 \| (xt-1)<<3` (kick +0x6c), windows only; FBOs get `0x140018`-style words with no store. store = b2 \| b17 \| b18 (float32 depth), load = b1 \| b13 \| b14 (the render after a readback split: `001770b6`; proven natively, with 3D flags b7 \| b8 and a read-write buffer), b19 negates the stored depth. b0/b1 with invalid stencil words lock up the 3D (`docs/TEX.md` section 7) | D, store C |
-| 0x30, 0x34 | | **depth** address - ZLS base, in both words (libGLESv2 `FUN_0002e2d0`; earlier read as depth/stencil store) | D |
-| 0x38, 0x3c | 80000000 | b31 \| **stencil** address - ZLS base, in both words (earlier read as depth/stencil load) | D |
-| 0x40 | 3f800000 | ISP background depth: the depth every tile starts from (kick +0x10, 1.0). glClearDepth does **not** change it: the clear writes depth through its own vertices' z, with depth write on in its ISPA (`cdepth`) | C |
-| 0x44 | 0x300 | kick +0x80 \| +0x14 | G |
-| 0x48 | 02046300 | background object: `0x2000000 \| (block - PB base)>>4` | D |
-| 0x4c, 0x50 | 0, 0x88 | RT +0x1c, +0x18 (0x88 = RT flag b0) | D |
-| 0x54 | 0 | 2 when the render context has a TA dependency | G |
-| 0x58 | 0x30 | constant | D |
-| 0x5c | 2e006000 | pixel event PDS program (end of tile) | D |
-| 0x60 | 5 | its data rows | D |
-| 0x64 | 1 | kick +0x8c | G |
-| 0x68 | 1 | RT flag b0 | D |
-| 0x6c-0xc8 | 0 | kick +0xc0..+0xe4 and +0x94..+0xbc (multisample / PBE extras) | G |
-| 0xcc | 0x100 | b8 = kick flag 0x8000000 | D |
-| 0x13c | 07c00000 | `n<<22` from the render context +0x3c, default 0x7c00000 | D |
+| 0x00 | 10000000 | 3D request base (PB base & 0xfff00000) | capture; hardware (open driver) |
+| 0x04 | 0 / 3e500000 | ZLS request base: lowest of the depth/stencil load/store addresses & 0xfff00000 | capture; hardware (open driver) |
+| 0x08 | 0x80 | a client value ORed with 0x80 | guess |
+| 0x0c | 000f0000 | client values ORed | guess |
+| 0x10 | 80000000 | b31 \| a render-target value | capture |
+| 0x14 | 0 / 2 | depth bias units (glPolygonOffset units, rounded) | capture (`polyoff`); hardware (open driver) |
+| 0x18 | 0 / 1.0 | depth bias factor (float) | capture (`polyoff`); hardware (open driver) |
+| 0x1c | 0 | a client value | guess |
+| 0x20 | 20006000 | region headers of this render | capture; hardware (open driver) |
+| 0x24 | 0 | a client value | guess |
+| 0x28 | 20003000 | region headers of the next render | capture; hardware (open driver) |
+| 0x2c | 0 / 001710b4 | ZLS control: `0x111000 \| (xt-1)<<3`, ORed with bits of the drawable (mask `0xf80ee007`), windows only; FBOs get `0x140018`-style words with no store. store = b2 \| b17 \| b18 (float32 depth), load = b1 \| b13 \| b14 (the render after a readback split: `001770b6`; proven natively, with 3D flags b7 \| b8 and a read-write buffer), b19 negates the stored depth. b0/b1 with invalid stencil words lock up the 3D (`docs/TEX.md` section 7) | capture; hardware (store, load; the lockup); unconfirmed (b19, the drawable bits) |
+| 0x30, 0x34 | | **depth** address - ZLS base, in both words (earlier read as depth/stencil store) | capture; hardware (open driver) |
+| 0x38, 0x3c | 80000000 | b31 \| **stencil** address - ZLS base, in both words (earlier read as depth/stencil load) | capture; hardware (open driver) |
+| 0x40 | 3f800000 | ISP background depth: the depth every tile starts from (1.0). glClearDepth does **not** change it: the clear writes depth through its own vertices' z, with depth write on in its ISPA (`cdepth`) | hardware |
+| 0x44 | 0x300 | client values ORed | guess |
+| 0x48 | 02046300 | background object: `0x2000000 \| (block - PB base)>>4` | capture; hardware (open driver) |
+| 0x4c, 0x50 | 0, 0x88 | render-target values (0x88 = a render-target flag) | capture |
+| 0x54 | 0 | 2 when the render context has a TA dependency | guess |
+| 0x58 | 0x30 | constant | capture |
+| 0x5c | 2e006000 | pixel event PDS program (end of tile) | capture; hardware (open driver) |
+| 0x60 | 5 | its data rows | capture; hardware (open driver) |
+| 0x64 | 1 | a client value | guess |
+| 0x68 | 1 | a render-target flag | capture |
+| 0x6c-0xc8 | 0 | client values (multisample / PBE extras) | guess |
+| 0xcc | 0x100 | b8 follows a client kick flag | capture (0x100); unconfirmed (the flag) |
+| 0x13c | 07c00000 | `n<<22`, n from the render context; 0x7c00000 by default | capture (0x7c00000); unconfirmed (other n) |
 
 The words past +0xd0 are set at kick time, and the microkernel reads them:
 
 | off | field | what the microkernel does with it | tag |
 |---|---|---|---|
-| 0xd0 | address of an 8-byte sync-heap word the client sets to 1 per scene | zeroed at the render's end, unless +0xd4 has b2 or b3 (pc 0x0fb8-0x0fbd) | D |
-| 0xd4 | copy of the TA command's 3D flags (cmd+0x1c), taken at every kick | b3 (0x8): the render completes on the 3D end alone, with no DPM-free rendezvous; the 3D start then writes 0x63c = 0 instead of 3 (UKERNEL.md §5). b9 (0x200): the 3D TQ write-complete is written at the end. b10 (0x400): RT data header [1] += 1 at the end. b14 and up: shifted into the RT data entry's state word | D |
-| 0xd8 | RT data address | header [1] counter (above) | D |
-| 0xdc | the RT data entry this render uses; must equal cmd+0x44 | its word 1 cleared, word 13 set to idle at the end; its word 4 (background block) filled at 3D start | D |
-| 0xe0 | copy of cmd+0x3c, the HW device sync list, taken at every kick | write-complete of entry (+0x108) set at the end | D |
-| 0xe4-0xf0 | copy of CMDTA_SHARED +0x1c..+0x28, the 3D TQ sync | read-complete (and with +0xd4 b9 write-complete) set at the end | D |
-| 0x104 | 1: the number of sync-list passes | the end advances +0x108 until it reaches this count | D |
-| 0x108 | the pass cursor, 0 at the first 3D start | indexes the sync list (+0xe0) and the +0x114 array; reset to 0 after the last pass (pc 0x0f55-0x0f5a) | D |
-| 0x110 | address of an 8-byte kdata word | not read by the microkernel in the traces | G |
-| 0x114 | address of an array of words, one per pass, holding the background object's PDS primary word (`rows<<26 \| offset>>4`); the client rewrites it before each kick | copied into the background block word 2 at 3D start | D |
-| 0x124 | the TA state register 0x274, saved at each TA finish (pc 0x069a) | restored into 0x274 at the next kick (pc 0x0a65) | D |
-| 0x130, 0x134 | the background object's PDS secondary and middle words | copied into background block words 0-1 at 3D start | D |
-| 0x140 | copy of cmd+0x20 (the frame index), taken at every kick | | D |
-| 0x144, 0x148.. | the 3D status-value count and its (address, value) pairs | each value written at the end (pc 0x0f7d-0x0f89) | D |
+| 0xd0 | address of an 8-byte sync-heap word the client sets to 1 per scene | zeroed at the render's end, unless +0xd4 has b2 or b3 | capture |
+| 0xd4 | copy of the TA command's 3D flags (cmd+0x1c), taken at every kick | b3 (0x8): the render completes on the 3D end alone, with no DPM-free rendezvous; the 3D start then writes 0x63c = 0 instead of 3 (UKERNEL.md §5). b9 (0x200): the 3D TQ write-complete is written at the end. b10 (0x400): RT data header [1] += 1 at the end. b14 and up: shifted into the RT data entry's state word | capture |
+| 0xd8 | RT data address | header [1] counter (above) | capture |
+| 0xdc | the RT data entry this render uses; must equal cmd+0x44 | its word 1 cleared, word 13 set to idle at the end; its word 4 (background block) filled at 3D start | capture |
+| 0xe0 | copy of cmd+0x3c, the HW device sync list, taken at every kick | write-complete of entry (+0x108) set at the end | capture |
+| 0xe4-0xf0 | copy of CMDTA_SHARED +0x1c..+0x28, the 3D TQ sync | read-complete (and with +0xd4 b9 write-complete) set at the end | capture |
+| 0x104 | 1: the number of sync-list passes | the end advances +0x108 until it reaches this count | capture |
+| 0x108 | the pass cursor, 0 at the first 3D start | indexes the sync list (+0xe0) and the +0x114 array; reset to 0 after the last pass | capture |
+| 0x110 | address of an 8-byte kdata word | not read by the microkernel in the traces | guess |
+| 0x114 | address of an array of words, one per pass, holding the background object's PDS primary word (`rows<<26 \| offset>>4`); the client rewrites it before each kick | copied into the background block word 2 at 3D start | capture |
+| 0x124 | the TA state register 0x274, saved at each TA finish | restored into 0x274 at the next kick | capture |
+| 0x130, 0x134 | the background object's PDS secondary and middle words | copied into background block words 0-1 at 3D start | capture |
+| 0x140 | copy of cmd+0x20 (the frame index), taken at every kick | | capture |
+| 0x144, 0x148.. | the 3D status-value count and its (address, value) pairs | each value written at the end | capture |
 
-All from the DDK microkernel (`ddk-uk.bin`) and its memory trace over a
-generated frame (`tools/ukernel/run.py`).
+All from the vendor microkernel's memory trace over a generated frame
+(`tools/ukernel/run.py`).
 
 ## Field layouts for packing
 
@@ -1194,6 +1428,9 @@ The words above as bit fields, for a packer (csbgen). Status:
 - **K**: the field and its meaning are known (the section named has the evidence);
 - **O**: only constant values have been seen; pack the value given;
 - **U**: unknown; pack the value given, or 0 where the column says so.
+
+K, O and U say what a packer can do with a field. What each rests on is
+the tag in the section named.
 
 Widths are only as wide as the evidence shows. "≤" marks an upper bound from
 the neighboring fields, not a measured width. Observed values are from the
@@ -1232,10 +1469,10 @@ What b8, b10, b13-15, b17 and b25 mean is U.
 | 0 | 28 | fan (with primitive 0) | K |
 | 0 | 22-23 | 3 in every draw | O |
 | 0 | 0-? | index count; ≤ 22 bits (b0-21); seen up to 192 | K (width U) |
-| 1 | 0-31 | index buffer address; b0 clear for 16-bit, b0-1 for 32-bit indices | K |
+| 1 | 0-31 | index buffer address; b0 clear for 16-bit, b0-1 for 32-bit indices | K (32-bit: unconfirmed) |
 | 2 | 28-31 | batch − 1: 15 in every draw | O |
-| 2 | 24 | 32-bit indices (from libGLESv2's code; no 32-bit capture) | K (D) |
-| 2 | 0-23 | index offset; 0 in every draw; width ≤ 24 bits | K (width U) |
+| 2 | 24 | 32-bit indices (no 32-bit capture) | K (unconfirmed) |
+| 2 | 0-23 | index offset; 0 in every draw; width ≤ 24 bits | K (width U; meaning unconfirmed) |
 | 3 | 0-21 | max index: `0x3fffff` in every draw; width ≥ 22 bits | O |
 | 4 | 28-31 | vertices per USSE task − 1 (rule in §2) | K |
 | 4 | 0-27 | vertex PDS program `addr>>4` | K |
@@ -1248,7 +1485,7 @@ What b8, b10, b13-15, b17 and b25 mean is U.
 
 | word | bits | field | status |
 |---|---|---|---|
-| region clip 0 | 31 | set on every region clip seen; 0 on the scissor objects' "no clip" words | K (as enable: G) |
+| region clip 0 | 31 | set on every region clip seen; 0 on the scissor objects' "no clip" words | K (as enable: guess) |
 | region clip 0 | 16-? / 0-? | xmin, xmax in 32-px tiles; seen up to 0x16; ≤ 15 bits each | K (width U) |
 | region clip 1 | 16-? / 0-? | ymin, ymax in 16-px tiles; seen up to 0x1d | K (width U) |
 | output select | 16-? | output dwords per vertex; seen up to 24; ≤ 16 bits | K (width U) |
@@ -1257,7 +1494,7 @@ What b8, b10, b13-15, b17 and b25 mean is U.
 | MTE control | 0-1 | cull (§3) | K |
 | MTE control | rest | `0x01555620` on every draw (one ES1 capture: `0x15555620`); `0x40` on the clear | U: pack per kind |
 | TSP word 0 | 3n..3n+2 | set n's size: 1, 2, 3, or 5 for 4 components; seen up to 5 sets. 10 sets fit in 30 bits; the hardware maximum is U | K |
-| TSP word 1 | n | set n is F16 (precision value ≤ 2); one bit per set | K |
+| TSP word 1 | n | set n is F16 (mediump or lowp); one bit per set | K |
 | PDS word 1 | 0-15 | primary attribute units of 4 dwords | K (width: the field ends at b15) |
 | PDS word 1 | 16-17 | 3 in every capture | O |
 | PDS word 1 | 18-24 | (secondary attribute dwords + 3)>>2; 7 bits | K |
@@ -1285,17 +1522,17 @@ constants.
 |---|---|---|---|
 | 0, 1 | 16-? / 0-? | clip y / x in pixels; seen up to 479 / 719; ≤ 16 bits each | K (width U) |
 | 2 | 16-27 | pitch / 2 − 1 | K |
-| 2 | 15 | set on every surface (name U; with it clear the PBE writes nothing, per the TEX.md §6 replay) | K (meaning G) |
-| 2 | 28-29 | rotation, 0x10000000 × k (libGLESv2; only 0 captured) | K (values U) |
-| 2 | 30-31 | downscale / AA, 0x40000000 × k (libGLESv2; only 0 captured) | K (values U) |
+| 2 | 15 | set on every surface (name U; with it clear the PBE writes nothing, per the TEX.md §6 replay) | K (meaning: guess) |
+| 2 | 28-29 | rotation, 0x10000000 × k (unconfirmed; only 0 captured) | K (values U) |
+| 2 | 30-31 | downscale / AA, 0x40000000 × k (unconfirmed; only 0 captured) | K (values U) |
 | 2 | 0-14 | 0 in every capture | U (0) |
 | 3 | 0-31 | address & ~3 | K |
 | sideband | 0-5 | PBE format code | K |
 | sideband | 9 | always set | O |
 | sideband | 10 | dither | K |
-| sideband | 12 | libGLESv2's `param 7` | U |
+| sideband | 12 | set by a DDK condition not identified; never seen set | U |
 | sideband | 13 | twiddled destination | K |
-| sideband | 6-8, 11 | `param_2[5]<<6` is added for format codes 3-14; 0 in every capture (codes 0 and 3 seen) | U (0) |
+| sideband | 6-8, 11 | a per-surface value is added for format codes 3-14; 0 in every capture (codes 0 and 3 seen) | U (0) |
 
 ### Texture words (§5)
 
@@ -1305,7 +1542,7 @@ constants.
   32-bit formats.
 - For the other layouts:
   - b17-20 is 0xf without mipmaps and 0xd with them;
-  - b21-26 is the LOD bias, 0x3f = none [C];
+  - b21-26 is the LOD bias, 0x3f = none [hardware];
   - which of b17-20 is "mipmapping off" beyond b18 is U.
 - b0-2, b11, b13-16 and b27-29 are 0 in every capture [U: 0].
 - b30 is the L8/A8/LA88 bit.
@@ -1329,9 +1566,8 @@ compared.
 - `01028800`: `tex2`;
 - `00800000`: the background load.
 
-The §5 text has T3 as the shader's half of `(state & mask) | override`, set
-by the sample instruction. Its fields are U, so pack the value the sample
-form calls for.
+The §5 text has T3 as the shader's half of the word, set by the sample
+instruction. Its fields are U, so pack the value the sample form calls for.
 
 ## Captures
 
@@ -1405,7 +1641,7 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
   with the static x86_64 `tools/replay/replay`, no DDK loaded,
   2026-10-28.
 - **The check:** each result is compared with a prediction computed from
-  the capture's own glReadPixels output (scratchpad `w/pred.py`).
+  the capture's own glReadPixels output.
 - **The rule:** one field per run; the control runs come first.
 - **Health:** no run produced an SGX hardware recovery.
 
@@ -1453,7 +1689,8 @@ drange, cullb, polyoff, dither0, cmask, b1, pb and pb2.
 | a6 | atst8 h3 | `f934000d` → `f9340005` | (discovery) | render stalls, right part unwritten, no recovery |
 
 p8 sets the min and mag bits together. The triangle samples a magnified
-texture, so only mag is proven by the pixels; min stays [D].
+texture, so only mag is proven by the pixels; min rests on the captures
+(and the open driver).
 
 ## Building a frame from scratch
 
@@ -1490,3 +1727,67 @@ The list of what a frame needs, in order:
 
 The kernel fills CMDTA_SHARED, and the microkernel fills the region headers
 and tail pointers.
+
+## Gaps
+
+Facts above tagged **unconfirmed**, each with the hardware test or capture
+that would confirm it. Shipping code must not rely on an unconfirmed fact
+until it is confirmed.
+
+### §1 TA command
+
+- Header cmd+0x14: the DDK can write `n<<27` instead of 0x50000000 under a render-context setting → a one-change probe capture per render-context creation option, looking for a cmd+0x14 other than 0x50000000.
+- Header cmd+0x1c: 3D flags b0, b1, b3, b4 and b12 follow client kick flags (meanings unknown) → one-change probe captures (depth/stencil kept or discarded, readbacks, pbuffer vs window, multiple targets) to find what sets each bit, then a replay poking each bit and checking the pixels.
+- TA flags: 0x60 for a middle kick → a capture of a scene the DDK splits into three or more kicks (many draws, or a PB-pressure probe).
+- TA flags b0 pulses the TA bit of SOFT_RESET → a microkernel trace showing the SOFT_RESET writes on a first kick, or a replay of a two-frame stream with b0 cleared on frame 2's first kick, checking for leftover geometry.
+- TA flags b4 is the USE code-cache invalidate (0xa08 = 1) → a replay that rewrites a shader's code in place between two frames, with b4 set and cleared on frame 2, checking which program's pixels appear.
+- TA flags b5 invalidates the TA-side caches (0xad0, 0xae0, waits on 0x138) → a microkernel trace of a kick with b5 set showing those register writes, or a replay changing the TA state block in place between frames with b5 cleared.
+- TA flags b6, past the register-sample edge: the 0x804 bit, the MADD cache invalidate and the USE data-cache flush → a replay that changes a texture's texels in place between two frames with b6 set and cleared, checking for stale texels.
+- 4x MSAA on the open stack: TE AA b30-31, the MTILE1 / tiles-per-macrotile values, PBE word 2 b30 and per-sample ZLS → an open-stack frame with those words from `ms4`, compared with its read-back.
+- Tail +0x24c: TA flags 2 b19, b23 and b25 → one-change captures with multisampling and with a render that reloads its depth, looking for each bit.
+- Tail +0x2a0 is a render-target value << 12 → a capture in which it is nonzero (multisampling, or a larger target).
+- Tail +0x2a4's `eaa26e26` with 4x AA → a 2-sample or 8-sample capture, or a second 4x one.
+
+### §2 VDM control stream
+
+- Draw word 1: bits 0-1 cleared for 32-bit indices; word 2 b24 (0x1000000) = 32-bit indices → a capture of glDrawElements with GL_UNSIGNED_INT (OES_element_index_uint), then a replay of it.
+- Draw word 2 b0-23 is an index offset → a capture of draws at an index-buffer offset, or a replay poking a nonzero value and checking which vertices draw.
+- TA-block info word: a 2-bit counter is ORed into the size → a capture in which the DDK's counter is nonzero (several different TA blocks in flight in one frame), or a replay poking b0-1 with a DMA'd block of a known size.
+
+### §3 TA state block
+
+- ISPA pass types 2 (translucent + discard) and 5 (depth-only) → a capture of a blended shader that discards, and of a stencil-only or depth-only draw, then a replay poking each pass type.
+- PDS word 1 b25-28 with secondary attributes and more than one unit → a capture of a shader with uniforms and three or more mediump varyings.
+- The color-mask move appended to the shader is `0x90b00601 | mask<<11` → compare the appended instruction words of the `cm1`-`cm3` captures with the expression.
+- The Mesa driver's discard program does an alpha test once sa4 has another function and reference → a replay of a Mesa discard draw with sa4 poked to GREATER 0.5, checking against the DDK's `e1gt5` frame.
+- glLineWidth clamps to [1, 16] → captures with glLineWidth(0.5) and glLineWidth(20).
+- User clip planes: the `fdpc` result lands in output o8+n (or o7+n), and the TA clips lines as well as triangles against it → an open-stack frame with one `fdpc` into cp0 and output select `00093801`, drawing a triangle and a line across the plane, read back.
+- What MTE control `000003a0` and VDM draw word 2 b26 (the other two flat-capture changes) do → a flat triangle strip and fan, replayed with each word reverted.
+- A first-vertex provoking convention (EXT_provoking_vertex): no field known; neither of those two words selects it → a TA header or ISPB bit scan on the `flat` replay, or CPU index rotation.
+- Polygon offset applies to object types 1, 3, 5 and 6 → a replay of `polyoff` with the draw's ISPA type set to 5, reading back the depth test result against a second draw.
+- Object types 5 and 6: the line width and point size they draw with, and where edge flags go → replays of `es1base` with type 5 and ISPB width `40`, and with type 6 and a point-size output.
+
+### §4 Render target
+
+- PBE word 2 b28-29 = rotation, b30-31 = downscale/AA → a capture of a rotated or multisampled surface, then a replay poking each field.
+- PBE word 3: the address moves for rotated surfaces → the same rotated-surface capture.
+- PBE format code 4 = RGBA5551 → an RGBA5551 FBO capture and a render-to-texture replay of it.
+- Sideband b12, and the per-surface value added at b6-11 for format codes 3-14 → captures of RGB565, RGBA5551 and RGBA4444 FBOs and of the transfer queue's uploads, looking for either set.
+- PBE format codes 0x18 (8-bit) and 0x1b (LA88) → FBO captures in those formats, then render-to-texture replays.
+
+### §5 Texture state
+
+- Every DOUTT word is `(texture state & mask) | sample part` → a capture of one texture sampled by two different sample forms (a plain sample and a biased or projected one), diffing all four words.
+- T3: what the 0x800 part does → a replay of the `t8888` draw with T3 `00800800` → `00800000`, checking the pixels.
+
+### §6 HW render context, render details, parameter buffer
+
+- HW render context word 0 b5 = per-context PB → a capture of two contexts sharing a PB, or a replay with b5 cleared.
+- PB descriptor +0x00 b1-4 = app-hint thresholds overridden → a capture with each PB threshold hint set.
+- Render target: macrotile mode 0 below 0x4b000 pixels → captures of targets just under and just over 0x4b000 pixels (e.g. 639×480 and 641×480 pbuffers).
+- Renders in flight: the microkernel keeps two slots in the TA3D control block (+0x50, +0x54) → a microkernel trace with two renders in flight, showing both slots filled and cleared.
+- A third kick while both RT data entries have a render in flight → a hardware run that kicks three frames on one target without waiting, checking for a lockup or a wait.
+- Background object block [3-8] is a rotation matrix → a capture of a rotated surface.
+- Render details +0x2c: b19 negates the stored depth, and the drawable bits under the mask `0xf80ee007` → a replay poking b19 and reading the stored depth buffer; captures of windows with different EGL configs.
+- Render details +0xcc: b8 follows a client kick flag → one-change captures looking for +0xcc without b8.
+- Render details +0x13c takes `n<<22` values other than 0x7c00000 → a one-change probe capture per render-context creation option.

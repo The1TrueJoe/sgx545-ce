@@ -29,6 +29,8 @@
 // 0x660 dealloc) + the release-arm (0x63c=3) + the TA counters feeding save_ta_state, so
 // the A/B can diff ours vs the DDK's runtime 3D-start values on HW.
 static const struct { const char *name; unsigned off; } REGS[] = {
+    {"CLKGATECTL",    0x000},   // gating mode per unit (2 bits each; auto = units clock only while busy)
+    {"CLKGATESTATUS", 0x008},   // per-unit clock active (DPM b5): TA/3D busy time per frame
     {"EVENT_STATUS",  0x12C},   // EUR_CR_EVENT_STATUS
     {"EVENT_STATUS2", 0x118},   // EUR_CR_EVENT_STATUS2
     {"r700",          0x700},   // DPM readback (of 0x61c); TA page counter

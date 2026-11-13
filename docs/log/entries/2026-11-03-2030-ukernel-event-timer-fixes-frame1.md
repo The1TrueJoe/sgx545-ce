@@ -9,7 +9,7 @@ then kicks into a wiped free-list and hangs (ta3d-state, from the DPMLOG dmesg).
 ## Fix
 
 init enables EUR_CR_EVENT_TIMER (0xacc = hostctl[6] ui32uKernelTimerClock | ENABLE),
-exactly as the DDK does at init/RESUME (pc 0x01f9), and the event dispatcher acks the
+exactly as the DDK does at init/RESUME, and the event dispatcher acks the
 timer event (EVENT_STATUS bit 29, 0x20000000) so it does not storm. A periodic timer
 task keeps the EDM running across the inter-kick gap, so the watchdog sees progress
 and does not false-recover. srvinit's init script sets 0xacc=0; our init runs after

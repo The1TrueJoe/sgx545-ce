@@ -6,7 +6,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include <dlfcn.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -346,9 +345,12 @@ sgx_set_constant_buffer(struct pipe_context *pctx, mesa_shader_stage shader,
                         uint index, const struct pipe_constant_buffer *cb)
 {
    struct sgx_context *ctx = sgx_context(pctx);
-   struct pipe_constant_buffer *so = &ctx->constants[shader];
+   struct pipe_constant_buffer *so =
+      index == 0 ? &ctx->constants[shader]
+      : index <= SGX_MAX_UBOS ? &ctx->ubos[shader][index - 1] /* block */
+                              : NULL;
 
-   if (index != 0)
+   if (!so)
       return;
    if (!cb) {
       pipe_resource_reference(&so->buffer, NULL);
@@ -368,6 +370,37 @@ sgx_set_framebuffer_state(struct pipe_context *pctx,
    struct sgx_context *ctx = sgx_context(pctx);
 
    util_copy_framebuffer_state(&ctx->framebuffer, fb);
+   /* depth only: a colour buffer of the context's own to render into
+    * (begin_frame), at least the framebuffer's size, with the depth buffer's
+    * samples.  Made here, not in begin_frame, which runs with the screen
+    * lock held, as destroying the old one takes it. */
+   if (fb->nr_cbufs && fb->cbufs[0].texture)
+      return;
+   if (!fb->zsbuf.texture || !fb->width || !fb->height)
+      return;
+   unsigned samples = MAX2(fb->zsbuf.texture->nr_samples, 1);
+   struct pipe_resource *d = ctx->dummy_cb;
+
+   if (d && d->width0 >= fb->width && d->height0 >= fb->height &&
+       MAX2(d->nr_samples, 1) == samples)
+      return;
+
+   struct pipe_resource templ = {
+      .target = PIPE_TEXTURE_2D,
+      .format = PIPE_FORMAT_B8G8R8A8_UNORM,
+      .width0 = MAX2(fb->width, d ? d->width0 : 0),
+      .height0 = MAX2(fb->height, d ? d->height0 : 0),
+      .depth0 = 1,
+      .array_size = 1,
+      .nr_samples = samples > 1 ? samples : 0,
+      .nr_storage_samples = samples > 1 ? samples : 0,
+      .bind = PIPE_BIND_RENDER_TARGET,
+   };
+
+   if (d && ctx->recording == sgx_resource(d))
+      ctx->recording = NULL; /* its frame goes with it (resource destroy) */
+   pipe_resource_reference(&ctx->dummy_cb, NULL);
+   ctx->dummy_cb = pctx->screen->resource_create(pctx->screen, &templ);
 }
 
 static void
@@ -705,41 +738,169 @@ sgx_blit_gpu(struct pipe_context *pctx, const struct pipe_blit_info *info)
    return true;
 }
 
+/* A depth and/or stencil blit on the CPU: nearest (the only filter GL allows
+ * for them), any scale, mirrored or not, between formats util_format can
+ * unpack and pack.  The source map brings the CPU copy up from the ZLS
+ * buffer (sample 0 of a 4x one: a resolve may take any one sample) and the
+ * destination's unmap writes it back (sgx_resource.c, zls_write). */
+static bool
+sgx_blit_zs(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+   const struct pipe_box *sb = &info->src.box, *db = &info->dst.box;
+   enum pipe_format sf = info->src.format, df = info->dst.format;
+   const struct util_format_description *sd = util_format_description(sf),
+                                        *dd = util_format_description(df);
+   bool z = (info->mask & PIPE_MASK_Z) && util_format_has_depth(sd) &&
+            util_format_has_depth(dd),
+        s = (info->mask & PIPE_MASK_S) && util_format_has_stencil(sd) &&
+            util_format_has_stencil(dd);
+   int sw = abs(sb->width), sh = abs(sb->height), dw = abs(db->width),
+       dh = abs(db->height);
+   struct pipe_transfer *st, *dt;
+   uint8_t *src, *dst;
+
+   if (!z && !s)
+      return true; /* nothing either side has */
+   if (info->scissor_enable || info->render_condition_enable ||
+       info->num_window_rectangles || sb->depth != 1 || db->depth != 1 ||
+       !sw || !sh || !dw || !dh)
+      return false;
+   src = pipe_texture_map(pctx, info->src.resource, info->src.level, sb->z,
+                          PIPE_MAP_READ, MIN2(sb->x, sb->x + sb->width),
+                          MIN2(sb->y, sb->y + sb->height), sw, sh, &st);
+   if (!src)
+      return false;
+   /* not a discard: a depth-only blit keeps the stencil (and the other way) */
+   dst = pipe_texture_map(pctx, info->dst.resource, info->dst.level, db->z,
+                          PIPE_MAP_READ_WRITE, MIN2(db->x, db->x + db->width),
+                          MIN2(db->y, db->y + db->height), dw, dh, &dt);
+   if (!dst) {
+      pipe_texture_unmap(pctx, st);
+      return false;
+   }
+   unsigned sbpp = util_format_get_blocksize(sf);
+   float *zr = malloc(sizeof(float) * dw);
+   uint8_t *sr = malloc(dw);
+
+   for (int y = 0; y < dh && zr && sr; y++) {
+      int sy = CLAMP((int)((y + 0.5f) * sh / dh), 0, sh - 1);
+      int yy = db->height < 0 ? dh - 1 - y : y;
+
+      if (sb->height < 0)
+         sy = sh - 1 - sy;
+      for (int x = 0; x < dw; x++) {
+         int sx = CLAMP((int)((x + 0.5f) * sw / dw), 0, sw - 1);
+         int xx = db->width < 0 ? dw - 1 - x : x;
+         const uint8_t *p = src + sy * st->stride +
+                            (sb->width < 0 ? sw - 1 - sx : sx) * sbpp;
+
+         if (z)
+            util_format_unpack_z_float(sf, &zr[xx], p, 1);
+         if (s)
+            util_format_unpack_s_8uint(sf, &sr[xx], p, 1);
+      }
+      if (z)
+         util_format_pack_z_float(df, dst + yy * dt->stride, zr, dw);
+      if (s)
+         util_format_pack_s_8uint(df, dst + yy * dt->stride, sr, dw);
+   }
+   free(zr);
+   free(sr);
+   pipe_texture_unmap(pctx, st);
+   pipe_texture_unmap(pctx, dt);
+   return true;
+}
+
+/* A blit out of a 4x colour buffer: its memory holds the resolved pixels
+ * (the PBE resolves each tile as it stores it, sgx_draw.c begin_frame), so
+ * the resolve is a copy; a scaled or converting one copies into a
+ * one-sample texture first and blits from that.  Depth and stencil go
+ * through the CPU (sgx_blit_zs), from sample 0 of the ZLS buffer. */
+static bool
+sgx_blit_resolve(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+   const struct pipe_resource *src = info->src.resource;
+   struct pipe_blit_info b = *info;
+   struct pipe_resource templ, *tmp;
+   struct pipe_box box = info->src.box;
+
+   if (info->mask & PIPE_MASK_ZS) {
+      if (!sgx_blit_zs(pctx, info))
+         fprintf(stderr, "sgx: depth/stencil blit from a 4x buffer not done\n");
+      if (!(info->mask & PIPE_MASK_RGBA))
+         return true;
+      b.mask &= PIPE_MASK_RGBA;
+      pctx->blit(pctx, &b);
+      return true;
+   }
+   if (box.width < 0) {
+      box.x += box.width;
+      box.width = -box.width;
+   }
+   if (box.height < 0) {
+      box.y += box.height;
+      box.height = -box.height;
+   }
+   if (info->src.format == info->dst.format &&
+       info->src.format == src->format &&
+       info->dst.format == info->dst.resource->format &&
+       info->src.box.width == info->dst.box.width &&
+       info->src.box.height == info->dst.box.height && !info->scissor_enable &&
+       !info->render_condition_enable && info->mask == PIPE_MASK_RGBA) {
+      pctx->resource_copy_region(pctx, info->dst.resource, info->dst.level,
+                                 info->dst.box.x, info->dst.box.y,
+                                 info->dst.box.z, info->src.resource,
+                                 info->src.level, &box);
+      return true;
+   }
+   templ = (struct pipe_resource){
+      .target = PIPE_TEXTURE_2D,
+      .format = src->format,
+      .width0 = box.width,
+      .height0 = box.height,
+      .depth0 = 1,
+      .array_size = 1,
+      .bind = PIPE_BIND_SAMPLER_VIEW,
+   };
+   if (!(tmp = pctx->screen->resource_create(pctx->screen, &templ)))
+      return false;
+   pctx->resource_copy_region(pctx, tmp, 0, 0, 0, 0, info->src.resource,
+                              info->src.level, &box);
+   b.src.resource = tmp;
+   b.src.level = 0;
+   b.src.box.x = info->src.box.width < 0 ? box.width : 0;
+   b.src.box.y = info->src.box.height < 0 ? box.height : 0;
+   b.src.box.z = 0;
+   pctx->blit(pctx, &b);
+   pipe_resource_reference(&tmp, NULL);
+   return true;
+}
+
 static void
 sgx_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 {
    struct sgx_context *ctx = sgx_context(pctx);
    uint64_t t0;
 
-   /* SGX_DEBUG=blits: every 255th blit and its caller described (an odd
-    * stride, so alternating kinds show), 40 times */
-   static int blits_left = -1;
-   static unsigned blit_no;
+   if (info->src.resource->nr_samples > 1 &&
+       sgx_blit_resolve(pctx, info))
+      return;
+   /* depth and stencil: through their CPU copies and ZLS buffers; a blit of
+    * colour and depth together goes as two */
+   if (info->mask & PIPE_MASK_ZS) {
+      struct pipe_blit_info c = *info;
 
-   if (blits_left < 0)
-      blits_left = (sgx_drv_debug & SGX_DEBUG_BLITS) ? 40 : 0;
-   if (blits_left > 0 && blit_no++ % 255 == 0) {
-      Dl_info dl;
-      void *ra = __builtin_return_address(0);
-
-      blits_left--;
-      if (dladdr(ra, &dl))
-         fprintf(stderr, "sgx blit %u caller %s+%#lx (%s)\n", blit_no - 1,
-                 dl.dli_fname,
-                 (unsigned long)((char *)ra - (char *)dl.dli_fbase),
-                 dl.dli_sname ? dl.dli_sname : "?");
-      fprintf(
-         stderr,
-         "sgx blit %u: %s %ux%u%s (%d,%d %dx%d) -> %s %ux%u%s (%d,%d %dx%d) filter %u mask %#x scissor %d\n",
-         blit_no - 1, util_format_short_name(info->src.format),
-         info->src.resource->width0, info->src.resource->height0,
-         sgx_resource(info->src.resource)->texture ? " texture" : "",
-         info->src.box.x, info->src.box.y, info->src.box.width,
-         info->src.box.height, util_format_short_name(info->dst.format),
-         info->dst.resource->width0, info->dst.resource->height0,
-         sgx_resource(info->dst.resource)->texture ? " texture" : "",
-         info->dst.box.x, info->dst.box.y, info->dst.box.width,
-         info->dst.box.height, info->filter, info->mask, info->scissor_enable);
+      if (!util_try_blit_via_copy_region(pctx, info, false) &&
+          !sgx_blit_zs(pctx, info))
+         fprintf(stderr, "sgx: depth/stencil blit %s -> %s not supported\n",
+                 util_format_short_name(info->src.format),
+                 util_format_short_name(info->dst.format));
+      c.mask &= PIPE_MASK_RGBA;
+      if (!c.mask)
+         return;
+      info = &c;
+      sgx_blit(pctx, info);
+      return;
    }
    if (sgx_blit_gpu(pctx, info)) {
       ctx->stats.blit_gpu++;

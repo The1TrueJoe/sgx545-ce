@@ -82,6 +82,34 @@ Environment variables
       no vertex cache
    ``nof16``
       no 16-bit fragment arithmetic
+   ``noffmediump``
+      fixed-function fragment programs at highp, not mediump
+   ``nof16samples``
+      texels a mediump program reads come back as RGBA8, not F16
+   ``nodepf16samples``
+      the same for texels of dependent samples
+   ``nophasesplit``
+      a fragment program that discards runs whole before the visibility
+      test, not only up to its discard
+   ``nopdsmerge``
+      a texture sample is merged only into the previous iteration of its own
+      coordinate set, not of another
+   ``nozerocopy``
+      vertex inputs gathered into f32 x 4, not DMAed where they are
+   ``nozls``
+      depth and stencil not kept across renders
+   ``nolazyscanout``
+      scanout buffers on a display-only device are the display's from the
+      start, not from the first request for a KMS handle
+
+``SGX_SLOTS``
+   Frames in flight, 2 to 4 (4 by default). Fewer frames lower the latency of
+   other clients, such as an X desktop behind a game, at some cost in the
+   game's frame rate.
+
+``SGX_DRY_RUN``, ``SGX_FRAME_GAP_US``
+   For bisecting a GPU hang: frames from the n-th on are built but not sent;
+   the GPU is left idle this long after each render.
 
 ``SGX_COMPILER_DEBUG``
    Flags that each turn off one compiler optimization, for bisecting a
@@ -93,8 +121,14 @@ Environment variables
 Testing
 -------
 
-``src/gallium/drivers/sgx/ci`` holds the expectation files for
-dEQP-GLES2 (``sgx-fails.txt``, ``sgx-flakes.txt``, ``sgx-skips.txt``) and for
-piglit's ``gpu`` profile (``sgx-piglit-*.txt``), in deqp-runner's format.
+``src/gallium/drivers/sgx/ci`` holds the deqp-runner suites the expectations
+come from, ``deqp-sgx-sgx545.toml`` (dEQP-GLES2 mustpass, 256x256 pbuffers)
+and ``deqp-sgx-sgx545-piglit.toml`` (piglit's ``gpu`` profile, surfaceless),
+and the expectation files for them: ``sgx-fails.txt``, ``sgx-flakes.txt``,
+``sgx-skips.txt`` and ``sgx-piglit-*.txt``.  For example::
+
+   deqp-runner suite --suite deqp-sgx-sgx545.toml \
+      --baseline sgx-fails.txt --flakes sgx-flakes.txt --skips sgx-skips.txt \
+      --output results
 ``meson test --suite sgx`` runs the compiler, instruction-set and
 command-stream unit tests.

@@ -47,6 +47,13 @@ jobs:
           cat kernel/version
           echo "KERNEL_RUN=$id" >> "$GITHUB_ENV"
 
+      - name: sgx-asm, from sgx.xml (ukernel/build.py assembles with it)
+        run: |
+          set -eux
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-mako
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
+
       - name: The open microkernel (ukernel/, secure mode, any core revision)
         run: |
           set -eux
@@ -55,7 +62,8 @@ jobs:
           python3 drm/tools/mkukfw.py fw/uk.bin -o fw/sgx545_ukernel.bin --manifest fw/uk.json \
             --core-rev 0 --build-id "ukernel-$(git rev-parse --short HEAD)"
           python3 drm/tools/mkukfw.py --check fw/sgx545_ukernel.bin | tee fw/check.txt
-          grep -q 'features 0x2' fw/check.txt
+          # features word <= the in-tree driver's accepted mask (not a hardcoded literal)
+          python3 drm/tools/ukfw_features_pin.py --image fw/sgx545_ukernel.bin
 
       - name: Host tools
         run: |

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """Offline check of the open microkernel (ukernel/) in the emulator.
 
@@ -116,7 +116,7 @@ def test_render_teardown(code, man):
     mem.wr(CTLBLK + 4 * 0x32, rd)                    # SC_RD
     mem.wr(CTLBLK + 4 * 0x34, rtentry)               # SC_RTENTRY
     mem.wr(CTLBLK + 4 * 0x30, ctx)                   # SC_CTX
-    mem.wr(CTLBLK + 4 * SC_INFLIGHT, rtentry)        # else the 3D end is spurious
+    mem.wr(CTLBLK + 4 * 0x14, rtentry)               # SC_INFLIGHT: else the 3D end is spurious
     mem.wr(rtentry + 0x30, rtdata)                   # RT-data pointer
     mem.wr(rd + 0xd0, sync0)                         # destination sync 0 = render-details word 0x34
     mem.wr(rd + 0xe0, deps)                          # TA3D dependency block pointer (word 56)
@@ -170,8 +170,9 @@ COUNTS = (0, 0xffff, 0x10000, 0x1ffff, 0xfffffffe)
 
 
 def test_render_counter_32bit(code, man):
-    """a render's write-ops complete is pending + 1 over all 32 bits: a 16-bit
-    increment left the job waiting for 0x10001 after 65536 renders on one dataset."""
+    """a render's write-ops complete is pending + 1 over all 32 bits, and the
+    completion seqno counts past 0xffff: a 16-bit increment left the job waiting
+    for 0x10001 after 65536 renders on one dataset."""
     for n in COUNTS:
         u, mem, regs = machine(code)
         mem.wr(HOSTCTL, 1)
@@ -179,7 +180,8 @@ def test_render_counter_32bit(code, man):
         mem.wr(CTLBLK + 4 * 0x32, rd)
         mem.wr(CTLBLK + 4 * 0x34, rtentry)
         mem.wr(CTLBLK + 4 * 0x30, ctx)
-        mem.wr(CTLBLK + 4 * SC_INFLIGHT, rtentry)
+        mem.wr(CTLBLK + 4 * 0x27, n)                 # SC_COMPLETED
+        mem.wr(CTLBLK + 4 * 0x14, rtentry)           # SC_INFLIGHT
         mem.wr(rtentry + 0x30, rtdata)
         mem.wr(rd + 0xe0, deps)
         mem.wr(deps + 0x10, n)                       # write-ops pending
@@ -187,7 +189,8 @@ def test_render_counter_32bit(code, man):
         regs.v[CR_EVENT_STATUS] = EV_3D_END
         u.task(man["entries"]["event"] // 8)
         assert mem.rd(done) == (n + 1) & 0xffffffff, f"pending {n:#x}: complete {mem.rd(done):#x}"
-    print("  render completion: write-ops complete counts over 32 bits  OK")
+        assert mem.rd(CTLBLK + 4 * 0x27) == (n + 1) & 0xffffffff, f"seqno {n:#x} -> {mem.rd(CTLBLK + 4 * 0x27):#x}"
+    print("  render completion: write-ops complete and seqno count over 32 bits  OK")
 
 
 def test_xfer_counter_32bit(code, man):
@@ -219,7 +222,7 @@ def main():
     test_render_counter_32bit(code, man)
     test_xfer_counter_32bit(code, man)
     print("all OK")
-    print("(frame-level TA/3D register match vs the DDK: ukernel/run_ours.py TRACE --ddk FW)")
+    print("(the registers a whole frame programs: ukernel/run_ours.py TRACE)")
 
 
 if __name__ == "__main__":

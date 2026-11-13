@@ -18,8 +18,7 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 | `…/sgx_program.c` | the finished program: flat code with branch offsets, its blocks and samples, constant and iteration lists |
 | `sgx_usp.[ch]` | the USP writer (harness only): header, list A/C, code, label, branch and sample blocks, from a `struct sgx_shader` |
 | `sgxc.cpp`, `meson.build` | standalone compiler: GLSL ES 1.00 via Mesa's GLSL frontend, each stage linked on its own; `-u/-a/-s` pins are its `struct sgx_layout` |
-| `check_enc.py` | the isaspec encoder (`mesa/src/sgx/isa`, via `sgx_isa_test -t`) against `hw.py` on every corpus word |
-| `check_out.py` | every emitted word: decodes, round-trips, and matches libusc's encoder (`oracle.py`) |
+| `check_out.py`, `sgx_usp.py` | every emitted word of sgxc's USPs: `sgx-disasm` decodes it whole and `sgx-asm` gives back the same bits; `sgx_usp.py` reads what `sgx_usp.c` writes |
 | `run_corpus.py`, `layout.py` | compile a `tools/isa/corpus` file |
 | `count.py` | instruction counts, issue slots and temporaries against libusc |
 | `glmark2_corpus.py` | glmark2's shaders as a corpus file (generated from a glmark2 checkout, not committed) |
@@ -29,7 +28,7 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 ## Building
 
 In a Mesa checkout (tested at 27.0.0-devel 177e630), make `src/sgx/` hold a link
-`compiler -> <sgx545-ce>/mesa/src/sgx/compiler`, a link `sgxc -> <sgx545-ce>/tools/usc`,
+`compiler -> <powervr_sgx>/mesa/src/sgx/compiler`, a link `sgxc -> <powervr_sgx>/tools/usc`,
 and a `meson.build` with `subdir('compiler')` and `subdir('sgxc')`. Then add
 `if with_gallium` / `subdir('sgx')` / `endif` after `subdir('compiler')` in `src/meson.build`:
 
@@ -55,8 +54,7 @@ them. `hw/calib.py` measures them on the CE5300 board, and `layout.py` guesses t
 ## Checking
 
 ```
-python3 -I tools/usc/check_enc.py [sgx_isa_test]   # isaspec == hw.py on 4154 corpus words (efo, fdual not assembled)
-LIBUSC=.../libusc.so.1.7.862890 venv/bin/python -I tools/usc/check_out.py OUTDIR
+SGX_ASM=DIR/sgx-asm python3 -I tools/usc/check_out.py OUTDIR   # sh ukernel/sgx-asm.sh DIR builds it
 python3 -I tools/usc/hw/hwcmp.py OUTDIR               # CE5300 board: DDK's USP vs ours, same GL program
 ```
 

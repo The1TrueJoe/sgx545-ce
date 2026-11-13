@@ -1,22 +1,16 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """Run the open microkernel (ukernel/) through a frame in the emulator and
-diff the core registers it programs against the DDK's.
+list the core registers it programs.
 
-    python3 ukernel/run_ours.py TRACE [--ddk FW]
+    python3 ukernel/run_ours.py TRACE
 
 TRACE is a pvrtrace log (a DDK capture or a tools/gen `frame-fake -t` run).
 Our microkernel is built, then driven through the frame's kicks with the same
 device memory, HW contexts and kick parameters the DDK sees (fromtrace.py):
 init, then for each TA kick our `kick` entry (which calls `do_ta`), then our
 `ta_finished` (3D start) and `render_done`. Every `str` to a core register is
-collected. With --ddk, the DDK microkernel is run the same way and the two
-register-write sets are compared.
-
-The point is to show our microkernel programs the cores from the same
-structure words with the same values for a real frame, before any hardware
-run. Plumbing the two differ on (cache-invalidate / DPM pulse ordering) is
-expected; the struct-sourced core state must match.
+collected and printed by phase.
 """
 import argparse
 import json
@@ -215,79 +209,9 @@ def run_ours(code, man, events, ctxs):
     return out
 
 
-def run_ddk(fw, trace):
-    """the DDK microkernel's register writes over the same frame, via
-    tools/ukernel/run.py's model. Returns {reg: final value}."""
-    sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
-    import importlib
-    runmod = importlib.import_module("run")
-    r = runmod.Runner(open(fw, "rb").read(), trace, out=open(os.devnull, "w"))
-    perphase = {}
-    orig = r.flush
-
-    def flush(title):
-        d = perphase.setdefault(title, {})
-        for (op, a, v, pc) in r.m.regs.log:
-            if op == "str":
-                d[a] = v
-        orig(title)
-    r.flush = flush
-    r.run()
-    return perphase
-
-
-def run_ddk_sync(fw, trace):
-    """the DDK's sync-heap (0x2d......) memory writes, grouped as {sync<N>:
-    {addr: value}} to line up with ours' per-kick TA-finished phases"""
-    import re
-    sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
-    import importlib
-    runmod = importlib.import_module("run")
-    r = runmod.Runner(open(fw, "rb").read(), trace, out=open(os.devnull, "w"))
-    out = {}
-    orig = r.flush
-
-    def flush(title):
-        m = re.match(r"TA finished \((\d+)\)", title)
-        if m and r.m.mem.log:
-            d = out.setdefault("sync" + m.group(1), {})
-            for (op, a, v, pc) in r.m.mem.log:
-                if op == "st" and 0x2d000000 <= a < 0x2e000000:
-                    d[a] = v
-        orig(title)
-    r.flush = flush
-    r.run()
-    return out
-
-
-def run_ddk_done(fw, trace):
-    """every memory write the DDK makes during render completion (the '3D end
-    of render' and 'DPM 3D memory free' phases): the sync-object updates and the
-    full render/RT/context teardown"""
-    sys.path.insert(0, os.path.join(ROOT, "tools", "ukernel"))
-    import importlib
-    runmod = importlib.import_module("run")
-    r = runmod.Runner(open(fw, "rb").read(), trace, out=open(os.devnull, "w"))
-    out = {}
-    orig = r.flush
-
-    def flush(title):
-        # the TA-render completion only (the "(transfer)" variants are the
-        # transfer's own completion, validated separately)
-        if (title.startswith("3D end") or title.startswith("DPM 3D")) and "transfer" not in title:
-            for (op, a, v, pc) in r.m.mem.log:
-                if op == "st":
-                    out[a] = v
-        orig(title)
-    r.flush = flush
-    r.run()
-    return out
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trace")
-    ap.add_argument("--ddk")
     a = ap.parse_args()
     code, man = ours()
     ctxs = []
@@ -301,77 +225,9 @@ def main():
     tot = sum(len(d) for ph, d in ours_ph.items() if ph in PHASE_MAP)
     print(f"microkernel: {len(out)} register writes; {tot} struct-sourced "
           f"across phases {sorted(ours_ph)}")
-    if not a.ddk:
-        for ph in sorted(ours_ph):
-            for r in sorted(ours_ph[ph]):
-                print(f"  {ph:4} {r:#06x} = {ours_ph[ph][r]:#010x}")
-        return
-    ddk = run_ddk(a.ddk, a.trace)
-    # the TA status-value sync-heap writes: ours tags them sync<N>, the DDK
-    # does them in its "TA finished (N)" phase as memory writes
-    ddk_sync = run_ddk_sync(a.ddk, a.trace)
-    bad = 0
-    for ph, ddk_sync_vals in ddk_sync.items():
-        om = {r: v for (p, r, v) in out if p == ph}
-        miss = [(r, ddk_sync_vals[r], om.get(r)) for r in ddk_sync_vals if om.get(r) != ddk_sync_vals[r]]
-        print(f"[{ph}] DDK {len(ddk_sync_vals)} sync-heap writes, ours {len(om)}")
-        for r, dv, ov in sorted(miss):
-            tag = "MISSING" if ov is None else "DIFF"
-            print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
-        bad += len(miss)
-    # render completion: ours must reproduce every memory write the DDK makes
-    # during the teardown, with the same value (sync objects, render/RT/context
-    # slot free). EXTRA = a write ours makes that the DDK does not.
-    ddk_done = run_ddk_done(a.ddk, a.trace)
-    # microkernel-internal control-block scratch (rendezvous WAIT_3D/WAIT_FREE 0x1d/0x1e,
-    # cleanup defer counter 0x1c): bookkeeping the DDK keeps at its own offsets, not part
-    # of the render teardown the DDK writes. Exclude from the done comparison.
-    OHC_SCRATCH = {A["ta3d"] + 4 * w for w in (0x1c, 0x1d, 0x1e)}
-    ours_done = {r: v for (p, r, v) in out if p == "done_mem" and r not in OHC_SCRATCH}
-    dmiss = [(r, ddk_done[r], ours_done.get(r)) for r in ddk_done if ours_done.get(r) != ddk_done[r]]
-    extra = [r for r in ours_done if r not in ddk_done]
-    print(f"[done] DDK {len(ddk_done)} completion mem writes, ours {len(ours_done)}")
-    for r, dv, ov in sorted(dmiss):
-        tag = "MISSING" if ov is None else "DIFF"
-        print(f"    {tag} {r:#010x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
-    for r in sorted(extra):
-        print(f"    EXTRA   {r:#010x}: ours {ours_done[r]:#010x}")
-    bad += len(dmiss) + len(extra)
-    for ph, ddk_phase in PHASE_MAP.items():
-        om = ours_ph.get(ph, {})
-        dm = {r: v for r, v in ddk.get(ddk_phase, {}).items() if r not in PLUMBING}
-        diff = [(r, dm[r], om.get(r)) for r in dm if om.get(r) != dm[r]]
-        extra = [r for r in om if r not in dm]
-        print(f"[{ph} vs DDK '{ddk_phase}'] DDK {len(dm)} struct regs, ours {len(om)}")
-        for r, dv, ov in sorted(diff):
-            tag = "MISSING" if ov is None else "DIFF"
-            print(f"    {tag} {r:#06x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
-        for r in sorted(extra):
-            print(f"    EXTRA   {r:#06x}: ours {om[r]:#010x}")
-        bad += len(diff) + len(extra)
-    # transfers: each XFERn programs the 3D from its command, vs the DDK's
-    # "transfer n". (The DDK model fully programs only the first transfer; later
-    # ones are model no-ops, so only non-empty DDK phases are compared.)
-    for i in range(1, 1 + sum(1 for p in ours_ph if p.startswith("XFER"))):
-        om = ours_ph.get("XFER%d" % i, {})
-        dm = {r: v for r, v in ddk.get("transfer %d" % i, {}).items() if r not in PLUMBING}
-        if not dm:
-            continue
-        diff = [(r, dm[r], om.get(r)) for r in dm if om.get(r) != dm[r]]
-        extra = [r for r in om if r not in dm]
-        print(f"[XFER{i} vs DDK 'transfer {i}'] DDK {len(dm)} struct regs, ours {len(om)}")
-        for r, dv, ov in sorted(diff):
-            tag = "MISSING" if ov is None else "DIFF"
-            print(f"    {tag} {r:#06x}: DDK {dv:#010x}" + ("" if ov is None else f" vs ours {ov:#010x}"))
-        for r in sorted(extra):
-            print(f"    EXTRA   {r:#06x}: ours {om[r]:#010x}")
-        bad += len(diff) + len(extra)
-    if bad == 0:
-        print("MATCH: every struct-sourced core register equals the DDK's, per phase")
-        return
-    print(f"{bad} register(s) differ")
-    sys.exit(1)
-
+    for ph in sorted(ours_ph):
+        for r in sorted(ours_ph[ph]):
+            print(f"  {ph:4} {r:#06x} = {ours_ph[ph][r]:#010x}")
 
 if __name__ == "__main__":
     main()

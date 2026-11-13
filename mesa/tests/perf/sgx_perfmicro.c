@@ -17,14 +17,18 @@
  *   fill-blend  the same with SRC_ALPHA, ONE_MINUS_SRC_ALPHA blending
  *   tex         the same, each sampling a 256x256 RGBA8 texture
  *   verts       one indexed mesh of small triangles in a VBO, drawn per frame
+ *   rows        the same mesh as one draw a row (127), a colour each: a frame
+ *               of many draws, recorded while the GPU could already tile
  *   fill-depth  (-d: a depth buffer) the quads back to front with depth test
  *               LESS, each nearer than the last: every layer passes the test,
  *               so only hidden surface removal keeps the covered ones unshaded
  *
- * Each test runs SECONDS (default 5) with a glFinish per frame and prints the
+ * Each test runs SECONDS (default 5), each frame rendered and read back (a
+ * pixel: end_frame), and prints the
  * frame rate and what it amounts to (megapixels or megatriangles a second).
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,7 +77,19 @@ program(const char *vs, const char *fs)
 
 static int clear_frames;
 
-/* frames a second of draw() over secs, a glFinish per frame */
+/* Each frame ends with a 1-pixel glReadPixels, which renders it: a glFinish
+ * alone is a TA kick on the DDK, whose pbuffer scene stays open and renders
+ * once every 44 to 566 frames (ta3d-state, the verts captures), so its frame
+ * rates weren't of rendered frames */
+static void
+end_frame(void)
+{
+   GLubyte px[4];
+
+   glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+}
+
+/* frames a second of draw() over secs, each rendered (end_frame) */
 static double
 run(double secs, void (*draw)(void))
 {
@@ -81,13 +97,13 @@ run(double secs, void (*draw)(void))
    double t0, t;
 
    draw();
-   glFinish();
+   end_frame();
    t0 = now();
    do {
       if (clear_frames)
          glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       draw();
-      glFinish();
+      end_frame();
       frames++;
       t = now();
    } while (t - t0 < secs);
@@ -169,6 +185,23 @@ draw_verts(void)
    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh_ibo);
    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
    glDrawElements(GL_TRIANGLES, mesh_indices, GL_UNSIGNED_SHORT, 0);
+}
+
+static void
+draw_rows(void)
+{
+   unsigned row = mesh_indices / 127;
+
+   glUseProgram(p_flat);
+   glDisable(GL_BLEND);
+   glBindBuffer(GL_ARRAY_BUFFER, mesh_vbo);
+   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh_ibo);
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+   for (unsigned r = 0; r < 127; r++) {
+      glUniform4f(u_color, r / 127.0f, 0.8f, 0.4f, 1.0f);
+      glDrawElements(GL_TRIANGLES, row, GL_UNSIGNED_SHORT,
+                     (void *)(uintptr_t)(r * row * sizeof(GLushort)));
+   }
 }
 
 int
@@ -291,6 +324,8 @@ main(int argc, char **argv)
       printf("tex: %.1f fps, %.0f Mtexel-pix/s\n", fps, fps * px);
       fps = run(secs, draw_verts);
       printf("verts: %.1f fps, %.2f Mtri/s\n", fps, fps * mesh_indices / 3 / 1e6);
+      fps = run(secs, draw_rows);
+      printf("rows: %.1f fps, %.2f Mtri/s\n", fps, fps * mesh_indices / 3 / 1e6);
    }
    if (glGetError() != GL_NO_ERROR)
       printf("GL error at the end\n");

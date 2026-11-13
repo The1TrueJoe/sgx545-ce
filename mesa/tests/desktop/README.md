@@ -14,7 +14,7 @@ userspace, as a Cedarview owner would run it.
 ## A run
 
 1. Hold the box's lock. RAM-boot a powervr_sgx kernel with the open microkernel
-   (`mesa/tests/x11/ce5300-ramboot.sh KERNDIR open`). Stop anything else that owns the
+   (`mesa/tests/x11/ce5300-ramboot.sh KERNDIR`). Stop anything else that owns the
    display.
 2. Unpack the root on the box: `zstd -dc desktop-root-trixie.tar.zst | tar -xf - -C /opt/desk`.
    On a busybox box, unpack it on another machine and send it as a plain tar.

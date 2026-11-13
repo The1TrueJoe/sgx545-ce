@@ -1,43 +1,64 @@
-# Cedarview test stick v3: live Debian
+# Cedarview test stick v4: live Debian, one hands-off boot
 
-One boot answers everything a Cedarview tester can tell us. A live Debian 13 system on a
-USB stick, with exactly the packages [docs/INSTALL.md](../../docs/INSTALL.md) installs, runs
-the GPU tests, tries the blit's candidate fixes, brings up an Xfce desktop and runs a
-smoke test with screenshots. Everything goes into one results file on the stick. The
-computer's own disks are never written to.
+One boot answers everything a Cedarview tester can tell us, with nothing for the tester to
+do: flash, boot, walk away, attach one file. A live Debian 13 system on a USB stick, with
+exactly the packages [docs/INSTALL.md](../../docs/INSTALL.md) installs, runs the GPU tests,
+tries the blit's candidate fixes, then brings up X once per display/desktop variant and runs
+a smoke test with screenshots in each, every step under a time limit, and turns the computer
+off. Everything goes into one results file on the stick. The computer's own disks are never
+written to.
 
 | file | what |
 |---|---|
 | `build.sh DEBS TESTS OUTDIR VERSION [XFERBANK_FW]` | the image, as root on a Linux runner: mmdebstrap of trixie with `mesa/tests/desktop/packages.txt` and `packages.txt`, the kernel, firmware and Mesa packages installed with apt, live-boot's squashfs on one FAT32 partition `SGXKIT`, GRUB for BIOS, x86_64 EFI and i386 EFI |
-| `kit-live-run` | the run on tty1 (systemd `kit.service`): system facts, the GPU, the tests, the blit variants, the desktop, the results |
-| `kit-desktop`, `kit-session` | Xorg on vt7 and an Xfce session as `desk`, which runs `kit-smoke` |
-| `kit-smoke` | the desktop's smoke test: glxinfo, gears, glmark2, a browser on `test.html`, a dragged window; a screenshot of each, checked for a blank screen |
+| `kit-live-run` | the run on tty1 (systemd `kit.service`): the step list, the progress marker and resume, the progress screen, the save and the power-off |
+| `desktop-variants` | one X attempt per line: gma500 parameters, environment, full or short smoke test |
+| `kit-xvariant` | one desktop attempt: the parameters, X under a watchdog (stall and time limits), the hang capture, X stopped whatever its state |
+| `kit-session`, `kit-xorg` | the X session (Xfce as `desk`, then `kit-smoke`) and Xorg's debug environment |
+| `kit-smoke` | the smoke test, full (glxinfo, gears, glmark2, a browser on `test.html`, a dragged window) or short; a screenshot of each, checked for a blank screen |
+| `kit-hangcap` | a stuck X's state, wchan and thread stacks, the DRM state, sysrq-w, gdb only outside D state |
+| `kit-wdt` | the chipset watchdog (iTCO) around the GPU and desktop steps, petted from the run's heartbeat |
+| `kit-display`, `kit-save` | the display side's dumps and register timeline; the results file, written and renamed |
 | `99-kit-readonly.rules`, `initramfs-hook` | every non-USB disk read-only from the initramfs on |
 | `qemu-test.sh` | the CI check: boots the image in QEMU next to a disk that must stay unchanged |
-| `SERIES` | the kit's version for testers (`v3`), on the screen and in the results file name |
+| `SERIES` | the kit's version for testers (`v4`), on the screen and in the results file name |
 
 CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview-kit`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
-`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v3.1` for v3.1, from `SERIES`) for 90 days. There are no GitHub releases.
+`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v4` for v4, from `SERIES`) for 90 days. There are no GitHub releases.
 
-## The menu
+## One boot
 
-Four GRUB entries run the same test with the kernel's DRM debug log on (`drm.debug=0x6
-log_buf_len=4M`): 1 as it is, then fallbacks for a panel that stays dark: 2
-`acpi_backlight=native`, 3 `acpi_backlight=vendor`, 4 `video=LVDS-1:e`. Never `video=LVDS-1:d`
-(it turns the panel off). Each run records its entry (`kit.entry=N`) and the full command line
-(`cmdline.txt`), and puts the entry in its results file name. The menu shows before Linux
-starts, so a tester whose panel goes dark can still pick the next entry: wait about 5 minutes,
-power off, boot again.
+GRUB has one entry and boots it by itself (`drm.debug=0x6 log_buf_len=4M`). The run is a list
+of steps (`kit-live-run`): system facts, the driver, the GPU tests, the blit set, then one X
+attempt per line of `desktop-variants` (A: the kernel's defaults with the full smoke test,
+B: `cdv_dsparb=0x3f01`, C: `cdv_sr=1`, the old behavior). The gma500 parameters are written to
+`/sys/module/gma500_gfx/parameters/` and applied with a blank/unblank; a variant whose
+parameters can't be set is skipped.
+
+Every step has a time limit. For X: up within 40 s, the first desktop screenshot within 90 s,
+the whole attempt within 240 s. When Xorg.0.log stands still for 5 s before the session starts
+(and again 30 s later), or a limit is hit, `kit-hangcap` records the stacks; X is then stopped
+and the next variant runs. A lost GPU skips the remaining GPU and desktop steps; the run still
+saves and powers off.
+
+`kit-progress.txt` on SGXKIT records each step before it starts. A boot that finds a step
+started but not done records it as HANG and resumes after it, in the same results file
+(the earlier boot's results under `boot-N/`). The chipset watchdog (iTCO, 120 s) is armed
+from the GPU steps to the end and petted while the run's heartbeat is fresh, so a hard hang
+restarts the computer by itself. Test switches: `kit.test=xhang` (X stops dead in variant A),
+`kit.test=gpuhang` (a forced GPU hang after the GPU tests), `kit.nopoweroff`.
 
 ## The run
 
 1. System facts, and whether the internal disks are read-only.
 2. gma500 handing the GPU over, and powervr_sgx starting the open microkernel. Then the
-   display state, read-only (`display-start.txt`, again as `display-after-desktop.txt`):
-   each DRM connector's status, enabled, dpms and modes; the backlight's values; gma500's
-   kernel lines; the atomic state (`/sys/kernel/debug/dri/*/state`) and `modetest -c -p`
+   display state, read-only (`kit-display`: `display-start.txt`, again as
+   `display-x-start.txt` right after X starts and before the modeset retry, and as
+   `display-after-desktop.txt`): each DRM connector's status, enabled, dpms and modes; the
+   backlight's values; gma500's kernel lines and display registers (`cdv_display_regs`);
+   the atomic state (`/sys/kernel/debug/dri/*/state`) and `modetest -c -p`
    (CRTCs, planes and their framebuffers), so a lit-but-black scanout reads differently
    from a CRTC or plane that is off. With `xrandr.txt` from inside X, this shows what the display side believes,
    since the test cannot see whether the panel actually lit up.
@@ -59,7 +80,13 @@ power off, boot again.
    (`xrandr --output LVDS-1 --off; sleep 1; xrandr --output LVDS-1 --auto`, with the name
    xrandr reports), with gma500's read-only debugfs register dump (`cdv_display_regs`) and a screenshot before and
    after (`display-regs-before.txt`, `display-regs-after.txt`, `screenshots/00-*-modeset.png`;
-   whether they differ goes in the summary). No raw MMIO from the stick. Then the smoke test
+   whether they differ goes in the summary). No raw MMIO from the stick. The results go to
+   the stick (`kit-save`, written as `NAME.part` and renamed) as soon as X is up and every
+   15 s during this step, each time with a fresh register dump (`display-regs-latest.txt`).
+   From just before X starts until the first desktop screenshot (or 20 s after X), gma500's
+   registers are sampled every 0.5 s into `display-regs-timeline.txt`, to see when pipe B's
+   FIFO underrun bit sets and whether the palette is zero. All of this is in each save,
+   so a tester who powers off a dark desktop still leaves the X-time logs and registers. Then the smoke test
    and screenshots `screenshots/NN-name.png`:
    1. the desktop;
    2. glxinfo;

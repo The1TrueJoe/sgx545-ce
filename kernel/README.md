@@ -1,4 +1,4 @@
-# sgx545-ce
+# powervr_sgx
 
 PowerVR **SGX545** kernel driver (`pvrsrvkm`) for the Intel Atom CE5300/CE5310
 (as fitted to CE5300/CE5310 boards) and Cedarview (GMA 3600/3650) — the same
@@ -15,7 +15,7 @@ is an honest diff against upstream. Everything else here is ours.
 
 | Area | Change |
 |---|---|
-| Removed API | `__devinit*`, `MODULE_SUPPORTED_DEVICE`, `asm/system.h`, `drmP.h`, `ioremap_nocache`, `drm_mmap`, `in_irq` |
+| Removed API | `__devinit*`, `MODULE_SUPPORTED_DEVICE`, `asm/system.h`, `drmP.h`, `ioremap_nocache`, `drm_mmap`, `in_irq`, `strncpy` (gone in 7.3; `strscpy`) |
 | Signatures | `get_user_pages`, `access_ok`, `class_create`, `vmf_insert_mixed`, `__vmalloc` |
 | Renames | `mmap_sem`→`mmap_lock`, `del_timer_sync`→`timer_delete_sync`, `page_cache_release`→`put_page`, `VM_RESERVED`→`VM_DONTEXPAND\|VM_DONTDUMP` |
 | Structural | procfs → `proc_ops` + `pde_data`; timers → `timer_setup`; page walk → `follow_pfnmap`; 5-level page tables |

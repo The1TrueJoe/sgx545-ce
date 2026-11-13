@@ -51,7 +51,7 @@ if [ ! -f "$W/src/.sgx-patched" ]; then
 		https://github.com/KhronosGroup/VK-GL-CTS.git "$W/src"
 	(
 		cd "$W/src"
-		export GIT_COMMITTER_NAME="sgx545-ce" GIT_COMMITTER_EMAIL="sgx545-ce@localhost"
+		export GIT_COMMITTER_NAME="powervr_sgx" GIT_COMMITTER_EMAIL="powervr_sgx@localhost"
 		export GIT_AUTHOR_NAME="$GIT_COMMITTER_NAME" GIT_AUTHOR_EMAIL="$GIT_COMMITTER_EMAIL"
 		for c in $GLES_BACKPORTS; do
 			curl -fsL "https://github.com/KhronosGroup/VK-GL-CTS/commit/$c.patch" | git am -q
