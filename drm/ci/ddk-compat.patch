@@ -77,10 +77,10 @@ diff -ruN a/drm/powervr_sgx/pvrsgx_core.c b/drm/powervr_sgx/pvrsgx_core.c
 diff -ruN a/drm/powervr_sgx/pvrsgx_core.h b/drm/powervr_sgx/pvrsgx_core.h
 --- a/drm/powervr_sgx/pvrsgx_core.h	2026-11-12 13:59:23
 +++ b/drm/powervr_sgx/pvrsgx_core.h	2026-11-12 13:59:23
-@@ -188,6 +188,8 @@
- 	u32 clock_hz;
- 	/** @fw_name: The open microkernel under /lib/firmware. */
- 	const char *fw_name;
+@@ -193,6 +193,8 @@
+ 	 * awake, or 0 for none.
+ 	 */
+ 	u32 cpu_latency_us;
 +	/** @ddk_fw_name: The vendor microkernel (DRM_POWERVR_SGX_DDK_COMPAT), or NULL. */
 +	const char *ddk_fw_name;
  };
