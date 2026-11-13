@@ -960,6 +960,9 @@ void pvrsgx_job_dump(struct seq_buf *sb, struct pvrsgx_job *job)
 {
 	struct pvrsgx_device *sdev = job->ctx->sdev;
 
+	seq_buf_printf(sb, "job ccb %llu done word 0x%x for 0x%x, sent %llu ns ago\n", job->ccb_seq,
+		       job->done_cpu ? READ_ONCE(*job->done_cpu) : 0, job->done_val,
+		       ktime_get_ns() - job->start_ns);
 	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER && job->render.rtds)
 		render_dump(sb, sdev, job->render.rtds, job->render.cmd_off, job->render.entry);
 	else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER)
