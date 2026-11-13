@@ -326,32 +326,22 @@ const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx545 = {
 	},
 };
 
-/* sgx530: render depends on a value not yet known there. */
-static const struct pvrsgx_cmd_def sgx530_render = {
-	.name = "render",
-	.type = PVRSGX_CMD_RENDER,
-};
-
-/* sgx530: ta_kick depends on a value not yet known there. */
-static const struct pvrsgx_cmd_def sgx530_ta_kick = {
-	.name = "ta_kick",
-	.type = PVRSGX_CMD_TA_KICK,
-};
-
-/* sgx530: transfer depends on a value not yet known there. */
-static const struct pvrsgx_cmd_def sgx530_transfer = {
-	.name = "transfer",
-	.type = PVRSGX_CMD_TRANSFER,
-};
-
+/*
+ * sgx530: the TA / 3D / transfer client command layout is the sgx545 SGXMKIF
+ * layout — same sizes, field offsets and formulas. The port is SGXMKIF-
+ * compatible by design (AGENTS.md §3.4), and the 64x64 frame on rev 0x00010205
+ * confirmed every §1/§6 field against STATE.md. So the 530 enables the sgx545
+ * command defs unchanged; only the per-core constants below differ (narrower
+ * VA, no multisample). PDS data rows are 16 B as on the 545 (STATE.md §1).
+ */
 const struct pvrsgx_cmd_core pvrsgx_cmd_core_sgx530 = {
 	.name = "sgx530",
 	.va_bits = 28,
-	.pds_row_bytes = 0,
+	.pds_row_bytes = 16,
 	.max_samples = 1,
 	.cmds = {
-		[PVRSGX_CMD_RENDER] = &sgx530_render,
-		[PVRSGX_CMD_TA_KICK] = &sgx530_ta_kick,
-		[PVRSGX_CMD_TRANSFER] = &sgx530_transfer,
+		[PVRSGX_CMD_RENDER] = &sgx545_render,
+		[PVRSGX_CMD_TA_KICK] = &sgx545_ta_kick,
+		[PVRSGX_CMD_TRANSFER] = &sgx545_transfer,
 	},
 };

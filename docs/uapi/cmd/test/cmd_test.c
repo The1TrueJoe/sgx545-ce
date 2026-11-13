@@ -358,13 +358,23 @@ static void test_sgx530(void)
 	u64 present;
 
 	EXPECT_EQ(c->va_bits, 28, "the SGX530's address bits");
-	EXPECT_EQ(c->max_samples, 1, "the SGX530: single-sampled until 4x is known there");
+	EXPECT_EQ(c->max_samples, 1, "the SGX530 is single-sampled");
 	EXPECT_EQ(core545->max_samples, 4, "the SGX545 renders 4x");
-	for (unsigned t = 0; t < PVRSGX_CMD_COUNT; t++)
-		EXPECT_EQ(c->cmds[t]->supported, 0, "no SGX530 command until its values are known");
-	EXPECT_EQ(pvrsgx_cmd_copy(c->cmds[PVRSGX_CMD_RENDER], UPTR(&r), &all, &present), -EOPNOTSUPP,
-		  "an SGX530 render");
-	EXPECT_EQ(pvrsgx_cmd_ext_mask(c->cmds[PVRSGX_CMD_RENDER]), 0, "no SGX530 extension");
+	EXPECT_EQ(c->pds_row_bytes, 16, "the SGX530's PDS data row size");
+	/*
+	 * SGXMKIF-compatible: the 530 command layout is the 545's, so it enables
+	 * the same command defs (confirmed field-by-field by the 64x64 frame on
+	 * rev 0x00010205). Only the per-core constants above differ.
+	 */
+	for (unsigned t = 0; t < PVRSGX_CMD_COUNT; t++) {
+		EXPECT_EQ(c->cmds[t]->supported, 1, "the SGX530 command is enabled");
+		EXPECT_EQ(c->cmds[t] == core545->cmds[t], 1, "the SGX530 uses the SGX545 command def");
+	}
+	EXPECT_EQ(pvrsgx_cmd_copy(c->cmds[PVRSGX_CMD_RENDER], UPTR(&r), &all, &present), 0,
+		  "an SGX530 render copies");
+	EXPECT_EQ(pvrsgx_cmd_ext_mask(c->cmds[PVRSGX_CMD_RENDER]),
+		  pvrsgx_cmd_ext_mask(core545->cmds[PVRSGX_CMD_RENDER]),
+		  "the SGX530 has the SGX545 render extension");
 }
 
 int main(void)
