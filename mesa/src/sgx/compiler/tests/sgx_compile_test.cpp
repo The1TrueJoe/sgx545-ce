@@ -1143,6 +1143,71 @@ TEST_F(sgx_compile_test, vertex_constants_in_memory)
    EXPECT_NE(disasm().find("ld.a.d"), std::string::npos) << disasm();
 }
 
+/* GL 3.x's 1024 uniform components: 256 vec4 in a fragment program, 265 in
+ * a vertex one (st's 9 for clip planes and point size on top), every one
+ * read, most from memory */
+static void
+read_all(nir_builder *b, nir_variable *arr, unsigned n, nir_variable *out)
+{
+   nir_deref_instr *ad = nir_build_deref_var(b, arr);
+   nir_def *r = NULL;
+   for (unsigned i = 0; i < n; i++) {
+      nir_def *e = nir_load_deref(b, nir_build_deref_array_imm(b, ad, i));
+      r = r ? nir_fadd(b, r, e) : e;
+   }
+   nir_store_var(b, out, r, 0xf);
+}
+
+TEST_F(sgx_compile_test, fragment_1024_uniform_components)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *arr =
+      var(nir_var_uniform, glsl_array_type(glsl_vec4_type(), 256, 0), "u", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   read_all(&b, arr, 256, col);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   unsigned top = 0;
+   for (unsigned i = 0; i < out.n_consts; i++)
+      if (out.consts[i].fmt != 0x11)
+         top = MAX2(top, out.consts[i].k + 1u);
+   EXPECT_EQ(top, 1024u);
+}
+
+TEST_F(sgx_compile_test, vertex_265_uniform_vec4)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *arr =
+      var(nir_var_uniform, glsl_array_type(glsl_vec4_type(), 265, 0), "u", -1);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(), "gl_Position",
+                           VARYING_SLOT_POS);
+   read_all(&b, arr, 265, pos);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   /* 1060 slots: nine 128-dword bases */
+   EXPECT_EQ(out.n_mem_bases, 9u);
+}
+
+/* ... and indexed: the array whole in memory, one address per base */
+TEST_F(sgx_compile_test, fragment_1024_components_indexed)
+{
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *arr =
+      var(nir_var_uniform, glsl_array_type(glsl_vec4_type(), 256, 0), "u", -1);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "gl_FragColor",
+                           FRAG_RESULT_COLOR);
+   nir_def *i = nir_f2i32(&b, nir_channel(&b, nir_load_var(&b, in), 0));
+   nir_deref_instr *ad = nir_build_deref_var(&b, arr);
+   nir_store_var(&b, col,
+                 nir_load_deref(&b, nir_build_deref_array(&b, ad, i)), 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_NE(disasm().find("ld.a.d"), std::string::npos) << disasm();
+}
+
 /* what feeds a derivative runs on helper instances too: skipinv clear */
 TEST_F(sgx_compile_test, fragment_derivative_source_no_skipinv)
 {
