@@ -429,8 +429,8 @@ static int rpm_status(char *buf, size_t n)
 	return ok ? 0 : -1;
 }
 
-/* 1 once suspended, 0 if not within ms, -1 without runtime PM. */
-static int rpm_wait_suspended(unsigned ms)
+/* 1 once suspended, 0 if not within ms, -1 without runtime PM; *took: ms waited. */
+static int rpm_wait_suspended(unsigned ms, unsigned *took)
 {
 	FILE *fp = power_file("control");
 	char st[32] = "";
@@ -444,6 +444,7 @@ static int rpm_wait_suspended(unsigned ms)
 			return -1;
 	}
 	for (unsigned t = 0; t <= ms; t += 20) {
+		*took = t;
 		if (rpm_status(st, sizeof(st)) || !strcmp(st, "unsupported"))
 			return -1;
 		if (!strcmp(st, "suspended"))
@@ -593,15 +594,21 @@ static int hang_bystander(unsigned f)
 static int idle(struct rc *a, unsigned f)
 {
 	char st[32] = "";
+	unsigned took = 0;
 	int bad = 0, s;
 
-	/* Only jobs hold the GPU awake: it suspends while a's context is idle. */
-	s = rpm_wait_suspended(1500);
+	/*
+	 * Only jobs hold the GPU awake: it suspends while a's context is idle.
+	 * Whether, not how fast: the autosuspend delay is 0.5 s, and the stop's
+	 * power-off handshake takes far longer on a debug kernel.
+	 */
+	s = rpm_wait_suspended(5000, &took);
 	if (s < 0) {
 		printf("  no runtime PM\n");
 		return 1;
 	}
-	printf("  idle with a render context: %s\n", s ? "SUSPENDED" : "stays active");
+	printf("  idle with a render context: %s after %u ms\n", s ? "SUSPENDED" : "stays active",
+	       took);
 	CHECK(s == 1);
 	/* A render resumes it, and the context's state survived the suspend. */
 	CHECK(render(a, f));
