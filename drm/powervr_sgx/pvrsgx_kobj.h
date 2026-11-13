@@ -19,9 +19,8 @@ struct pvrsgx_vm;
  * Its address is unique across the device and the firmware's directory maps it,
  * and a VM also maps the ones the TA and 3D use under its directory. The 3D
  * parameters range is the exception: per VM, from the heap base, mapped only in
- * that VM's directory, as the vendor's per-context 3D parameters heap
- * (sgxconfig.h; each context's PB starts at 0x10000000). A client can never map
- * anything in these ranges itself.
+ * that VM's directory. A client can never map anything in these ranges
+ * itself.
  */
 struct pvrsgx_kobj {
 	/** @km: Its memory. */

@@ -141,7 +141,7 @@ static struct pvrsgx_va *to_pvrsgx_va(struct drm_gpuva *va)
 
 /*
  * What an unmap or a teardown lets go of once every job on the VM so far is
- * done. A teardown (vm set) also takes the mappings down then.
+ * done. A teardown also takes the mappings down then.
  */
 struct pvrsgx_vm_free {
 	struct dma_fence_cb cb;
@@ -151,6 +151,7 @@ struct pvrsgx_vm_free {
 	struct dma_fence *fence;
 	struct list_head vas;
 	struct pvrsgx_vm *vm;
+	bool teardown;
 };
 
 /* The BIF may hold walks of what changed: the next command drops them. */
@@ -162,6 +163,12 @@ static void vm_invalidate(struct pvrsgx_device *sdev, bool data)
 	mutex_unlock(&sdev->ccb_lock);
 }
 
+/* A code object counts its unmapped mappings until vas_free() (pvrsgx_bo.code_unmapping). */
+static bool va_obj_is_code(struct pvrsgx_va *v)
+{
+	return to_pvrsgx_bo(v->obj)->flags & DRM_POWERVR_SGX_BO_CODE;
+}
+
 /* Unlink a removed mapping from its object, keeping a reference on freed. */
 static void va_unlink_locked(struct drm_gpuva *va, struct list_head *freed)
 {
@@ -169,6 +176,8 @@ static void va_unlink_locked(struct drm_gpuva *va, struct list_head *freed)
 
 	v->obj = va->gem.obj;
 	drm_gem_object_get(v->obj);
+	if (va_obj_is_code(v))
+		atomic_inc(&to_pvrsgx_bo(v->obj)->code_unmapping);
 	drm_gpuva_unlink(va);
 	list_add_tail(&v->free_link, freed);
 }
@@ -179,6 +188,8 @@ static void vas_free(struct list_head *list)
 
 	list_for_each_entry_safe(v, tmp, list, free_link) {
 		list_del(&v->free_link);
+		if (va_obj_is_code(v))
+			atomic_dec(&to_pvrsgx_bo(v->obj)->code_unmapping);
 		drm_gem_object_put(v->obj);
 		kfree(v);
 	}
@@ -218,19 +229,19 @@ static void vm_free_work(struct work_struct *work)
 	struct pvrsgx_device *sdev = to_pvrsgx_device(f->drm);
 
 	f->inval.done = vm_free_done;
-	if (f->vm) {
+	if (f->teardown) {
 		mutex_lock(&f->vm->lock);
 		vm_unmap_all(f->vm, &f->vas);
 		mutex_unlock(&f->vm->lock);
-		/*
-		 * The BIF caches walks only of a directory a job ran on, and a
-		 * restart or power-off drops them: then there is nothing to wait for.
-		 */
-		if (!READ_ONCE(sdev->powered) ||
-		    READ_ONCE(f->vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1) {
-			vm_free_done(&f->inval);
-			return;
-		}
+	}
+	/*
+	 * The BIF caches walks only of a directory a job ran on, and a restart or
+	 * power-off drops them: then there is nothing to wait for.
+	 */
+	if (!READ_ONCE(sdev->powered) ||
+	    READ_ONCE(f->vm->ran_gen) != READ_ONCE(sdev->fw_gen) + 1) {
+		vm_free_done(&f->inval);
+		return;
 	}
 	pvrsgx_ccb_after_invalidate(sdev, &f->inval, PVRSGX_CC_INVAL_BIF_PT |
 				    PVRSGX_CC_INVAL_BIF_PD | PVRSGX_CC_INVAL_DATA);
@@ -243,13 +254,17 @@ static void vm_free_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
 	queue_work(system_dfl_wq, &f->work);
 }
 
-/* Run f once every job submitted to vm so far is done, without waiting for them. */
-static void vm_free_after_jobs(struct pvrsgx_vm *vm, struct pvrsgx_vm_free *f)
+/*
+ * Run f once every job submitted to vm so far is done, without waiting for
+ * them. With none left, at once if now is set (the caller holds no VM lock).
+ */
+static void vm_free_after_jobs(struct pvrsgx_vm *vm, struct pvrsgx_vm_free *f, bool now)
 {
 	struct dma_fence *fence = NULL;
 
 	f->drm = &vm->sdev->base;
 	drm_dev_get(f->drm);
+	f->vm = pvrsgx_vm_get(vm);
 	INIT_WORK(&f->work, vm_free_work);
 	if (dma_resv_get_singleton(pvrsgx_vm_resv(vm), DMA_RESV_USAGE_BOOKKEEP, &fence)) {
 		/* No memory for a fence array: wait here instead. */
@@ -258,7 +273,11 @@ static void vm_free_after_jobs(struct pvrsgx_vm *vm, struct pvrsgx_vm_free *f)
 		fence = NULL;
 	}
 	f->fence = fence;
-	if (!fence || dma_fence_add_callback(fence, &f->cb, vm_free_cb))
+	if (fence && !dma_fence_add_callback(fence, &f->cb, vm_free_cb))
+		return;
+	if (now)
+		vm_free_work(&f->work);
+	else
 		queue_work(system_dfl_wq, &f->work);
 }
 
@@ -345,8 +364,8 @@ void pvrsgx_vm_user_put(struct pvrsgx_vm *vm)
 
 	f = vm_free_alloc();
 	if (f) {
-		f->vm = pvrsgx_vm_get(vm);
-		vm_free_after_jobs(vm, f);
+		f->teardown = true;
+		vm_free_after_jobs(vm, f, false);
 		return;
 	}
 	/*
@@ -748,9 +767,12 @@ int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *fi
 		goto out;
 
 	vm_invalidate(vm->sdev, false);
-	/* The objects unmapped stay until every job submitted before now is done. */
+	/*
+	 * The objects unmapped stay until every job submitted before now is done
+	 * and, if the VM ran one since the GPU started, the BIF invalidate has run.
+	 */
 	if (!list_empty(&f->vas)) {
-		vm_free_after_jobs(vm, f);
+		vm_free_after_jobs(vm, f, true);
 		f = NULL;
 	}
 

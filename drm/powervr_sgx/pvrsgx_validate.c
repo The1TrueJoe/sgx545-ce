@@ -3,7 +3,7 @@
 
 /*
  * Shader validation: what a client's USSE code may contain. The threat model
- * is in Documentation/gpu/powervr_sgx.rst, "Shader validation".
+ * is in Documentation/gpu/powervr_sgx/index.rst, "Shader validation".
  *
  * Client USSE code runs only from the two USSE heaps of its own VM (the code
  * base registers cover exactly those), the USSE heaps take only code objects,
@@ -151,7 +151,9 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 	err = dma_resv_lock_interruptible(obj->resv, NULL);
 	if (err)
 		goto out_buf;
-	if (!list_empty(&obj->gpuva.list) && args->offset < bo->code_end) {
+	/* An unmapped mapping counts until its jobs and the BIF invalidate are done. */
+	if ((!list_empty(&obj->gpuva.list) || atomic_read(&bo->code_unmapping)) &&
+	    args->offset < bo->code_end) {
 		err = -EBUSY;
 		goto out_unlock;
 	}

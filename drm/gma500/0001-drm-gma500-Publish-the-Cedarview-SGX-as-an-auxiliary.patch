@@ -1,4 +1,4 @@
-From 1735b5686fd3bff84614bc2291fc07f1674b6503 Mon Sep 17 00:00:00 2001
+From fc661ca8d3f56ec6f56cf96b178407b832feda85 Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Sun, 8 Nov 2026 14:01:52 -0500
 Subject: [PATCH 1/5] drm/gma500: Publish the Cedarview SGX as an auxiliary
@@ -15,35 +15,42 @@ that routes the SGX's interrupt to that driver.
 Each chip's psb_ops says whether its SGX has a driver of its own, and as
 which core. On such a chip gma500 hands the SGX over for good: it doesn't
 reset it or program its BIF at probe, creates no SGX MMU and maps nothing
-into one, enables no SGX events at interrupt (re)install, and passes the
-SGX's interrupt to the registered handler, or ignores it when there is
-none.
+into one, masks the SGX's events at interrupt (re)install until a
+handler is registered, and passes the SGX's interrupt to the registered
+handler. Teardown clears the handler itself, whatever the SGX driver did.
+
+The interrupt reaches the SGX driver through a callback on the auxiliary
+device, not an exported symbol: an exported gma500 symbol would make
+that driver depend on gma500, and the same driver runs the Intel Atom
+CE5300, where the SGX is a PCI function of its own and there is no
+gma500.
 
 The auxiliary device's parent is the GPU's PCI device, so runtime PM on
-the SGX side keeps gma500, and with it the graphics power island, awake.
+the SGX side would keep gma500, and with it the graphics power island,
+awake; gma500 holds a runtime-PM reference for its whole life today.
 
 Only Cedarview's psb_ops names an SGX. Poulsbo and Oaktrail leave it NULL
 and are unchanged until an SGX driver has run on them.
 ---
- MAINTAINERS                         |  1 +
- drivers/gpu/drm/gma500/Kconfig      |  1 +
- drivers/gpu/drm/gma500/Makefile     |  1 +
- drivers/gpu/drm/gma500/cdv_device.c |  5 ++
- drivers/gpu/drm/gma500/gem.c        | 12 ++--
- drivers/gpu/drm/gma500/psb_drv.c    | 42 ++++++++-----
- drivers/gpu/drm/gma500/psb_drv.h    | 26 ++++++++
- drivers/gpu/drm/gma500/psb_irq.c    | 31 +++++++---
- drivers/gpu/drm/gma500/sgx_aux.c    | 96 +++++++++++++++++++++++++++++
- include/drm/gma500_sgx.h            | 52 ++++++++++++++++
- 10 files changed, 238 insertions(+), 29 deletions(-)
+ MAINTAINERS                         |   1 +
+ drivers/gpu/drm/gma500/Kconfig      |   1 +
+ drivers/gpu/drm/gma500/Makefile     |   3 +-
+ drivers/gpu/drm/gma500/cdv_device.c |   5 ++
+ drivers/gpu/drm/gma500/gem.c        |  12 ++--
+ drivers/gpu/drm/gma500/psb_drv.c    |  42 ++++++++----
+ drivers/gpu/drm/gma500/psb_drv.h    |  26 +++++++
+ drivers/gpu/drm/gma500/psb_irq.c    |  32 ++++++---
+ drivers/gpu/drm/gma500/sgx_aux.c    | 102 ++++++++++++++++++++++++++++
+ include/drm/gma500_sgx.h            |  52 ++++++++++++++
+ 10 files changed, 246 insertions(+), 30 deletions(-)
  create mode 100644 drivers/gpu/drm/gma500/sgx_aux.c
  create mode 100644 include/drm/gma500_sgx.h
 
 diff --git a/MAINTAINERS b/MAINTAINERS
-index 2e6bca6..9321bed 100644
+index c4f4e4877..e1b0a4245 100644
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
-@@ -9030,6 +9030,7 @@ L:	dri-devel@lists.freedesktop.org
+@@ -9036,6 +9036,7 @@ L:	dri-devel@lists.freedesktop.org
  S:	Maintained
  T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
  F:	drivers/gpu/drm/gma500/
@@ -52,7 +59,7 @@ index 2e6bca6..9321bed 100644
  DRM DRIVERS FOR HISILICON HIBMC
  M:	Yongbang Shi <shiyongbang@huawei.com>
 diff --git a/drivers/gpu/drm/gma500/Kconfig b/drivers/gpu/drm/gma500/Kconfig
-index dc4c566..bece965 100644
+index dc4c56638..bece965b2 100644
 --- a/drivers/gpu/drm/gma500/Kconfig
 +++ b/drivers/gpu/drm/gma500/Kconfig
 @@ -4,6 +4,7 @@ config DRM_GMA500
@@ -64,19 +71,21 @@ index dc4c566..bece965 100644
  	select I2C
  	select I2C_ALGOBIT
 diff --git a/drivers/gpu/drm/gma500/Makefile b/drivers/gpu/drm/gma500/Makefile
-index 58fed80..d6dce26 100644
+index 58fed80c7..a933940e2 100644
 --- a/drivers/gpu/drm/gma500/Makefile
 +++ b/drivers/gpu/drm/gma500/Makefile
-@@ -30,6 +30,7 @@ gma500_gfx-y += \
- 	  power.o \
- 	  psb_device.o \
- 	  psb_drv.o \
-+	  sgx_aux.o \
- 	  psb_intel_display.o \
+@@ -34,7 +34,8 @@ gma500_gfx-y += \
  	  psb_intel_lvds.o \
  	  psb_intel_modes.o \
+ 	  psb_intel_sdvo.o \
+-	  psb_irq.o
++	  psb_irq.o \
++	  sgx_aux.o
+ 
+ gma500_gfx-$(CONFIG_ACPI) +=  opregion.o
+ gma500_gfx-$(CONFIG_DRM_FBDEV_EMULATION) +=  fbdev.o
 diff --git a/drivers/gpu/drm/gma500/cdv_device.c b/drivers/gpu/drm/gma500/cdv_device.c
-index fd6ea89..f0a8353 100644
+index fd6ea8998..f0a835366 100644
 --- a/drivers/gpu/drm/gma500/cdv_device.c
 +++ b/drivers/gpu/drm/gma500/cdv_device.c
 @@ -563,6 +563,10 @@ static int cdv_chip_setup(struct drm_device *dev)
@@ -99,7 +108,7 @@ index fd6ea89..f0a8353 100644
  	.errata = cdv_errata,
  
 diff --git a/drivers/gpu/drm/gma500/gem.c b/drivers/gpu/drm/gma500/gem.c
-index 2708e8c..4a4ecfb 100644
+index 2708e8c68..4a4ecfb7b 100644
 --- a/drivers/gpu/drm/gma500/gem.c
 +++ b/drivers/gpu/drm/gma500/gem.c
 @@ -54,9 +54,10 @@ int psb_gem_pin(struct psb_gem_object *pobj)
@@ -129,7 +138,7 @@ index 2708e8c..4a4ecfb 100644
  
  	/* Reset caching flags */
 diff --git a/drivers/gpu/drm/gma500/psb_drv.c b/drivers/gpu/drm/gma500/psb_drv.c
-index d17cb5b..c29cc64 100644
+index d17cb5b4a..c29cc64cc 100644
 --- a/drivers/gpu/drm/gma500/psb_drv.c
 +++ b/drivers/gpu/drm/gma500/psb_drv.c
 @@ -145,6 +145,10 @@ static int psb_do_init(struct drm_device *dev)
@@ -211,7 +220,7 @@ index d17cb5b..c29cc64 100644
  	dev->max_vblank_count = 0xffffff; /* only 24 bits of frame count */
  
 diff --git a/drivers/gpu/drm/gma500/psb_drv.h b/drivers/gpu/drm/gma500/psb_drv.h
-index db197b8..dbc5827 100644
+index db197b865..dbc5827aa 100644
 --- a/drivers/gpu/drm/gma500/psb_drv.h
 +++ b/drivers/gpu/drm/gma500/psb_drv.h
 @@ -8,10 +8,12 @@
@@ -283,7 +292,7 @@ index db197b8..dbc5827 100644
 +
  #endif
 diff --git a/drivers/gpu/drm/gma500/psb_irq.c b/drivers/gpu/drm/gma500/psb_irq.c
-index c224c7f..e5d378e 100644
+index c224c7ff3..426efc126 100644
 --- a/drivers/gpu/drm/gma500/psb_irq.c
 +++ b/drivers/gpu/drm/gma500/psb_irq.c
 @@ -224,10 +224,19 @@ static irqreturn_t gma_irq_handler(int irq, void *arg)
@@ -310,20 +319,21 @@ index c224c7f..e5d378e 100644
  	}
  
  	/* Note: this bit has other meanings on some devices, so we will
-@@ -257,8 +266,10 @@ void gma_irq_preinstall(struct drm_device *dev)
+@@ -257,8 +266,11 @@ void gma_irq_preinstall(struct drm_device *dev)
  	PSB_WVDC32(0xFFFFFFFF, PSB_HWSTAM);
  	PSB_WVDC32(0x00000000, PSB_INT_MASK_R);
  	PSB_WVDC32(0x00000000, PSB_INT_ENABLE_R);
 -	PSB_WSGX32(0x00000000, PSB_CR_EVENT_HOST_ENABLE);
 -	PSB_RSGX32(PSB_CR_EVENT_HOST_ENABLE);
-+	if (!gma_sgx_external(dev_priv)) {
++	/* An SGX driver of its own enables what it needs; until one binds, mask it. */
++	if (!gma_sgx_external(dev_priv) || !READ_ONCE(dev_priv->sgx_handler)) {
 +		PSB_WSGX32(0x00000000, PSB_CR_EVENT_HOST_ENABLE);
 +		PSB_RSGX32(PSB_CR_EVENT_HOST_ENABLE);
 +	}
  
  	if (dev->vblank[0].enabled)
  		dev_priv->vdc_irq_mask |= _PSB_VSYNC_PIPEA_FLAG;
-@@ -284,9 +295,11 @@ void gma_irq_postinstall(struct drm_device *dev)
+@@ -284,9 +296,11 @@ void gma_irq_postinstall(struct drm_device *dev)
  	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
  
  	/* Enable 2D and MMU fault interrupts */
@@ -340,10 +350,10 @@ index c224c7f..e5d378e 100644
  	PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
 diff --git a/drivers/gpu/drm/gma500/sgx_aux.c b/drivers/gpu/drm/gma500/sgx_aux.c
 new file mode 100644
-index 0000000..7693af9
+index 000000000..671cb6c33
 --- /dev/null
 +++ b/drivers/gpu/drm/gma500/sgx_aux.c
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,102 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * The SGX of a GMA500-family GPU, published as an auxiliary device for a
@@ -357,6 +367,7 @@ index 0000000..7693af9
 +#include <linux/pci.h>
 +#include <linux/slab.h>
 +
++#include <drm/drm_print.h>
 +#include <drm/gma500_sgx.h>
 +
 +#include "psb_drv.h"
@@ -404,8 +415,10 @@ index 0000000..7693af9
 +	int ret;
 +
 +	aux = kzalloc_obj(*aux);
-+	if (!aux)
++	if (!aux) {
++		drm_warn(dev, "SGX auxiliary device not published (-ENOMEM)\n");
 +		return;
++	}
 +	aux->dev_priv = dev_priv;
 +	aux->sgx.regs = dev_priv->sgx_reg;
 +	aux->sgx.regs_len = PSB_SGX_SIZE;
@@ -419,11 +432,13 @@ index 0000000..7693af9
 +	ret = auxiliary_device_init(&aux->sgx.adev);
 +	if (ret) {
 +		kfree(aux);
++		drm_warn(dev, "SGX auxiliary device not published (%d)\n", ret);
 +		return;
 +	}
 +	ret = auxiliary_device_add(&aux->sgx.adev);
 +	if (ret) {
 +		auxiliary_device_uninit(&aux->sgx.adev);
++		drm_warn(dev, "SGX auxiliary device not published (%d)\n", ret);
 +		return;
 +	}
 +	dev_priv->sgx_adev = &aux->sgx;
@@ -435,14 +450,15 @@ index 0000000..7693af9
 +
 +	if (!dev_priv->sgx_adev)
 +		return;
-+	/* Unbinding the SGX driver hands the interrupt back. */
++	/* Unbinding the SGX driver hands the interrupt back; make sure of it. */
 +	auxiliary_device_delete(&dev_priv->sgx_adev->adev);
++	gma_sgx_set_irq_handler(dev_priv->sgx_adev, NULL, NULL);
 +	auxiliary_device_uninit(&dev_priv->sgx_adev->adev);
 +	dev_priv->sgx_adev = NULL;
 +}
 diff --git a/include/drm/gma500_sgx.h b/include/drm/gma500_sgx.h
 new file mode 100644
-index 0000000..00a034f
+index 000000000..00a034f1a
 --- /dev/null
 +++ b/include/drm/gma500_sgx.h
 @@ -0,0 +1,52 @@
@@ -499,5 +515,5 @@ index 0000000..00a034f
 +
 +#endif /* __DRM_GMA500_SGX_H__ */
 -- 
-2.50.1 (Apple Git-155)
+2.50.1
 

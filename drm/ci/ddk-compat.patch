@@ -51,7 +51,7 @@ diff -ruN a/drm/powervr_sgx/pvrsgx_ccb.c b/drm/powervr_sgx/pvrsgx_ccb.c
 @@ -131,7 +131,7 @@
  	int err;
  
- 	/* The vendor image has no entry for some types; the open one's table is the identity. */
+ 	/* Types past the microkernel's command table are refused. */
 -	if (type >= PVRSGX_KCMD_MAX)
 +	if (type >= PVRSGX_KCMD_MAX || (pvrsgx_fw_is_ddk(sdev) && !sdev->fw.host_kick[type]))
  		return -EINVAL;
@@ -167,12 +167,13 @@ diff -ruN a/drm/powervr_sgx/pvrsgx_device.h b/drm/powervr_sgx/pvrsgx_device.h
 diff -ruN a/drm/powervr_sgx/pvrsgx_fw.c b/drm/powervr_sgx/pvrsgx_fw.c
 --- a/drm/powervr_sgx/pvrsgx_fw.c	2026-11-12 13:59:23
 +++ b/drm/powervr_sgx/pvrsgx_fw.c	2026-11-12 13:59:23
-@@ -6,8 +6,9 @@
-  * and init scripts it needs, which the vendor's user-space init and services
-  * driver set up between them.
+@@ -5,9 +5,9 @@
+  * Loading and starting the microkernel: the buffers, constants, PDS programs
+  * and init scripts it needs.
   *
-- * The host interface is the vendor's SGXMKIF as of DDK 1.7. The microkernel
-- * file's header lists its entry points and patch sites.
+- * The host interface is version 1 of the microkernel's own
+- * (DRM_POWERVR_SGX_FW_IF_V1). The microkernel file's header lists its entry
+- * points and patch sites.
 + * The host interface is the vendor's SGXMKIF as of DDK 1.7. Two images speak
 + * it: the DDK 1.7.862890 build, whose entry points and patch sites are fixed
 + * here, and the open microkernel, whose file header lists its own.

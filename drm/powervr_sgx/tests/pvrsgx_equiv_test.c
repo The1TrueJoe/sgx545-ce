@@ -17,7 +17,7 @@
  * Each phase's record is checked against pvrsgx_equiv_golden.h: its line
  * count and CRC32. A change meant to leave the SGX545 alone must leave every
  * record as it is. On a mismatch the whole record is printed, one "EQ|" line
- * per entry, for a diff against tests/pvrsgx_equiv_545.txt.
+ * per entry, to diff against the same test on a known-good tree.
  */
 
 #include <kunit/test.h>
@@ -282,6 +282,7 @@ static struct eq_fx *eq_device(struct kunit *test, unsigned int core, u32 core_r
 	INIT_WORK(&sdev->reap_work, eq_noop_work);
 	/* The restart path queues the reap; the real driver's own workqueue isn't set up here. */
 	sdev->wq = system_dfl_wq;
+	sdev->free_wq = system_dfl_wq;
 	sdev->irq = -1;
 	sdev->regs = (void __iomem __force *)fx->regs;
 

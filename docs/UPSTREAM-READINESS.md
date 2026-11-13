@@ -796,7 +796,7 @@ Documentation.
 | F4 coredump, F5 debugfs, F6 tracepoints, F7 gma500 | already separate files; their call sites are still in v1 code |
 | PRIME import | own file (`pvrsgx_prime.c`), but in v1: X through kmsro on simpledrm imports its scanout buffers |
 | firmware structures | done: TA command, dependency block, render details, RT data, PB descriptor, HW render and transfer contexts, transfer command, control block (`pvrsgx_fwif.h`, offsets checked by `static_assert`); no firmware word is written by offset any more |
-| DDK names in comments | gone (the uAPI's `DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7` is left for uapi-stream) |
+| DDK names in comments | gone (the uAPI constant is `DRM_POWERVR_SGX_FW_IF_V1`) |
 | generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
 | one `pvrsgx_` prefix | done (the shared stream files are now `pvrsgx_stream*`) |
 | ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |

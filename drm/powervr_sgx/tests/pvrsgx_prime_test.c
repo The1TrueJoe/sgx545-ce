@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright © 2026 Joseph Telaak */
 
-/* KUnit tests of a job's cache ranges (rev3-commands 8.2), included from pvrsgx_prime.c. */
+/* KUnit tests of a job's cache ranges and their checks, included from pvrsgx_prime.c. */
 
 #include <kunit/test.h>
 

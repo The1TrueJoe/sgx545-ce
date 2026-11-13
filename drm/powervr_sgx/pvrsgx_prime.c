@@ -170,6 +170,13 @@ struct drm_gem_object *pvrsgx_prime_import_sg_table(struct drm_device *drm,
 	/* An import's flushes are CPU cache flushes of its vmap, which only x86 has here. */
 	if (!IS_ENABLED(CONFIG_X86))
 		return ERR_PTR(-EOPNOTSUPP);
+	/*
+	 * The exporter's mapping is taken once here and kept for the import's
+	 * life. A job's cache ranges are flushed through it in run_job and at
+	 * completion, inside the fence-signaling path, where a vmap can't be
+	 * taken: it may sleep and allocate. The importer never touches the
+	 * attachment's pages.
+	 */
 	err = dma_buf_vmap_unlocked(attach->dmabuf, &map);
 	if (err)
 		return ERR_PTR(err);

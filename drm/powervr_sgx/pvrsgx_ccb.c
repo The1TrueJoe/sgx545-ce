@@ -130,7 +130,7 @@ int pvrsgx_ccb_send(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type,
 	u32 cache_control;
 	int err;
 
-	/* The vendor image has no entry for some types; the open one's table is the identity. */
+	/* Types past the microkernel's command table are refused. */
 	if (type >= PVRSGX_KCMD_MAX)
 		return -EINVAL;
 

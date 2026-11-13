@@ -38,7 +38,7 @@ Subtest names stay as they are now, so a result maps back to the standalone test
 | `powervr_sgx_vm` | `vm-create-destroy`, `vm-map-unmap`, `vm-map-overlap`, `vm-map-kernel-ranges`, `vm-map-invalid`, `vm-handles-per-file`, `vm-release-frees` |
 | `powervr_sgx_context` | `context-create-destroy`, `context-invalid`, `context-state-invalid`, `rt-dataset-create-destroy`, `rt-dataset-invalid` |
 | `powervr_sgx_submit` | `submit-null-job`, `-timeline`, `-chain`, `-many`, `-bo-ref`, `-vm-destroyed`; `submit-invalid`, `submit-other-file`, `submit-other-vm`, `submit-wait-unsignalled`, `submit-render-invalid`, `submit-transfer-invalid` |
-| `powervr_sgx_upload_code` | `upload-code-corpus`, `upload-code-reject`, `upload-code-invalid`, `upload-code-mapped` |
+| `powervr_sgx_upload_code` | `upload-code-corpus`, `upload-code-reject`, `upload-code-invalid`, `upload-code-mapped`, `upload-code-unmap-busy` |
 | `powervr_sgx_reserved` | `reserved-bits` (every reserved field and padding of every ioctl) |
 
 The port is mechanical: `igt_main`, an `igt_fixture` that opens the render node with

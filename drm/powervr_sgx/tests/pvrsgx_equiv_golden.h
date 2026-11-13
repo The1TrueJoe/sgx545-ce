@@ -2,11 +2,9 @@
 /* Copyright © 2026 Joseph Telaak */
 
 /*
- * The SGX545 records of pvrsgx_equiv_test.c, from m2-drm 3f36c8a4 with the
- * test added; "render" from wip/multicore a6f614f0, before the firmware
- * structure and PDS field work. The full records are tests/pvrsgx_equiv_545.txt. Change these
- * only for a change meant to change the SGX545's behavior, and say so in the
- * commit message.
+ * The SGX545 records of pvrsgx_equiv_test.c: each phase's line count and
+ * CRC32. Change these only for a change meant to change the SGX545's
+ * behavior, and say so in the commit message.
  */
 
 #ifndef PVRSGX_EQUIV_GOLDEN_H

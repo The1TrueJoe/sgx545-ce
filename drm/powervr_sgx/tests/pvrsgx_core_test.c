@@ -80,7 +80,7 @@ static void core_test_sgx545_values(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, f->regs->bif_bank0, SGX_CR_BIF_BANK0);
 	KUNIT_EXPECT_EQ(test, f->regs->use_code_base_addr_shift, 7);
 	KUNIT_EXPECT_EQ(test, f->regs->use_code_base_dm_shift, 25);
-	KUNIT_EXPECT_EQ(test, f->regs->vendor_b30, 0x0b30);
+	KUNIT_EXPECT_EQ(test, f->regs->cr_b30, 0x0b30);
 }
 
 /* The SGX530: one directory list, 28 bits, BRN_28889, a layout the EDM reaches. */

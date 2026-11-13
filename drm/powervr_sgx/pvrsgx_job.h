@@ -22,6 +22,22 @@ struct pvrsgx_file;
 struct pvrsgx_vm;
 
 /**
+ * struct pvrsgx_usage - A file's GPU time, for fdinfo
+ *
+ * Its contexts hold it too: a job may finish after its file has closed.
+ */
+struct pvrsgx_usage {
+	/** @ref: Held by the file and by each of its contexts. */
+	struct kref ref;
+	/** @render_ns: Time render jobs of the file spent on the GPU. */
+	atomic64_t render_ns;
+};
+
+struct pvrsgx_usage *pvrsgx_usage_new(void);
+struct pvrsgx_usage *pvrsgx_usage_get(struct pvrsgx_usage *u);
+void pvrsgx_usage_put(struct pvrsgx_usage *u);
+
+/**
  * struct pvrsgx_context - A queue of jobs in one VM
  */
 struct pvrsgx_context {
@@ -31,6 +47,8 @@ struct pvrsgx_context {
 	struct pvrsgx_device *sdev;
 	/** @vm: The VM its jobs run in. */
 	struct pvrsgx_vm *vm;
+	/** @usage: Its file's GPU time. */
+	struct pvrsgx_usage *usage;
 	/** @entity: Its scheduler queue. */
 	struct drm_sched_entity entity;
 	/** @type: enum drm_powervr_sgx_ctx_type. */
@@ -65,6 +83,8 @@ struct pvrsgx_cache_range {
  * struct pvrsgx_job - One submitted job
  */
 struct pvrsgx_job {
+	/** @free_work: The final puts, off the scheduler's queue. */
+	struct work_struct free_work;
 	/** @base: The scheduler job. */
 	struct drm_sched_job base;
 	/** @ctx: The context it was submitted on. */
@@ -74,9 +94,11 @@ struct pvrsgx_job {
 
 	/** @hw_fence: Signalled when the firmware has finished the job. */
 	struct dma_fence *hw_fence;
-	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initialises it. */
+	/** @hw_fence_mem: @hw_fence's memory from submit until run_job initializes it. */
 	struct dma_fence *hw_fence_mem;
 	/** @ccb_seq: Kernel CCB command that carries the job. */
+	/** @start_ns: When run_job sent it to the microkernel. */
+	u64 start_ns;
 	u64 ccb_seq;
 	/** @node: In pvrsgx_device.active while on the GPU. */
 	struct list_head node;

@@ -62,7 +62,7 @@ struct pvrsgx_kmem {
 	void *cpu;
 };
 
-/* Firmware-visible buffers, in the vendor init's allocation order. */
+/* Firmware-visible buffers, in allocation order. */
 enum pvrsgx_fw_buf {
 	PVRSGX_FW_CCB,		/* kernel CCB: 256 commands */
 	PVRSGX_FW_CCBCTL,	/* its write and read offsets */
@@ -105,13 +105,13 @@ struct pvrsgx_fw {
 	u8 *image;
 	/** @image_size: Bytes of USSE code in @image. */
 	u32 image_size;
-	/** @features: PVRSGX_UKFW_* of an open microkernel; 0 for the DDK's. */
+	/** @features: PVRSGX_UKFW_* the microkernel's file header declares. */
 	u32 features;
-	/** @entries: An open microkernel's entry table (PDS program, offset), or NULL. */
+	/** @entries: The microkernel's entry table (PDS program, offset), or NULL. */
 	u32 (*entries)[2];
 	/** @n_entries: Entries in @entries. */
 	u32 n_entries;
-	/** @patches: An open microkernel's patch table (offset, value), or NULL. */
+	/** @patches: The microkernel's patch table (offset, value), or NULL. */
 	u32 (*patches)[2];
 	/** @n_patches: Entries in @patches. */
 	u32 n_patches;
@@ -202,10 +202,15 @@ struct pvrsgx_device {
 	/** @last_fence: Hardware fence of the job last sent to the firmware. */
 	struct dma_fence *last_fence;
 	/**
-	 * @wq: Runs @poll_work and @reap_work. The poll signals fences, so the queue
-	 * has a rescuer and never waits on memory reclaim.
+	 * @wq: Runs @poll_work, which signals fences: the queue has a rescuer
+	 * and never waits on memory reclaim.
 	 */
 	struct workqueue_struct *wq;
+	/**
+	 * @free_wq: Runs @reap_work and the jobs' final puts, which take
+	 * reservations and free memory: never the queue that signals fences.
+	 */
+	struct workqueue_struct *free_wq;
 	/** @poll_work: Checks completions while jobs are out. */
 	struct delayed_work poll_work;
 
@@ -259,6 +264,13 @@ struct pvrsgx_device {
 
 #define to_pvrsgx_device(drm) container_of_const(drm, struct pvrsgx_device, base)
 
+/*
+ * A file's limits: every context and RT dataset takes kernel memory from
+ * device-wide ranges, so one client may not take them all.
+ */
+#define PVRSGX_MAX_FILE_CONTEXTS	64
+#define PVRSGX_MAX_FILE_RTDS		64
+
 /**
  * struct pvrsgx_file - Per-open state
  */
@@ -271,6 +283,8 @@ struct pvrsgx_file {
 	struct xarray contexts;
 	/** @rtds: RT datasets by handle. */
 	struct xarray rtds;
+	/** @usage: GPU time, for fdinfo. */
+	struct pvrsgx_usage *usage;
 };
 
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)

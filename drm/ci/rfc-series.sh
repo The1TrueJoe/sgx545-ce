@@ -25,7 +25,7 @@ cp "$DRM"/Documentation/gpu/powervr_sgx/*.rst Documentation/gpu/powervr_sgx/
 grep -q powervr_sgx/index Documentation/gpu/drivers.rst ||
 	perl -pi -e 's#^   imagination/index\n#$&   powervr_sgx/index\n#' Documentation/gpu/drivers.rst
 grep -q '^DRM DRIVER FOR POWERVR SGX5XX GPUS$' MAINTAINERS ||
-	perl -pi -e 'print "DRM DRIVER FOR POWERVR SGX5XX GPUS\nM:\tJoseph Telaak <joseph\@telaak.dev>\nL:\tdri-devel\@lists.freedesktop.org\nS:\tMaintained\nT:\tgit https://gitlab.freedesktop.org/drm/misc/kernel.git\nF:\tDocumentation/gpu/powervr_sgx/\nF:\tdrivers/gpu/drm/powervr_sgx/\nF:\tinclude/uapi/drm/powervr_sgx_drm.h\n\n" if /^DRM DRIVER FOR QEMU.S CIRRUS DEVICE$/' MAINTAINERS
+	perl -pi -e 'print "DRM DRIVER FOR POWERVR SGX5XX GPUS\nM:\tJoseph Telaak <joseph\@telaak.dev>\nL:\tdri-devel\@lists.freedesktop.org\nS:\tMaintained\nT:\tgit https://gitlab.freedesktop.org/drm/misc/kernel.git\nF:\tDocumentation/gpu/powervr_sgx/\nF:\tdrivers/gpu/drm/powervr_sgx/\nF:\tinclude/drm/gma500_sgx.h\nF:\tinclude/uapi/drm/powervr_sgx_drm.h\n\n" if /^DRM DRIVER FOR QEMU.S CIRRUS DEVICE$/' MAINTAINERS
 git add include/uapi/drm/powervr_sgx_drm.h Documentation/gpu MAINTAINERS
 git commit -q -F "$MSG/03-uapi.txt"
 
@@ -37,14 +37,14 @@ kconfig() {
 
 # The driver by area, one patch each; nothing builds until the last adds the
 # Kconfig entry. Each file in exactly one group.
-AREAS="04-device:core hw regs device mmu
+AREAS="04-device:core hw regs device mmu cache
 05-firmware:fw fwif pds ccb
 06-memory:gem vm prime kobj
 07-jobs:job trace
 08-commands:cmd cmd_defs cmd_checks
 09-render:render transfer
-10-validate:validate usse_table
-11-driver:drv pm debugfs dump aux"
+10-validate:validate usse usse_table
+11-driver:drv pm debugfs dump aux of"
 rm -rf "$D" && mkdir -p "$D"
 all=$(cd "$DRM/powervr_sgx" && ls *.[ch] | sed 's/^pvrsgx_//; s/\.[ch]$//' | sort -u)
 listed=$(echo "$AREAS" | cut -d: -f2 | tr ' ' '\n' | sort)
@@ -55,7 +55,7 @@ echo "$AREAS" | while IFS=: read -r msg files; do
 			if [ -e "$DRM/powervr_sgx/pvrsgx_$f.$x" ]; then cp -L "$DRM/powervr_sgx/pvrsgx_$f.$x" "$D/"; fi
 		done
 	done
-	perl -0pi -e 's/\n*#if IS_ENABLED\(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST\)\n#include "tests\/[a-z_]+\.c"\n#endif\n/\n/g' "$D"/*.c
+	perl -0pi -e 's/\n*#if IS_ENABLED\(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST\)\n(#include "tests\/[a-z0-9_]+\.c"\n)+#endif\n/\n/g' "$D"/*.c
 	if [ "$msg" = 11-driver ]; then
 		KUNIT=0 kconfig > "$D/Kconfig"
 		# In tree only: no out-of-tree branch, the uAPI header from include/uapi.
@@ -79,7 +79,7 @@ for f in "$DRM"/powervr_sgx/*.c; do
 done
 KUNIT=1 kconfig > "$D/Kconfig"
 mkdir -p "$D/tests"
-cp "$DRM"/powervr_sgx/tests/*.c "$DRM/powervr_sgx/tests/.kunitconfig" "$D/tests/"
+cp "$DRM"/powervr_sgx/tests/*.[ch] "$DRM/powervr_sgx/tests/.kunitconfig" "$D/tests/"
 git add "$D"
 git commit -q -F "$MSG/12-kunit.txt"
 git log --oneline -13
