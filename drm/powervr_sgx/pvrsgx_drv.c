@@ -15,6 +15,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 #include <uapi/drm/powervr_sgx_drm.h>
 

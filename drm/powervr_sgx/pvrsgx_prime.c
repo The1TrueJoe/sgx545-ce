@@ -126,14 +126,20 @@ static u64 range_flush(const struct pvrsgx_cache_range *r)
 	/* I/O memory isn't cached. */
 	if (!r->import || map->is_iomem)
 		return 0;
-	if (r->rows == 1 || r->stride == r->size) {
-		drm_clflush_virt_range(map->vaddr + r->offset, r->size * r->rows);
-	} else {
-		for (u32 y = 0; y < r->rows; y++)
-			drm_clflush_virt_range(map->vaddr + r->offset + (u64)y * r->stride,
-					       r->size);
+	/*
+	 * Rows less than a page apart: one flush of their span, which the range
+	 * check keeps inside the object. Rows further apart are at most one per
+	 * page of it, so the loop is bounded by the object's size.
+	 */
+	if (r->rows == 1 || r->stride - r->size < PAGE_SIZE) {
+		u64 span = (u64)(r->rows - 1) * r->stride + r->size;
+
+		drm_clflush_virt_range(map->vaddr + r->offset, span);
+		return span;
 	}
-	return r->size * r->rows;
+	for (u32 y = 0; y < r->rows; y++)
+		drm_clflush_virt_range(map->vaddr + r->offset + (u64)y * r->stride, r->size);
+	return (u64)r->size * r->rows;
 }
 
 /* The whole of an import, at import. */
