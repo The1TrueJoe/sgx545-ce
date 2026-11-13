@@ -45,8 +45,11 @@ static struct krange krange(const struct pvrsgx_device *sdev, enum pvrsgx_krange
 
 	switch (r) {
 	case PVRSGX_KRANGE_KDATA:	/* past the firmware's own arenas (pvrsgx_fw.c) */
+		/* EDM-protected where the core allows it, as the firmware's data arena. */
 		return (struct krange){ h->kernel_data.base + 0x10000, h->kernel_data.end,
-					SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT };
+					SGX_MMU_PTE_CACHECONSISTENT |
+					(sdev->family->data_no_edmprotect ? 0 :
+					 SGX_MMU_PTE_EDMPROTECT) };
 	case PVRSGX_KRANGE_KCODE:
 		return (struct krange){ h->kernel_code.base + 0x10000, h->kernel_code.end,
 					SGX_MMU_PTE_CACHECONSISTENT };
@@ -151,15 +154,35 @@ static void kobj_free(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 	pvrsgx_vm_put(vm);
 }
 
+/*
+ * An object no command has named: the GPU never walked to it, so it goes now,
+ * without the graveyard's wait for a render and an invalidate.
+ */
+void pvrsgx_kobj_free_unused(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
+{
+	if (IS_ERR_OR_NULL(*o))
+		return;
+	kobj_unmap(*o);
+	kobj_free(sdev, *o);
+	*o = NULL;
+}
+
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
 {
 	if (IS_ERR_OR_NULL(o))
 		return;
 	mutex_lock(&sdev->kobj_lock);
-	o->grave_seq = sdev->renders_submitted;
+	o->grave_seq = o->transfer ? sdev->transfers_submitted : sdev->renders_submitted;
 	o->grave_restarts = READ_ONCE(sdev->restarts);
 	list_add_tail(&o->grave, &sdev->graveyard);
 	mutex_unlock(&sdev->kobj_lock);
+	/*
+	 * No render will finish to free it (unbind, or a device lost): free it
+	 * now. Once the device's release has drained its queues, the release's
+	 * own kobj_fini() does it.
+	 */
+	if (READ_ONCE(sdev->lost) && sdev->free_wq)
+		queue_work(sdev->free_wq, &sdev->reap_work);
 }
 
 /*
@@ -167,7 +190,7 @@ void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o)
  * what was unmapped before a command the microkernel has since taken.
  * renders_done U64_MAX (unbind, the GPU stopped) frees everything at once.
  */
-void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
+void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done, u64 transfers_done)
 {
 	struct pvrsgx_kobj *o, *tmp;
 	bool all = renders_done == U64_MAX;
@@ -179,7 +202,8 @@ void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done)
 	list_for_each_entry_safe(o, tmp, &sdev->graveyard, grave) {
 		/* A restart forgets everything the old run pointed at. */
 		if (all || o->grave_restarts != restarts ||
-		    (o->grave_seq < renders_done && !o->until_restart))
+		    (o->grave_seq < (o->transfer ? transfers_done : renders_done) &&
+		     !o->until_restart))
 			list_move_tail(&o->grave, &dead);
 	}
 	mutex_unlock(&sdev->kobj_lock);
@@ -227,7 +251,7 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev)
 		mutex_unlock(&sdev->kobj_lock);
 		if (empty)
 			break;
-		pvrsgx_kobj_reap(sdev, U64_MAX);
+		pvrsgx_kobj_reap(sdev, U64_MAX, U64_MAX);
 	}
 	for (int r = 0; r < PVRSGX_KRANGE_COUNT; r++)
 		drm_mm_takedown(&sdev->krange[r]);
@@ -258,6 +282,15 @@ void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o)
 {
 	pvrsgx_kobj_release(sdev, *o);
 	*o = NULL;
+}
+
+/* Dropped if a command may have named it, freed now if none did. */
+void pvrsgx_kobj_drop_sent(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o, bool sent)
+{
+	if (sent)
+		pvrsgx_kobj_drop(sdev, o);
+	else
+		pvrsgx_kobj_free_unused(sdev, o);
 }
 
 /* A kernel object into *dst, which stays NULL on failure. */

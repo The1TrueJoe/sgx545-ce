@@ -144,7 +144,8 @@ static const struct pvrsgx_heap_layout sgx530_heaps = {
 	.kernel_data = { 0x0f000000, 0x0f400000 },
 	.usse_pixel = { 0x0f400000, 0x0f900000 },
 	.usse_vertex = { 0x0fc00000, 0x0fe00000 },
-	.pb_max_pages = 0x800,
+	/* Half the 64 MiB heap, as the SGX545's: the rest holds the free list and VM objects. */
+	.pb_max_pages = 0x2000,
 };
 
 static const struct pvrsgx_core_family families[] = {

@@ -82,13 +82,7 @@ static void pvrsgx_of_remove(struct platform_device *pdev)
 
 static void pvrsgx_of_shutdown(struct platform_device *pdev)
 {
-	struct pvrsgx_device *sdev = platform_get_drvdata(pdev);
-
-	/* Only a powered core can be stopped. */
-	if (sdev && pm_runtime_get_if_active(&pdev->dev) > 0) {
-		pvrsgx_fw_stop(sdev);
-		pm_runtime_put_noidle(&pdev->dev);
-	}
+	pvrsgx_shutdown_common(platform_get_drvdata(pdev));
 }
 
 static const struct of_device_id pvrsgx_of_ids[] = {

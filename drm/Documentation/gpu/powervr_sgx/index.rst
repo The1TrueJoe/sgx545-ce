@@ -199,3 +199,8 @@ Module parameters
 
 ``job_timeout_ms``
     how long a job may run before the GPU is reset (default 2000).
+
+``allow_unisolated``
+    run a single-context core (the OMAP3630's SGX530), whose clients can
+    reach the firmware and each other's commands. For bring-up only, default
+    off.

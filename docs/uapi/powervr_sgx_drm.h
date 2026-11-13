@@ -28,7 +28,7 @@ extern "C" {
  *    offset in hexadecimal. Padding and reserved fields must be zero; the
  *    kernel always checks them and returns -EINVAL otherwise.
  *  - User pointers and device-virtual addresses are __u64. A device-virtual
- *    address at or above 2^&drm_powervr_sgx_dev_query_limits.va_bits is
+ *    address at or above 2^(&drm_powervr_sgx_dev_query_limits.va_bits) is
  *    rejected.
  *  - Structs reached through &struct drm_powervr_sgx_obj_array can grow at the
  *    end. A short object is zero-extended. In an object longer than the kernel
@@ -362,7 +362,9 @@ struct drm_powervr_sgx_ioctl_dev_query_args {
  * DRM_POWERVR_SGX_BO_CODE - A code object: USSE programs.
  *
  * Only code objects can be mapped into the USSE heaps, and a code object can be
- * mapped nowhere else. The GPU sees it read-only. It has no CPU mapping and
+ * mapped nowhere else: a mapping of any part of it must leave the whole object,
+ * from where the mapping puts its start, inside one USSE heap, or VM_BIND
+ * returns -EINVAL. The GPU sees it read-only. It has no CPU mapping and
  * can't be exported, so %DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS must be clear. Its
  * contents arrive only through %DRM_IOCTL_POWERVR_SGX_UPLOAD_CODE, which
  * validates them. Bits 2..63 of the flags are reserved.
@@ -434,8 +436,10 @@ struct drm_powervr_sgx_ioctl_get_bo_mmap_offset_args {
  * wrote, so code the GPU may be running never changes under it; otherwise
  * -EBUSY. Once no VM maps the object, the GPU has finished every job that
  * could use those mappings, and a later command has dropped the GPU's cached
- * walks of them, it can be uploaded anywhere again; until then a lower write
- * fails with -EBUSY.
+ * walks of them, it can be uploaded anywhere again; until then a lower write,
+ * or code with ``phas.i`` targets, fails with -EBUSY. On a 32-bit kernel each
+ * instruction is also checked with its high 32 bits zero, as a fetch can see it
+ * while it is written.
  */
 
 /**

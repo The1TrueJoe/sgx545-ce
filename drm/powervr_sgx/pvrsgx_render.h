@@ -37,10 +37,16 @@ struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
+	/* A command for it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 /* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
 #define PVRSGX_PB_DEFAULT_PAGES	0x1000
+
+/* The PB a context gets without asking: the default, or the core's largest. */
+#define pvrsgx_pb_default_pages(sdev) \
+	min_t(u32, PVRSGX_PB_DEFAULT_PAGES, pvrsgx_heaps(sdev)->pb_max_pages)
 
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
@@ -69,6 +75,8 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2];
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
+	/** @sent: A kick into it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 /* Each context's command ring. */

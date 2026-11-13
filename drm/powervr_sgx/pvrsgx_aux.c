@@ -58,6 +58,12 @@ static void pvrsgx_aux_remove(struct auxiliary_device *adev)
 	pvrsgx_remove_common(auxiliary_get_drvdata(adev));
 }
 
+static void pvrsgx_aux_shutdown(struct auxiliary_device *adev)
+{
+	/* Before gma500's: it may turn DMA back on for the next kernel. */
+	pvrsgx_shutdown_common(auxiliary_get_drvdata(adev));
+}
+
 static const struct auxiliary_device_id pvrsgx_aux_ids[] = {
 	{ .name = "gma500_gfx.sgx" },
 	{ }
@@ -68,6 +74,7 @@ static struct auxiliary_driver pvrsgx_aux_driver = {
 	.name = "sgx",
 	.probe = pvrsgx_aux_probe,
 	.remove = pvrsgx_aux_remove,
+	.shutdown = pvrsgx_aux_shutdown,
 	.id_table = pvrsgx_aux_ids,
 	.driver.pm = pm_ptr(&pvrsgx_pm_ops),
 };

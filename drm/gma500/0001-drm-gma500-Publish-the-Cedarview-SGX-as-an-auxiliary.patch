@@ -1,7 +1,7 @@
-From fc661ca8d3f56ec6f56cf96b178407b832feda85 Mon Sep 17 00:00:00 2001
+From a9f6e20b9b5472125a77dd824c1d2caa72d7881e Mon Sep 17 00:00:00 2001
 From: Joseph Telaak <joseph@telaak.dev>
 Date: Sun, 8 Nov 2026 14:01:52 -0500
-Subject: [PATCH 1/5] drm/gma500: Publish the Cedarview SGX as an auxiliary
+Subject: [PATCH 2/3] drm/gma500: Publish the Cedarview SGX as an auxiliary
  device
 
 The GMA3600/3650 (Cedarview) GPU is a PowerVR SGX545 behind the same PCI
@@ -15,9 +15,11 @@ that routes the SGX's interrupt to that driver.
 Each chip's psb_ops says whether its SGX has a driver of its own, and as
 which core. On such a chip gma500 hands the SGX over for good: it doesn't
 reset it or program its BIF at probe, creates no SGX MMU and maps nothing
-into one, masks the SGX's events at interrupt (re)install until a
-handler is registered, and passes the SGX's interrupt to the registered
-handler. Teardown clears the handler itself, whatever the SGX driver did.
+into one, and never writes the SGX's registers. The SGX's interrupt stays
+masked in the display controller until a handler is registered, then
+goes to that handler. The auxiliary device is published last in probe,
+once nothing after it can fail, and teardown clears the handler itself,
+whatever the SGX driver did.
 
 The interrupt reaches the SGX driver through a callback on the auxiliary
 device, not an exported symbol: an exported gma500 symbol would make
@@ -36,13 +38,14 @@ and are unchanged until an SGX driver has run on them.
  drivers/gpu/drm/gma500/Kconfig      |   1 +
  drivers/gpu/drm/gma500/Makefile     |   3 +-
  drivers/gpu/drm/gma500/cdv_device.c |   5 ++
- drivers/gpu/drm/gma500/gem.c        |  12 ++--
- drivers/gpu/drm/gma500/psb_drv.c    |  42 ++++++++----
+ drivers/gpu/drm/gma500/gem.c        |  12 +--
+ drivers/gpu/drm/gma500/psb_drv.c    |  48 ++++++++----
  drivers/gpu/drm/gma500/psb_drv.h    |  26 +++++++
- drivers/gpu/drm/gma500/psb_irq.c    |  32 ++++++---
- drivers/gpu/drm/gma500/sgx_aux.c    | 102 ++++++++++++++++++++++++++++
- include/drm/gma500_sgx.h            |  52 ++++++++++++++
- 10 files changed, 246 insertions(+), 30 deletions(-)
+ drivers/gpu/drm/gma500/psb_irq.c    |  52 ++++++++++---
+ drivers/gpu/drm/gma500/psb_irq.h    |   2 +
+ drivers/gpu/drm/gma500/sgx_aux.c    | 109 ++++++++++++++++++++++++++++
+ include/drm/gma500_sgx.h            |  54 ++++++++++++++
+ 11 files changed, 282 insertions(+), 31 deletions(-)
  create mode 100644 drivers/gpu/drm/gma500/sgx_aux.c
  create mode 100644 include/drm/gma500_sgx.h
 
@@ -138,7 +141,7 @@ index 2708e8c68..4a4ecfb7b 100644
  
  	/* Reset caching flags */
 diff --git a/drivers/gpu/drm/gma500/psb_drv.c b/drivers/gpu/drm/gma500/psb_drv.c
-index d17cb5b4a..c29cc64cc 100644
+index d17cb5b4a..8bce139f0 100644
 --- a/drivers/gpu/drm/gma500/psb_drv.c
 +++ b/drivers/gpu/drm/gma500/psb_drv.c
 @@ -145,6 +145,10 @@ static int psb_do_init(struct drm_device *dev)
@@ -210,15 +213,21 @@ index d17cb5b4a..c29cc64cc 100644
  
  	acpi_video_register();
  
-@@ -383,6 +393,8 @@ static int psb_driver_load(struct drm_device *dev, unsigned long flags)
- 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
+@@ -408,7 +418,13 @@ static int psb_driver_load(struct drm_device *dev, unsigned long flags)
+ 		return ret;
+ 	psb_intel_opregion_enable_asle(dev);
  
- 	gma_irq_install(dev);
+-	return devm_add_action_or_reset(dev->dev, psb_device_release, dev);
++	ret = devm_add_action_or_reset(dev->dev, psb_device_release, dev);
++	if (ret)
++		return ret;
++	/* Last: once published, the SGX's driver may bind and use dev_priv. */
 +	if (dev_priv->ops->sgx)
 +		gma_sgx_aux_init(dev);
++	return 0;
  
- 	dev->max_vblank_count = 0xffffff; /* only 24 bits of frame count */
- 
+ out_err:
+ 	psb_driver_unload(dev);
 diff --git a/drivers/gpu/drm/gma500/psb_drv.h b/drivers/gpu/drm/gma500/psb_drv.h
 index db197b865..dbc5827aa 100644
 --- a/drivers/gpu/drm/gma500/psb_drv.h
@@ -292,7 +301,7 @@ index db197b865..dbc5827aa 100644
 +
  #endif
 diff --git a/drivers/gpu/drm/gma500/psb_irq.c b/drivers/gpu/drm/gma500/psb_irq.c
-index c224c7ff3..426efc126 100644
+index c224c7ff3..a9a056aca 100644
 --- a/drivers/gpu/drm/gma500/psb_irq.c
 +++ b/drivers/gpu/drm/gma500/psb_irq.c
 @@ -224,10 +224,19 @@ static irqreturn_t gma_irq_handler(int irq, void *arg)
@@ -308,7 +317,7 @@ index c224c7ff3..426efc126 100644
 +
 +			/* Pairs with the release in gma_sgx_set_irq_handler(). */
 +			sgx_handler = smp_load_acquire(&dev_priv->sgx_handler);
-+			if (sgx_handler && sgx_handler(dev_priv->sgx_data) != IRQ_NONE)
++			if (sgx_handler && sgx_handler(READ_ONCE(dev_priv->sgx_data)) != IRQ_NONE)
 +				handled = 1;
 +		} else {
 +			sgx_stat_1 = PSB_RSGX32(PSB_CR_EVENT_STATUS);
@@ -325,15 +334,48 @@ index c224c7ff3..426efc126 100644
  	PSB_WVDC32(0x00000000, PSB_INT_ENABLE_R);
 -	PSB_WSGX32(0x00000000, PSB_CR_EVENT_HOST_ENABLE);
 -	PSB_RSGX32(PSB_CR_EVENT_HOST_ENABLE);
-+	/* An SGX driver of its own enables what it needs; until one binds, mask it. */
-+	if (!gma_sgx_external(dev_priv) || !READ_ONCE(dev_priv->sgx_handler)) {
++	/* An SGX with a driver of its own is that driver's: gma500 leaves it alone. */
++	if (!gma_sgx_external(dev_priv)) {
 +		PSB_WSGX32(0x00000000, PSB_CR_EVENT_HOST_ENABLE);
 +		PSB_RSGX32(PSB_CR_EVENT_HOST_ENABLE);
 +	}
  
  	if (dev->vblank[0].enabled)
  		dev_priv->vdc_irq_mask |= _PSB_VSYNC_PIPEA_FLAG;
-@@ -284,9 +296,11 @@ void gma_irq_postinstall(struct drm_device *dev)
+@@ -269,12 +281,32 @@ void gma_irq_preinstall(struct drm_device *dev)
+ 	if (dev_priv->ops->hotplug)
+ 		dev_priv->vdc_irq_mask |= _PSB_IRQ_DISP_HOTSYNC;
+ 	dev_priv->vdc_irq_mask |= _PSB_IRQ_ASLE | _PSB_IRQ_SGX_FLAG;
++	/* Its own driver's SGX: masked here until that driver takes the interrupt. */
++	if (gma_sgx_external(dev_priv) && !dev_priv->sgx_handler)
++		dev_priv->vdc_irq_mask &= ~_PSB_IRQ_SGX_FLAG;
+ 
+ 	/* This register is safe even if display island is off */
+ 	PSB_WVDC32(~dev_priv->vdc_irq_mask, PSB_INT_MASK_R);
+ 	spin_unlock_irqrestore(&dev_priv->irqmask_lock, irqflags);
+ }
+ 
++/*
++ * The SGX's bit in the display controller's masks follows its driver's
++ * handler, with irqmask_lock held. Only VDC registers: they are safe even
++ * with the display island off.
++ */
++void gma_sgx_irq_update(struct drm_psb_private *dev_priv)
++{
++	if (dev_priv->sgx_handler)
++		dev_priv->vdc_irq_mask |= _PSB_IRQ_SGX_FLAG;
++	else
++		dev_priv->vdc_irq_mask &= ~_PSB_IRQ_SGX_FLAG;
++	if (!dev_priv->irq_enabled)
++		return;
++	PSB_WVDC32(~dev_priv->vdc_irq_mask, PSB_INT_MASK_R);
++	PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
++}
++
+ void gma_irq_postinstall(struct drm_device *dev)
+ {
+ 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
+@@ -284,9 +316,11 @@ void gma_irq_postinstall(struct drm_device *dev)
  	spin_lock_irqsave(&dev_priv->irqmask_lock, irqflags);
  
  	/* Enable 2D and MMU fault interrupts */
@@ -348,12 +390,28 @@ index c224c7ff3..426efc126 100644
  
  	/* This register is safe even if display island is off */
  	PSB_WVDC32(dev_priv->vdc_irq_mask, PSB_INT_ENABLE_R);
+diff --git a/drivers/gpu/drm/gma500/psb_irq.h b/drivers/gpu/drm/gma500/psb_irq.h
+index 7648f6982..43998be6e 100644
+--- a/drivers/gpu/drm/gma500/psb_irq.h
++++ b/drivers/gpu/drm/gma500/psb_irq.h
+@@ -14,9 +14,11 @@
+ 
+ struct drm_crtc;
+ struct drm_device;
++struct drm_psb_private;
+ 
+ void gma_irq_preinstall(struct drm_device *dev);
+ void gma_irq_postinstall(struct drm_device *dev);
++void gma_sgx_irq_update(struct drm_psb_private *dev_priv);
+ int  gma_irq_install(struct drm_device *dev);
+ void gma_irq_uninstall(struct drm_device *dev);
+ 
 diff --git a/drivers/gpu/drm/gma500/sgx_aux.c b/drivers/gpu/drm/gma500/sgx_aux.c
 new file mode 100644
-index 000000000..671cb6c33
+index 000000000..b6ba972fe
 --- /dev/null
 +++ b/drivers/gpu/drm/gma500/sgx_aux.c
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,109 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * The SGX of a GMA500-family GPU, published as an auxiliary device for a
@@ -371,6 +429,7 @@ index 000000000..671cb6c33
 +#include <drm/gma500_sgx.h>
 +
 +#include "psb_drv.h"
++#include "psb_irq.h"
 +
 +struct gma_sgx_aux {
 +	struct gma500_sgx_device sgx;
@@ -390,14 +449,20 @@ index 000000000..671cb6c33
 +		spin_unlock_irqrestore(&dev_priv->irqmask_lock, flags);
 +		return -EBUSY;
 +	}
-+	dev_priv->sgx_data = data;
-+	/* The data reaches the interrupt handler before the handler does. */
++	if (handler)
++		WRITE_ONCE(dev_priv->sgx_data, data);
++	/* Pairs with gma_irq_handler(): the data reaches it before the handler. */
 +	smp_store_release(&dev_priv->sgx_handler, handler);
++	/* The SGX's interrupt reaches the CPU only while a handler takes it. */
++	gma_sgx_irq_update(dev_priv);
 +	spin_unlock_irqrestore(&dev_priv->irqmask_lock, flags);
 +
-+	/* No handler call still running on another CPU once this returns. */
-+	if (!handler && dev_priv->irq_enabled)
-+		synchronize_irq(pdev->irq);
++	if (!handler) {
++		/* No handler call still running on another CPU, then the data goes. */
++		if (dev_priv->irq_enabled)
++			synchronize_irq(pdev->irq);
++		WRITE_ONCE(dev_priv->sgx_data, NULL);
++	}
 +	return 0;
 +}
 +
@@ -458,10 +523,10 @@ index 000000000..671cb6c33
 +}
 diff --git a/include/drm/gma500_sgx.h b/include/drm/gma500_sgx.h
 new file mode 100644
-index 000000000..00a034f1a
+index 000000000..41d9ac00d
 --- /dev/null
 +++ b/include/drm/gma500_sgx.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,54 @@
 +/* SPDX-License-Identifier: MIT */
 +/* Copyright © 2026 Joseph Telaak */
 +
@@ -500,7 +565,9 @@ index 000000000..00a034f1a
 +	/**
 +	 * @set_irq_handler: Route the SGX's interrupts to @handler, which runs in
 +	 * hard interrupt context with @data; with a NULL @handler they are
-+	 * ignored. gma500 never touches an SGX it publishes, handler or not.
++	 * masked in the display controller, and once it returns no call to the
++	 * old handler is still running. gma500 never writes the registers of an
++	 * SGX it publishes.
 +	 * Returns -EBUSY if another handler is set.
 +	 */
 +	int (*set_irq_handler)(struct gma500_sgx_device *sgx,

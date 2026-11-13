@@ -32,7 +32,8 @@ git commit -q -F "$MSG/03-uapi.txt"
 # The upstream Kconfig: no vendor-driver note; KUNIT=0 also drops the KUnit entry.
 kconfig() {
 	perl -0pe 's/\t  Not compatible with the vendor services driver.*?\n\n//s;
-		   s/\n+config DRM_POWERVR_SGX_KUNIT_TEST\n.*\z/\n/s if !$ENV{KUNIT}' "$DRM/powervr_sgx/Kconfig"
+		   s/\n+config DRM_POWERVR_SGX_KUNIT_TEST\n.*\z/\n/s if !$ENV{KUNIT};
+		   s/\t# The tests are built into.*?\n\tselect DRM_KUNIT_TEST_HELPERS if .*?\n//s if !$ENV{KUNIT}' "$DRM/powervr_sgx/Kconfig"
 }
 
 # The driver by area, one patch each; nothing builds until the last adds the

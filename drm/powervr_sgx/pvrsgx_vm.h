@@ -48,16 +48,17 @@ struct pvrsgx_vm {
 	u32 ran_gen;
 	/** @pd_slot: Its slot in the microkernel's PD table (single-context cores), or 0. */
 	int pd_slot;
+	/** @put_work: Its last put, from a work item (vm_release()). */
+	struct work_struct put_work;
 };
 
 struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
 u32 pvrsgx_vm_pd_word(const struct pvrsgx_vm *vm);
 struct pvrsgx_vm *pvrsgx_vm_get(struct pvrsgx_vm *vm);
 void pvrsgx_vm_put(struct pvrsgx_vm *vm);
-void pvrsgx_vm_user_get(struct pvrsgx_vm *vm);
 void pvrsgx_vm_user_put(struct pvrsgx_vm *vm);
 struct dma_resv *pvrsgx_vm_resv(struct pvrsgx_vm *vm);
-struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
+struct pvrsgx_vm *pvrsgx_vm_lookup_user(struct pvrsgx_file *sfile, u32 handle);
 void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
 int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size);
 

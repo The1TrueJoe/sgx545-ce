@@ -13,6 +13,7 @@
 
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/jiffies.h>
 #include <linux/string.h>
 
@@ -30,8 +31,11 @@ static u32 *ccbctl(struct pvrsgx_device *sdev)
 void pvrsgx_ccb_reset(struct pvrsgx_device *sdev)
 {
 	memset(sdev->fw.cpu[PVRSGX_FW_CCB], 0, PVRSGX_CCB_SLOTS * PVRSGX_CCB_CMD_WORDS * 4);
+	spin_lock_irq(&sdev->ccb_spin);
 	ccbctl(sdev)[CCB_WO] = 0;
 	ccbctl(sdev)[CCB_RO] = 0;
+	sdev->ccb_reset_seq = sdev->ccb_issued;
+	spin_unlock_irq(&sdev->ccb_spin);
 	*(u32 *)sdev->fw.cpu[PVRSGX_FW_KICKER] = 0;
 	/*
 	 * @ccb_issued carries on: a job sent after a restart has a higher sequence
@@ -42,13 +46,20 @@ void pvrsgx_ccb_reset(struct pvrsgx_device *sdev)
 /* Commands the microkernel has taken off the ring since the driver loaded. */
 u64 pvrsgx_ccb_consumed(struct pvrsgx_device *sdev)
 {
-	u32 ro = READ_ONCE(ccbctl(sdev)[CCB_RO]);
 	unsigned long flags;
+	u64 pending;
 	u64 consumed;
 
-	/* The read offset is GPU-written: trust it only as an index. */
 	spin_lock_irqsave(&sdev->ccb_spin, flags);
-	consumed = sdev->ccb_issued - ((ccbctl(sdev)[CCB_WO] - ro) & (PVRSGX_CCB_SLOTS - 1));
+	/*
+	 * The read offset is GPU-written: trust it only as an index, read with
+	 * the write offset and @ccb_issued held, so the distance is the ring's.
+	 * Never more than sent since the ring's reset: all before it is taken.
+	 */
+	pending = (ccbctl(sdev)[CCB_WO] - READ_ONCE(ccbctl(sdev)[CCB_RO])) &
+		  (PVRSGX_CCB_SLOTS - 1);
+	pending = min(pending, sdev->ccb_issued - sdev->ccb_reset_seq);
+	consumed = sdev->ccb_issued - pending;
 	spin_unlock_irqrestore(&sdev->ccb_spin, flags);
 	return consumed;
 }
@@ -101,8 +112,7 @@ static int ccb_write(struct pvrsgx_device *sdev, enum pvrsgx_kcmd type, u32 cach
 static int ccb_split_inval(struct pvrsgx_device *sdev, u32 *cache_control)
 {
 	static const u32 none[6];
-	unsigned long timeout = jiffies + msecs_to_jiffies(500);
-	u64 seq;
+	u64 seq, c;
 	int err;
 
 	if (!(sdev->family->quirks & PVRSGX_QUIRK_BRN_28889) ||
@@ -113,12 +123,14 @@ static int ccb_split_inval(struct pvrsgx_device *sdev, u32 *cache_control)
 			none, &seq);
 	if (err)
 		return err;
-	while (pvrsgx_ccb_consumed(sdev) < seq) {
-		if (time_after(jiffies, timeout)) {
-			drm_err(&sdev->base, "BIF invalidate not taken (BRN_28889)\n");
-			return -ETIMEDOUT;
-		}
-		usleep_range(100, 200);
+	/* Not a job, but a counting microkernel counts it (pvrsgx_job_process_done()). */
+	WRITE_ONCE(sdev->noops_sent, sdev->noops_sent + 1);
+	/* The time starts once it is sent, and the count is read again at the end. */
+	err = read_poll_timeout(pvrsgx_ccb_consumed, c, c >= seq, 100, 500 * USEC_PER_MSEC,
+				false, sdev);
+	if (err) {
+		drm_err(&sdev->base, "BIF invalidate not taken (BRN_28889)\n");
+		return err;
 	}
 	*cache_control = PVRSGX_CC_INVAL_DATA;
 	return 0;
@@ -149,18 +161,24 @@ void pvrsgx_ccb_after_invalidate(struct pvrsgx_device *sdev, struct pvrsgx_inval
 				 u32 cache_control)
 {
 	unsigned long flags;
+	bool lost;
 
-	if (READ_ONCE(sdev->lost)) {
-		w->done(w);
-		return;
-	}
+	/*
+	 * Queued with its sequence, before the command that carries it can be
+	 * taken; @lost read under the lock unbind's last reap takes after it.
+	 */
 	mutex_lock(&sdev->ccb_lock);
-	sdev->fw.cache_control |= cache_control;
-	w->seq = sdev->ccb_issued + 1;
-	mutex_unlock(&sdev->ccb_lock);
 	spin_lock_irqsave(&sdev->inval_lock, flags);
-	list_add_tail(&w->node, &sdev->inval_waits);
+	lost = READ_ONCE(sdev->lost);
+	if (!lost) {
+		sdev->fw.cache_control |= cache_control;
+		w->seq = sdev->ccb_issued + 1;
+		list_add_tail(&w->node, &sdev->inval_waits);
+	}
 	spin_unlock_irqrestore(&sdev->inval_lock, flags);
+	mutex_unlock(&sdev->ccb_lock);
+	if (lost)
+		w->done(w);
 }
 
 /* For status dumps: how much work still waits for an invalidate. */

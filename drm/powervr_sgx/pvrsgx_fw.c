@@ -174,8 +174,9 @@ static void ta3dctl_fill(struct pvrsgx_device *sdev)
 	t->ccb_ctl = f->addr[PVRSGX_FW_CCBCTL];
 	t->ccb = f->addr[PVRSGX_FW_CCB];
 	t->kernel_pd = pvrsgx_mmu_pd_addr(sdev->kernel_mmu);
-	/* A fresh microkernel counts finished jobs from 0. */
+	/* A fresh microkernel counts finished jobs from 0, and no earlier no-op. */
 	WRITE_ONCE(sdev->done_seq, 0);
+	WRITE_ONCE(sdev->noops_seen, READ_ONCE(sdev->noops_sent));
 }
 
 /*
@@ -354,11 +355,11 @@ static int ukfw_load(struct pvrsgx_device *sdev, const struct firmware *fw)
  * Every slot no VM holds names the firmware's directory.
  */
 #define PDTABLE_OFFSET	0xf000
-#define PDTABLE_SLOTS	(PAGE_SIZE / sizeof(u32))
+#define PDTABLE_SLOTS	(SGX_MMU_PAGE_SIZE / sizeof(u32))
 
 /* The PD table sits past the code arena, inside the kernel code heap's first 64 KiB. */
 static_assert(PDTABLE_OFFSET >= CODE_ARENA_SIZE);
-static_assert(SZ_64K - PAGE_SIZE >= PDTABLE_OFFSET);
+static_assert(SZ_64K - SGX_MMU_PAGE_SIZE >= PDTABLE_OFFSET);
 
 static int pdtable_init(struct pvrsgx_device *sdev)
 {
@@ -368,8 +369,8 @@ static int pdtable_init(struct pvrsgx_device *sdev)
 	if (!pvrsgx_core_single_context(sdev->family))
 		return 0;
 	err = pvrsgx_kmem_alloc(sdev, &f->pdtable,
-				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET, PAGE_SIZE,
-				SGX_MMU_PTE_READONLY, 0);
+				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET,
+				SGX_MMU_PAGE_SIZE, SGX_MMU_PTE_READONLY, 0);
 	if (err)
 		return err;
 	memset32(f->pdtable.cpu, pvrsgx_mmu_pd_addr(sdev->kernel_mmu), PDTABLE_SLOTS);
@@ -386,6 +387,10 @@ int pvrsgx_fw_pd_slot_get(struct pvrsgx_device *sdev, u32 pd)
 	WRITE_ONCE(((u32 *)sdev->fw.pdtable.cpu)[slot], pd);
 	/* In memory before any command names the slot. */
 	wmb();
+	/* And not a stale line in the GPU's data cache, should the table be read through it. */
+	mutex_lock(&sdev->ccb_lock);
+	sdev->fw.cache_control |= PVRSGX_CC_INVAL_DATA;
+	mutex_unlock(&sdev->ccb_lock);
 	return slot;
 }
 
@@ -637,7 +642,9 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 	pvrsgx_ccb_reset(sdev);
 	ta3dctl_fill(sdev);
 	/* The first command invalidates the directory cache, keeping what a reap queued. */
+	mutex_lock(&sdev->ccb_lock);
 	sdev->fw.cache_control |= PVRSGX_CC_INVAL_BIF_PD;
+	mutex_unlock(&sdev->ccb_lock);
 
 	/* Every unit's clock gated automatically, but the DPM's: it stays on. */
 	sgx_wr(sdev, SGX_CR_CLKGATECTL,
@@ -673,7 +680,8 @@ int pvrsgx_fw_start(struct pvrsgx_device *sdev)
 			sgx_rd(sdev, SGX_CR_BIF_MEM_REQ_STAT));
 		return err;
 	}
-	sdev->fw_running = true;
+	WRITE_ONCE(sdev->uk_lockups, 0);
+	WRITE_ONCE(sdev->fw_running, true);
 	sdev->fw_started = true;
 	if (first || sdev->reset_count != sdev->reset_logged) {
 		drm_info(&sdev->base, "microkernel started%s\n", first ? "" : " again");
@@ -716,15 +724,16 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 			usleep_range(100, 200);
 		}
 		WRITE_ONCE(sdev->powered, false);
-		synchronize_irq(sdev->irq);
+		pvrsgx_irq_sync(sdev);
 		deinit_script(sdev);
-		sdev->fw_running = false;
+		WRITE_ONCE(sdev->fw_running, false);
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	} else if (READ_ONCE(sdev->powered)) {
 		/* A failed start: the clocks are on, the microkernel isn't. */
 		WRITE_ONCE(sdev->powered, false);
-		synchronize_irq(sdev->irq);
+		pvrsgx_irq_sync(sdev);
+		deinit_script(sdev);
 		sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
 		sgx_rd(sdev, SGX_CR_SOFT_RESET);
 	}

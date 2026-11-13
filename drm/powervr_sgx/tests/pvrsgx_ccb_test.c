@@ -82,6 +82,8 @@ static void ccb_test_inval_split(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, seq, 0);
 	KUNIT_EXPECT_EQ(test, sdev->fw.cache_control,
 			PVRSGX_CC_INVAL_BIF_PD | PVRSGX_CC_INVAL_DATA);
+	/* A counting microkernel counts the no-op: the next job's completion waits for it. */
+	KUNIT_EXPECT_EQ(test, sdev->noops_sent, 1);
 }
 
 /* One kind of invalidate alone needs no split, with the quirk or without. */
@@ -96,10 +98,31 @@ static void ccb_test_inval_alone(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ccb_test_cmd(sdev, 0)[1], PVRSGX_CC_INVAL_DATA);
 }
 
+/*
+ * The read offset is an index: never more pending than sent since the ring's
+ * reset, so one left from before a restart can't make earlier work look sent.
+ */
+static void ccb_test_consumed(struct kunit *test)
+{
+	struct pvrsgx_device *sdev = ccb_test_device(test, 0);
+	u32 *ctl = sdev->fw.cpu[PVRSGX_FW_CCBCTL];
+
+	sdev->ccb_issued = 300;
+	pvrsgx_ccb_reset(sdev);
+	ctl[CCB_WO] = 2;
+	sdev->ccb_issued = 302;
+	KUNIT_EXPECT_EQ(test, pvrsgx_ccb_consumed(sdev), 300);
+	ctl[CCB_RO] = 1;
+	KUNIT_EXPECT_EQ(test, pvrsgx_ccb_consumed(sdev), 301);
+	ctl[CCB_RO] = 200;
+	KUNIT_EXPECT_EQ(test, pvrsgx_ccb_consumed(sdev), 300);
+}
+
 static struct kunit_case pvrsgx_ccb_test_cases[] = {
 	KUNIT_CASE(ccb_test_inval_together),
 	KUNIT_CASE(ccb_test_inval_split),
 	KUNIT_CASE(ccb_test_inval_alone),
+	KUNIT_CASE(ccb_test_consumed),
 	{}
 };
 

@@ -109,7 +109,7 @@ static void pb_init(struct pvrsgx_pb *pb)
 static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
 	struct pvrsgx_pb *pb = kzalloc_obj(*pb);
-	u32 pages = (req_pages ?: PVRSGX_PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
+	u32 pages = (req_pages ?: pvrsgx_pb_default_pages(sdev)) + PB_EXTRA_PAGES;
 	int err;
 
 	if (!pb)
@@ -121,6 +121,11 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 	err = pvrsgx_kobj_new(sdev, &pb->buf, PVRSGX_KRANGE_3DPARAMS, pages << PAGE_SHIFT, 0, NULL);
 	if (err)
 		goto fail;
+	/* The DPM numbers PB pages from the heap's base: anywhere else hangs it. */
+	if (kobj_va(pb->buf) != pvrsgx_heaps(sdev)->params_3d.base) {
+		err = -EBUSY;
+		goto fail;
+	}
 	pb->base = kobj_va(pb->buf) & 0xfff00000;
 	err = pvrsgx_kobj_new(sdev, &pb->freelist, PVRSGX_KRANGE_3DPARAMS, FREELIST_BYTES, pb->base,
 			      NULL);
@@ -138,7 +143,12 @@ static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 	return pb;
 
 fail:
-	pvrsgx_pb_put(pb);
+	/* Never sent to the GPU: freed now, so a retry gets the heap's base again. */
+	pvrsgx_kobj_free_unused(sdev, &pb->blocks);
+	pvrsgx_kobj_free_unused(sdev, &pb->desc);
+	pvrsgx_kobj_free_unused(sdev, &pb->freelist);
+	pvrsgx_kobj_free_unused(sdev, &pb->buf);
+	kfree(pb);
 	return ERR_PTR(err);
 }
 
@@ -300,14 +310,16 @@ fail:
 void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
 {
 	struct pvrsgx_render_ctx *r = ctx->render;
+	bool sent;
 
 	if (!r)
 		return;
-	pvrsgx_kobj_drop(sdev, &r->hwctx);
-	pvrsgx_kobj_drop(sdev, &r->sync3d);
-	pvrsgx_kobj_drop(sdev, &r->ccbctl);
-	pvrsgx_kobj_drop(sdev, &r->ccb);
-	pvrsgx_kobj_drop(sdev, &r->scratch);
+	sent = READ_ONCE(r->sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->hwctx, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->sync3d, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->ccbctl, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->ccb, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->scratch, sent);
 	pvrsgx_pb_put(r->pb);
 	kfree(r);
 	ctx->render = NULL;
@@ -365,24 +377,25 @@ static void rtds_release(struct kref *ref)
 {
 	struct pvrsgx_rt_dataset *s = container_of(ref, struct pvrsgx_rt_dataset, ref);
 	struct pvrsgx_device *sdev = s->ctx->sdev;
+	bool sent = READ_ONCE(s->sent);
 
-	pvrsgx_kobj_drop(sdev, &s->rtword);
-	pvrsgx_kobj_drop(sdev, &s->rtdata);
-	pvrsgx_kobj_drop(sdev, &s->done);
-	pvrsgx_kobj_drop(sdev, &s->tailptr);
-	pvrsgx_kobj_drop(sdev, &s->ta40);
-	pvrsgx_kobj_drop(sdev, &s->ta50);
+	pvrsgx_kobj_drop_sent(sdev, &s->rtword, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->rtdata, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->done, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->tailptr, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->ta40, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->ta50, sent);
 	for (int i = 0; i < 2; i++) {
-		pvrsgx_kobj_drop(sdev, &s->bgblock[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd_w8[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd_w4[i]);
-		pvrsgx_kobj_drop(sdev, &s->hwsync[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd_sync[i]);
-		pvrsgx_kobj_drop(sdev, &s->hwsync_access[i]);
-		pvrsgx_kobj_drop(sdev, &s->entword[i]);
-		pvrsgx_kobj_drop(sdev, &s->rgn[i]);
-		pvrsgx_kobj_drop(sdev, &s->ta88[i]);
+		pvrsgx_kobj_drop_sent(sdev, &s->bgblock[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd_w8[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd_w4[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->hwsync[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd_sync[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->hwsync_access[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->entword[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rgn[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->ta88[i], sent);
 	}
 	pvrsgx_context_put(s->ctx);
 	kfree(s);
@@ -763,6 +776,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 
 	if (first)
 		pb_rearm(job->ctx->sdev, r->pb);
+	WRITE_ONCE(r->sent, true);
+	WRITE_ONCE(s->sent, true);
 	f = s->frames;
 	odd = f & 1;
 	/* This frame's RT-data entry and everything that goes with it. */
@@ -821,7 +836,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd->size = sizeof(*cmd);
 	cmd->ta_flags = PVRSGX_TA_FLAGS_BASE | (first ? PVRSGX_TA_FIRST_KICK : 0) |
 			(last ? PVRSGX_TA_LAST_KICK : 0) |
-			(first && !f ? PVRSGX_TA_FIRST_RENDER : 0);
+			(first && !f ? PVRSGX_TA_INVAL_USE : 0);
 	cmd->bg_pds[0] = pds_word(pds, in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 	cmd->bg_pds[1] = BG_PDS_MIDDLE;
 	cmd->bg_pds[2] = pds_word(pds, in->bg_pds_primary_addr, in->bg_pds_primary_rows);

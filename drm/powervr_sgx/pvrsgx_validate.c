@@ -73,11 +73,34 @@ static s64 code_place(const struct pvrsgx_heap_layout *h, u64 addr, u64 offset)
  */
 int pvrsgx_validate_vm_link(struct pvrsgx_bo *bo, u64 addr, u64 offset)
 {
-	if (!bo_is_code(bo) || !bo->code_abs)
-		return 0;
-	const struct pvrsgx_heap_layout *h = pvrsgx_heaps(to_pvrsgx_device(bo->base.base.dev));
+	const struct pvrsgx_heap_layout *h;
+	const struct pvrsgx_va_range *r;
 
+	if (!bo_is_code(bo))
+		return 0;
+	h = pvrsgx_heaps(to_pvrsgx_device(bo->base.base.dev));
+	/*
+	 * The whole object, from where the mapping puts its start, in one USSE
+	 * heap: a branch the scan allowed anywhere in it stays in that heap.
+	 */
+	r = addr >= h->usse_vertex.base ? &h->usse_vertex : &h->usse_pixel;
+	if (offset > addr - r->base || addr - offset + bo->base.base.size > r->end)
+		return -EINVAL;
+	if (!bo->code_abs)
+		return 0;
 	return code_place(h, addr, offset) == bo->code_place ? 0 : -EINVAL;
+}
+
+/* Whether obj has a mapping, not just a VM link a failed VM_BIND left. */
+static bool code_mapped(struct drm_gem_object *obj)
+{
+	struct drm_gpuvm_bo *vm_bo;
+
+	drm_gem_for_each_gpuvm_bo(vm_bo, obj) {
+		if (!list_empty(&vm_bo->list.gpuva))
+			return true;
+	}
+	return false;
 }
 
 /* The one place every mapping of obj puts it, or PVRSGX_USSE_PLACE_NONE. */
@@ -109,6 +132,52 @@ int pvrsgx_validate_job(struct pvrsgx_device *sdev, struct pvrsgx_job *job)
 {
 	/* A job can only reach validated USSE code: nothing to check per job. */
 	return 0;
+}
+
+/*
+ * Words into code the GPU may be fetching: it sees each word whole or still
+ * zero. A 32-bit CPU stores halves: the low halves go first, so a fetch in
+ * between sees a word with its high half zero, which the scan checked too.
+ */
+static void code_write(struct iosys_map *map, u64 offset, const u64 *src, u32 n)
+{
+	u64 *dst = map->vaddr + offset;
+
+	if (IS_ENABLED(CONFIG_64BIT)) {
+		for (u32 i = 0; i < n; i++)
+			WRITE_ONCE(dst[i], src[i]);
+	} else {
+		u32 *d = (u32 *)dst;
+
+		for (u32 i = 0; i < n; i++)
+			WRITE_ONCE(d[2 * i], lower_32_bits(src[i]));
+		/* Every low half in memory before any high half. */
+		wmb();
+		for (u32 i = 0; i < n; i++)
+			WRITE_ONCE(d[2 * i + 1], upper_32_bits(src[i]));
+	}
+	/* Whole before the upload returns and any job can be sent for it. */
+	wmb();
+}
+
+/* On a 32-bit CPU, also each word as code_write() leaves it half-written. */
+static s64 scan_halves(struct pvrsgx_device *sdev, const u64 *buf, u32 n, u32 first,
+		       u32 obj_insts, s64 place, enum pvrsgx_usse_refusal *why)
+{
+	bool abs = false;
+	u64 *lo;
+	s64 bad;
+
+	if (IS_ENABLED(CONFIG_64BIT))
+		return -1;
+	lo = kvmalloc_array(n, sizeof(*lo), GFP_KERNEL);
+	if (!lo)
+		return -ENOMEM;
+	for (u32 i = 0; i < n; i++)
+		lo[i] = lower_32_bits(buf[i]);
+	bad = pvrsgx_usse_scan(sdev->family->isa, lo, n, first, obj_insts, place, &abs, why);
+	kvfree(lo);
+	return bad;
 }
 
 int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file *file)
@@ -152,7 +221,7 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 	if (err)
 		goto out_buf;
 	/* An unmapped mapping counts until its jobs and the BIF invalidate are done. */
-	if ((!list_empty(&obj->gpuva.list) || atomic_read(&bo->code_unmapping)) &&
+	if ((code_mapped(obj) || atomic_read(&bo->code_unmapping)) &&
 	    args->offset < bo->code_end) {
 		err = -EBUSY;
 		goto out_unlock;
@@ -160,6 +229,18 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 	place = code_place_mapped(obj);
 	bad = pvrsgx_usse_scan(sdev->family->isa, buf, args->size / 8, args->offset / 8,
 			       obj->size / 8, place, &abs, &why);
+	if (bad < 0)
+		bad = scan_halves(sdev, buf, args->size / 8, args->offset / 8, obj->size / 8,
+				  place, &why);
+	if (bad == -ENOMEM) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+	/* Absolute targets: no mapping on its way out may put the object elsewhere. */
+	if (bad < 0 && abs && atomic_read(&bo->code_unmapping)) {
+		err = -EBUSY;
+		goto out_unlock;
+	}
 	if (bad >= 0) {
 		args->bad_offset = args->offset + bad * 8;
 		drm_dbg_driver(drm, "UPLOAD_CODE: word at 0x%llx refused: %s\n",
@@ -170,7 +251,7 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 	err = drm_gem_shmem_vmap_locked(&bo->base, &map);
 	if (err)
 		goto out_unlock;
-	iosys_map_memcpy_to(&map, args->offset, buf, args->size);
+	code_write(&map, args->offset, buf, args->size / 8);
 	drm_gem_shmem_vunmap_locked(&bo->base, &map);
 	bo->code_end = max(bo->code_end, end);
 	if (abs) {

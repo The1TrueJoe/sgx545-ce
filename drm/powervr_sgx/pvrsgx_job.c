@@ -132,9 +132,10 @@ static void context_put(struct pvrsgx_context *ctx)
 }
 
 /*
- * How many of the oldest jobs on the GPU the microkernel says it has finished,
- * when it counts them (PVRSGX_UKFW_DONE_SEQ); otherwise -1. Jobs finish in
- * order, and POWER and cleanup commands are never on the active list.
+ * How many completions the microkernel reports beyond those accounted, when it
+ * counts them (PVRSGX_UKFW_DONE_SEQ); otherwise -1. It counts jobs, in order,
+ * and the no-ops the kernel sends that are not jobs (job_completions()); not
+ * POWER.
  */
 static s64 jobs_finished(struct pvrsgx_device *sdev)
 {
@@ -143,6 +144,15 @@ static s64 jobs_finished(struct pvrsgx_device *sdev)
 	if (!(sdev->fw.features & PVRSGX_UKFW_DONE_SEQ))
 		return -1;
 	return (u32)(READ_ONCE(t->done_seq) - sdev->done_seq);
+}
+
+/*
+ * The completions a counting microkernel reports before @job's: one per no-op
+ * the kernel sent ahead of it since the last job signalled, and its own.
+ */
+static u32 job_completions(struct pvrsgx_device *sdev, struct pvrsgx_job *job)
+{
+	return job->noops_before - sdev->noops_seen + 1;
 }
 
 static bool job_done(struct pvrsgx_job *job, u64 consumed)
@@ -161,7 +171,8 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	job = list_first_entry_or_null(&sdev->active, struct pvrsgx_job, node);
-	done = job && (sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ? jobs_finished(sdev) > 0 :
+	done = job && (sdev->fw.features & PVRSGX_UKFW_DONE_SEQ ?
+		       jobs_finished(sdev) >= job_completions(sdev, job) :
 		       job_done(job, pvrsgx_ccb_consumed(sdev)));
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	return done;
@@ -174,19 +185,23 @@ bool pvrsgx_job_oldest_done(struct pvrsgx_device *sdev)
  */
 static bool pvrsgx_job_fault_check(struct pvrsgx_device *sdev)
 {
-	bool fault;
+	bool fault = false;
 	int idx;
 
-	if (READ_ONCE(sdev->faulted) || READ_ONCE(sdev->lost) || !READ_ONCE(sdev->powered) ||
-	    !drm_dev_enter(&sdev->base, &idx))
+	/* Not during a reset, which gates the clocks and clears the fault. */
+	if (!mutex_trylock(&sdev->reset_lock))
 		return false;
-	fault = sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req;
-	drm_dev_exit(idx);
-	if (!fault)
-		return false;
-	WRITE_ONCE(sdev->faulted, true);
-	drm_sched_fault(&sdev->sched);
-	return true;
+	if (!sdev->faulted && !sdev->lost && READ_ONCE(sdev->powered) &&
+	    drm_dev_enter(&sdev->base, &idx)) {
+		fault = sgx_rd(sdev, SGX_CR_BIF_INT_STAT) & sdev->cr->bif_int_stat_fault_req;
+		drm_dev_exit(idx);
+		if (fault)
+			WRITE_ONCE(sdev->faulted, true);
+	}
+	mutex_unlock(&sdev->reset_lock);
+	if (fault)
+		drm_sched_fault(&sdev->sched);
+	return fault;
 }
 
 /* Signal every job the firmware has finished. Runs in the IRQ thread and the poll work. */
@@ -207,15 +222,23 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	n = jobs_finished(sdev);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
-		if (n >= 0 ? !n : !job_done(job, consumed))
+		if (n >= 0) {
+			u32 need = job_completions(sdev, job);
+
+			if (n < need)
+				break;
+			n -= need;
+			sdev->done_seq += need;
+			sdev->noops_seen = job->noops_before;
+		} else if (!job_done(job, consumed)) {
 			break;
-		if (n > 0) {
-			n--;
-			sdev->done_seq++;
 		}
 		list_move_tail(&job->node, &finished);
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
+			reap = true;
+		} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+			sdev->transfers_done++;
 			reap = true;
 		}
 	}
@@ -234,10 +257,11 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
-	mutex_unlock(&sdev->done_lock);
-
+	/* Queued under the lock, so a waiter that takes it can flush it. */
 	if (reap || !list_empty_careful(&sdev->inval_waits))
 		queue_work(sdev->free_wq, &sdev->reap_work);
+	mutex_unlock(&sdev->done_lock);
+
 	if (more && pvrsgx_job_fault_check(sdev))
 		return;
 	/* With a count the interrupt does it, and the poll is only a backstop. */
@@ -250,12 +274,18 @@ static void reap_work_fn(struct work_struct *work)
 {
 	struct pvrsgx_device *sdev = container_of(work, struct pvrsgx_device, reap_work);
 	unsigned long flags;
-	u64 done;
+	u64 done, xdone;
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	done = sdev->renders_done;
+	xdone = sdev->transfers_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
-	pvrsgx_kobj_reap(sdev, done);
+	/* Lost, the GPU is stopped for good: everything can go. */
+	if (READ_ONCE(sdev->lost)) {
+		done = U64_MAX;
+		xdone = U64_MAX;
+	}
+	pvrsgx_kobj_reap(sdev, done, xdone);
 	pvrsgx_ccb_inval_reap(sdev, false);
 }
 
@@ -274,6 +304,7 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 	u32 data[6] = {};
 	struct dma_fence *fence;
 	unsigned long flags;
+	u32 sent = 0;
 	bool cookie;
 	int err, idx;
 
@@ -313,27 +344,55 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 		for (u32 k = 0; k < job->render.nkicks && !err; k++) {
 			pvrsgx_render_job_build(job, k, data);
 			err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_TA, data, &job->ccb_seq);
+			if (!err)
+				sent++;
+		}
+		if (err && !sent) {
+			mutex_lock(&sdev->kobj_lock);
+			sdev->renders_submitted--;
+			mutex_unlock(&sdev->kobj_lock);
 		}
 	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+		mutex_lock(&sdev->kobj_lock);
+		sdev->transfers_submitted++;
+		mutex_unlock(&sdev->kobj_lock);
 		pvrsgx_transfer_job_build(job, data);
 		err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_TRANSFER, data, &job->ccb_seq);
+		if (err) {
+			mutex_lock(&sdev->kobj_lock);
+			sdev->transfers_submitted--;
+			mutex_unlock(&sdev->kobj_lock);
+		}
 	} else {
 		/* A NULL job is a no-op command: done when the microkernel has taken it. */
 		err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_PROCESS_QUEUES, data, &job->ccb_seq);
 	}
-	if (err) {
+	if (err && !sent) {
 		drm_err_ratelimited(&sdev->base, "job not sent to the microkernel (%d)\n", err);
 		goto fail_exit;
 	}
 
 	job->start_ns = ktime_get_ns();
+	/* After the send, so every no-op ahead of it counts; one just after only delays it. */
+	job->noops_before = READ_ONCE(sdev->noops_sent);
 	trace_pvrsgx_kick(job->type, job->ccb_seq, fence->seqno);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = dma_fence_get(fence);
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_add_tail(&job->node, &sdev->active);
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
-	mod_delayed_work(sdev->wq, &sdev->poll_work, 0);
+	if (err) {
+		/*
+		 * Part of the render is on the GPU and the rest never will be: it
+		 * ends at its reset, now, not at a fence that would free its memory
+		 * under the kicks that run.
+		 */
+		drm_err_ratelimited(&sdev->base, "render sent in part (%u of %u kicks, %d); resetting\n",
+				    sent, job->render.nkicks, err);
+		drm_sched_fault(&sdev->sched);
+	} else {
+		mod_delayed_work(sdev->wq, &sdev->poll_work, 0);
+	}
 	drm_dev_exit(idx);
 	return fence;
 
@@ -356,16 +415,22 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 {
 	struct pvrsgx_job *bad = to_pvrsgx_job(sched_job), *job, *tmp;
 	struct pvrsgx_device *sdev = bad->ctx->sdev;
-	bool fault = READ_ONCE(sdev->faulted), lost, cookie;
+	bool fault, lost, cookie, wedged = false;
 	unsigned long flags;
 	int idx;
 
-	drm_sched_stop(&sdev->sched, sched_job);
+	mutex_lock(&sdev->reset_lock);
+	/* Finished but not yet freed, or held by system sleep: not a hang. */
+	if (sdev->quiesced || (bad->hw_fence && dma_fence_is_signaled(bad->hw_fence))) {
+		mutex_unlock(&sdev->reset_lock);
+		return DRM_GPU_SCHED_STAT_NO_HANG;
+	}
+	drm_sched_wqueue_stop(&sdev->sched);
+	fault = sdev->faulted;
 	/* Every fence on the GPU and in the queue waits on what follows. */
 	cookie = dma_fence_begin_signalling();
 	/* After unbind (pvrsgx_job_unplug) the hardware is gone: fail, touch nothing. */
-	mutex_lock(&sdev->reset_lock);
-	lost = READ_ONCE(sdev->lost) || !drm_dev_enter(&sdev->base, &idx);
+	lost = sdev->lost || !drm_dev_enter(&sdev->base, &idx);
 	if (lost)
 		goto fail;
 	if (fault)
@@ -376,6 +441,8 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 		drm_err(&sdev->base, "job timed out (ccb %llu, consumed %llu); resetting\n",
 			bad->ccb_seq, pvrsgx_ccb_consumed(sdev));
 	WRITE_ONCE(bad->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_GUILTY);
+	/* Counted before any fence says so: a client woken by one sees the reset. */
+	WRITE_ONCE(sdev->reset_count, sdev->reset_count + 1);
 	pvrsgx_coredump(sdev, bad);
 	/* Stopped before any fence signals: userspace may free the jobs' memory then. */
 	pvrsgx_fw_halt(sdev);
@@ -393,6 +460,12 @@ fail:
 	}
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	mutex_unlock(&sdev->done_lock);
+	dma_fence_end_signalling(cookie);
+	/*
+	 * Their callbacks still attached, the jobs' finished fences carry these
+	 * errors; the scheduler, stopped after, only takes the jobs off its list.
+	 */
+	drm_sched_stop(&sdev->sched, sched_job);
 	if (lost)
 		goto out;
 
@@ -401,8 +474,8 @@ fail:
 	 * straight into the full start (clocks, scripts, a reset that drains
 	 * pending faults, the first kick).
 	 */
-	sdev->reset_count++;
-	sdev->fw_running = false;
+	cookie = dma_fence_begin_signalling();
+	WRITE_ONCE(sdev->fw_running, false);
 	/* The restart's reset clears the BIF's fault state. */
 	WRITE_ONCE(sdev->faulted, false);
 	if (pvrsgx_fw_start(sdev)) {
@@ -410,14 +483,16 @@ fail:
 		/* Lost: the cores stay in reset, and run_job fails every job. */
 		pvrsgx_fw_halt(sdev);
 		WRITE_ONCE(sdev->lost, true);
-		/* DMA is off and the fences are signaled: tell userspace to rebind. */
-		drm_dev_wedged_event(&sdev->base, DRM_WEDGE_RECOVERY_REBIND, NULL);
+		wedged = true;
 	}
+	dma_fence_end_signalling(cookie);
 	drm_dev_exit(idx);
 out:
-	mutex_unlock(&sdev->reset_lock);
-	dma_fence_end_signalling(cookie);
 	drm_sched_start(&sdev->sched, 0);
+	mutex_unlock(&sdev->reset_lock);
+	/* DMA is off and the fences are signaled: tell userspace to rebind. It allocates. */
+	if (wedged)
+		drm_dev_wedged_event(&sdev->base, DRM_WEDGE_RECOVERY_REBIND, NULL);
 	return DRM_GPU_SCHED_STAT_RESET;
 }
 
@@ -489,7 +564,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	INIT_LIST_HEAD(&sdev->active);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
-	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND | WQ_HIGHPRI, 0);
 	if (!sdev->wq)
 		return -ENOMEM;
 	sdev->free_wq = alloc_workqueue("powervr_sgx_free", WQ_UNBOUND, 0);
@@ -520,15 +595,11 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	unsigned long flags;
 	bool cookie;
 
-	drm_sched_wqueue_stop(&sdev->sched);
-	/* A reset under way finishes first; one after this sees @lost. */
+	/* A reset under way finishes first, scheduler restart included; one after sees @lost. */
 	mutex_lock(&sdev->reset_lock);
+	drm_sched_wqueue_stop(&sdev->sched);
 	WRITE_ONCE(sdev->lost, true);
 	pvrsgx_fw_stop(sdev);
-	mutex_unlock(&sdev->reset_lock);
-	cancel_delayed_work_sync(&sdev->poll_work);
-	/* Stopped: nothing translates any more, so unmapped memory can go. */
-	pvrsgx_ccb_inval_reap(sdev, true);
 
 	mutex_lock(&sdev->done_lock);
 	cookie = dma_fence_begin_signalling();
@@ -541,7 +612,17 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	dma_fence_end_signalling(cookie);
 	mutex_unlock(&sdev->done_lock);
+	/* Nothing on the GPU now: a done check after this finds none and stays off. */
+	cancel_delayed_work_sync(&sdev->poll_work);
 	drm_sched_wqueue_start(&sdev->sched);
+	mutex_unlock(&sdev->reset_lock);
+
+	/*
+	 * Stopped: nothing translates any more, so unmapped memory can go, and
+	 * every kernel object in the graveyard, whose VMs hold the DRM device.
+	 */
+	pvrsgx_ccb_inval_reap(sdev, true);
+	pvrsgx_kobj_reap(sdev, U64_MAX, U64_MAX);
 }
 
 /*
@@ -556,14 +637,24 @@ int pvrsgx_job_quiesce(struct pvrsgx_device *sdev)
 	for (int i = 0; i < 2; i++) {
 		struct dma_fence *last;
 
+		/* Between resets: none is under way, and none restarts the scheduler after. */
+		mutex_lock(&sdev->reset_lock);
 		drm_sched_wqueue_stop(&sdev->sched);
 		/* Set only by run_job, which is stopped. Jobs finish in order. */
-		last = sdev->last_fence;
+		last = dma_fence_get(sdev->last_fence);
 		if (!last || dma_fence_is_signaled(last)) {
+			sdev->quiesced = true;
+			mutex_unlock(&sdev->reset_lock);
+			dma_fence_put(last);
+			/* The done check that signaled it has queued its reap. */
+			mutex_lock(&sdev->done_lock);
+			mutex_unlock(&sdev->done_lock);
 			flush_work(&sdev->reap_work);
 			return 0;
 		}
+		mutex_unlock(&sdev->reset_lock);
 		left = dma_fence_wait_timeout(last, false, left);
+		dma_fence_put(last);
 		if (left <= 0)
 			break;
 	}
@@ -574,7 +665,10 @@ int pvrsgx_job_quiesce(struct pvrsgx_device *sdev)
 
 void pvrsgx_job_unquiesce(struct pvrsgx_device *sdev)
 {
+	mutex_lock(&sdev->reset_lock);
+	sdev->quiesced = false;
 	drm_sched_wqueue_start(&sdev->sched);
+	mutex_unlock(&sdev->reset_lock);
 }
 
 void pvrsgx_job_fini(struct pvrsgx_device *sdev)
@@ -584,6 +678,7 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	cancel_work_sync(&sdev->reap_work);
 	/* Drains the jobs' final puts, which drm_sched_fini may have queued. */
 	destroy_workqueue(sdev->free_wq);
+	sdev->free_wq = NULL;
 	destroy_workqueue(sdev->wq);
 	pvrsgx_coredump_fini(sdev);
 	dma_fence_put(sdev->last_fence);
@@ -633,7 +728,7 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	ctx = kzalloc_obj(*ctx);
 	if (!ctx)
 		return -ENOMEM;
-	ctx->vm = pvrsgx_vm_lookup(sfile, args->vm_context_handle);
+	ctx->vm = pvrsgx_vm_lookup_user(sfile, args->vm_context_handle);
 	if (!ctx->vm) {
 		kfree(ctx);
 		return -ENOENT;
@@ -650,7 +745,6 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 	err = drm_sched_entity_init(&ctx->entity, sched_priority(args->priority), &sched, 1, NULL);
 	if (err)
 		goto err_put;
-	pvrsgx_vm_user_get(ctx->vm);
 	err = xa_alloc(&sfile->contexts, &args->handle, ctx,
 		       XA_LIMIT(1, PVRSGX_MAX_FILE_CONTEXTS), GFP_KERNEL);
 	if (err) {
@@ -661,8 +755,8 @@ int pvrsgx_ioctl_create_context(struct drm_device *drm, void *data, struct drm_f
 
 err_entity:
 	drm_sched_entity_destroy(&ctx->entity);
-	pvrsgx_vm_user_put(ctx->vm);
 err_put:
+	pvrsgx_vm_user_put(ctx->vm);
 	context_put(ctx);
 	return err;
 }
@@ -689,11 +783,15 @@ void pvrsgx_context_destroy_all(struct pvrsgx_file *sfile)
 int pvrsgx_ioctl_destroy_context(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_destroy_context_args *args = data;
+	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 	struct pvrsgx_context *ctx;
 
 	if (args->_padding_4)
 		return -EINVAL;
-	ctx = xa_erase(&to_pvrsgx_file(file)->contexts, args->handle);
+	/* A submit that found it has pushed its jobs before the entity goes. */
+	down_write(&sfile->submit_lock);
+	ctx = xa_erase(&sfile->contexts, args->handle);
+	up_write(&sfile->submit_lock);
 	if (!ctx)
 		return -ENOENT;
 	context_destroy(ctx);
@@ -763,16 +861,36 @@ static void job_args_fini(struct job_args *ja)
 }
 
 /* The latest earlier job of this submit that signals handle at point, or -1. */
-static int intra_signaller(const struct job_args *prev, u32 nprev, u32 handle, u64 point)
+/*
+ * Whether earlier jobs of this submit signal @handle at @point or past it
+ * (point 0: at all); if so, every one of them that signals @handle joins the
+ * job's waits. That waits for more than a timeline point needs, never less.
+ */
+static bool intra_waits(struct job_args *ja, const struct job_args *prev, u32 nprev,
+			u32 handle, u64 point)
 {
-	for (int k = nprev - 1; k >= 0; k--) {
+	bool covered = false;
+
+	for (u32 k = 0; k < nprev; k++) {
 		for (u32 s = 0; s < prev[k].nsignals; s++) {
 			if (prev[k].signals[s].handle == handle &&
-			    prev[k].signals[s].point == point)
-				return k;
+			    (!point || prev[k].signals[s].point >= point))
+				covered = true;
 		}
 	}
-	return -1;
+	if (!covered)
+		return false;
+	for (u32 k = 0; k < nprev; k++) {
+		bool signals = false, listed = false;
+
+		for (u32 s = 0; s < prev[k].nsignals; s++)
+			signals |= prev[k].signals[s].handle == handle;
+		for (u32 d = 0; d < ja->nintra; d++)
+			listed |= ja->intra[d] == k;
+		if (signals && !listed)
+			ja->intra[ja->nintra++] = k;
+	}
+	return true;
 }
 
 static int job_sync_ops(struct drm_file *file, struct job_args *ja,
@@ -787,7 +905,7 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		return PTR_ERR_OR_ZERO(ops);
 
 	ja->signals = kvcalloc(arr->count, sizeof(*ja->signals), GFP_KERNEL);
-	ja->intra = kvcalloc(arr->count, sizeof(*ja->intra), GFP_KERNEL);
+	ja->intra = kvcalloc(max(nprev, 1u), sizeof(*ja->intra), GFP_KERNEL);
 	if (!ja->signals || !ja->intra) {
 		err = -ENOMEM;
 		goto out;
@@ -805,11 +923,12 @@ static int job_sync_ops(struct drm_file *file, struct job_args *ja,
 		}
 
 		if (!(ops[i].flags & DRM_POWERVR_SGX_SYNC_OP_FLAG_SIGNAL)) {
-			int k = intra_signaller(prev, nprev, ops[i].handle, ops[i].value);
-
-			/* Its fence exists once that job is armed: added then. */
-			if (k >= 0) {
-				ja->intra[ja->nintra++] = k;
+			/* Their fences exist once those jobs are armed: added then. */
+			if (intra_waits(ja, prev, nprev, ops[i].handle, ops[i].value)) {
+				/* And whatever the syncobj holds already, earlier points. */
+				if (drm_syncobj_find_fence(file, ops[i].handle, 0, 0, &fence))
+					continue;
+				err = drm_sched_job_add_dependency(&ja->job->base, fence);
 				continue;
 			}
 			err = drm_syncobj_find_fence(file, ops[i].handle, ops[i].value, 0, &fence);
@@ -918,6 +1037,7 @@ static int job_create(struct drm_file *file, const struct drm_powervr_sgx_job *i
 int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_submit_jobs_args *args = data;
+	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 	struct drm_powervr_sgx_job *in;
 	struct job_args *ja;
 	struct drm_exec exec;
@@ -940,6 +1060,9 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 		return -ENOMEM;
 	}
 
+	err = down_read_interruptible(&sfile->submit_lock);
+	if (err)
+		goto out_free;
 	for (u32 i = 0; i < n; i++) {
 		err = job_create(file, &in[i], &ja[i], ja, i);
 		if (err) {
@@ -1020,9 +1143,16 @@ out_exec:
 	/* The references of the jobs not pushed. */
 	pvrsgx_power_put(to_pvrsgx_device(drm), n - pushed);
 out:
+	/* Armed jobs not pushed are cleaned up while their entity still exists. */
 	for (u32 i = 0; i < n; i++)
 		job_args_fini(&ja[i]);
+	up_read(&sfile->submit_lock);
+out_free:
 	kvfree(ja);
 	kvfree(in);
 	return err;
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_job_test.c"
+#endif

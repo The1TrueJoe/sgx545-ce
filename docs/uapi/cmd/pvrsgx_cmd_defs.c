@@ -92,6 +92,8 @@ static const struct pvrsgx_cmd_field sgx545_render_fields[] = {
 		.check = PVRSGX_CMD_CHECK_ADDR,
 		.heap = PVRSGX_CMD_HEAP_PDS_PIXEL,
 		.align = 16,
+		.extent = PVRSGX_CMD_EXTENT_PDS_ROWS,
+		.extent_field = offsetof(struct pvrsgx_cmd_render_all, base.bg_pds_secondary_rows),
 	},
 	{
 		.name = "bg_pds_primary_addr",
@@ -100,6 +102,8 @@ static const struct pvrsgx_cmd_field sgx545_render_fields[] = {
 		.check = PVRSGX_CMD_CHECK_ADDR,
 		.heap = PVRSGX_CMD_HEAP_PDS_PIXEL,
 		.align = 16,
+		.extent = PVRSGX_CMD_EXTENT_PDS_ROWS,
+		.extent_field = offsetof(struct pvrsgx_cmd_render_all, base.bg_pds_primary_rows),
 	},
 	{
 		.name = "pixel_event_pds_rows",

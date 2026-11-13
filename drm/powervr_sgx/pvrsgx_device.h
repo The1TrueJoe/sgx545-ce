@@ -159,6 +159,8 @@ struct pvrsgx_device {
 	struct pvrsgx_fw fw;
 	/** @fw_running: The microkernel has started and takes commands. */
 	bool fw_running;
+	/** @uk_lockups: The microkernel's lockup count, as last reported. */
+	u32 uk_lockups;
 	/**
 	 * @powered: The SGX is clocked and its registers may be read. Off between
 	 * a stop and the next start: a read of an unclocked CE5300 block can hang
@@ -171,8 +173,13 @@ struct pvrsgx_device {
 	u32 fw_gen;
 	/** @lost: Firmware failed to restart; every job fails with -EIO. */
 	bool lost;
-	/** @reset_lock: Serializes a GPU reset with unbind. */
+	/**
+	 * @reset_lock: Serializes a GPU reset, from stopping the scheduler to
+	 * starting it, with unbind, system sleep and the fault check.
+	 */
 	struct mutex reset_lock;
+	/** @quiesced: System sleep holds the GPU; a timeout then finds no hang. */
+	bool quiesced;
 	/** @faulted: The BIF reported a page fault; the running job ends with -EFAULT. */
 	bool faulted;
 
@@ -182,6 +189,8 @@ struct pvrsgx_device {
 	spinlock_t ccb_spin;
 	/** @ccb_issued: Commands written to the kernel CCB since load, across restarts. */
 	u64 ccb_issued;
+	/** @ccb_reset_seq: @ccb_issued at the ring's last reset (under @ccb_spin). */
+	u64 ccb_reset_seq;
 	/** @inval_lock: Protects @inval_waits. */
 	spinlock_t inval_lock;
 	/** @inval_waits: &struct pvrsgx_inval_wait for invalidates not yet taken. */
@@ -234,11 +243,20 @@ struct pvrsgx_device {
 	struct list_head kobj_unmapped;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
+	/** @transfers_submitted: Likewise for transfer jobs (under @kobj_lock). */
+	u64 transfers_submitted;
 	/**
-	 * @done_seq: Jobs signalled since the microkernel started, against its
-	 * count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
+	 * @done_seq: Completions accounted since the microkernel started, against
+	 * its count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
 	 */
 	u32 done_seq;
+	/**
+	 * @noops_sent: No-ops the kernel sent that are not jobs (the BIF part of a
+	 * split invalidate). A counting microkernel counts them too.
+	 */
+	u32 noops_sent;
+	/** @noops_seen: @noops_sent as of the last job signalled (under @fence_lock). */
+	u32 noops_seen;
 	/** @restarts: Microkernel restarts; graveyard entries from before one can go. */
 	u32 restarts;
 	/** @coredump_work: Hands a hang's dump to devcoredump, outside the reset. */
@@ -249,6 +267,8 @@ struct pvrsgx_device {
 	size_t coredump_len;
 	/** @renders_done: Render jobs the firmware has finished. */
 	u64 renders_done;
+	/** @transfers_done: Transfer jobs the firmware has finished (under @fence_lock). */
+	u64 transfers_done;
 	/** @reap_work: Frees @graveyard entries a later render made safe. */
 	struct work_struct reap_work;
 
@@ -285,6 +305,12 @@ struct pvrsgx_file {
 	struct xarray rtds;
 	/** @usage: GPU time, for fdinfo. */
 	struct pvrsgx_usage *usage;
+	/**
+	 * @submit_lock: Read across SUBMIT_JOBS, from its context lookups to its
+	 * pushes; written to take a context out of @contexts, so none is
+	 * destroyed under a submit that found it.
+	 */
+	struct rw_semaphore submit_lock;
 };
 
 static inline struct pvrsgx_file *to_pvrsgx_file(struct drm_file *file)
@@ -347,6 +373,7 @@ void pvrsgx_share_fw_heaps(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu);
 
 int pvrsgx_device_init(struct pvrsgx_device *sdev);
 void pvrsgx_device_unplug(struct pvrsgx_device *sdev);
+void pvrsgx_irq_sync(struct pvrsgx_device *sdev);
 void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery);
 int pvrsgx_poll(struct pvrsgx_device *sdev, const u32 *addr, u32 mask, u32 val,
 		unsigned int timeout_us);

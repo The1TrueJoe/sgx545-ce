@@ -8,8 +8,9 @@
  * The SGX doesn't snoop the CPU caches. Memory the CPU writes for the GPU is
  * written through uncached (write-combined) mappings. On x86 the linear map
  * of those pages is made write-combined too. Elsewhere (ARM) the linear map
- * stays cacheable: the lines the page's zeroing left are written back once,
- * and the CPU only writes the page through its own write-combined mapping.
+ * stays cacheable: the lines the page's zeroing left are written back and
+ * invalidated once, and the CPU only uses the page through its own
+ * write-combined mapping.
  */
 
 #include <linux/dma-mapping.h>
@@ -40,12 +41,15 @@ static inline void pvrsgx_table_unmap(u32 *cpu) { }
 static inline int pvrsgx_pages_wc(struct device *dev, struct page **pages, unsigned int n)
 {
 	for (unsigned int i = 0; i < n; i++) {
-		/* Mapping for the device writes back the page's dirty lines. */
-		dma_addr_t a = dma_map_page(dev, pages[i], 0, PAGE_SIZE, DMA_TO_DEVICE);
+		/*
+		 * Both ways: written back, and no line left that a read through
+		 * the write-combined mapping could hit.
+		 */
+		dma_addr_t a = dma_map_page(dev, pages[i], 0, PAGE_SIZE, DMA_BIDIRECTIONAL);
 
 		if (dma_mapping_error(dev, a))
 			return -ENOMEM;
-		dma_unmap_page(dev, a, PAGE_SIZE, DMA_TO_DEVICE);
+		dma_unmap_page(dev, a, PAGE_SIZE, DMA_BIDIRECTIONAL);
 	}
 	return 0;
 }

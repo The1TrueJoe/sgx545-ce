@@ -152,7 +152,7 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 		reset_sleep(sdev);
 		inval_dc(sdev);
 
-		/* Let each faulting request complete on a scratch page. */
+		/* Each faulting request completes on the scratch page every address maps. */
 		for (int n = 0; n < 32; n++) {
 			u32 stat = sgx_rd(sdev, SGX_CR_BIF_INT_STAT), addr;
 
@@ -161,16 +161,12 @@ void pvrsgx_reset(struct pvrsgx_device *sdev, bool recovery)
 			addr = sgx_rd(sdev, SGX_CR_BIF_FAULT) & sdev->cr->bif_fault_addr;
 			drm_warn(&sdev->base, "reset: page fault 0x%x at 0x%08x\n", stat, addr);
 			soft_reset(sdev, true);
-			pvrsgx_mmu_map_pages(sdev->reset_mmu, addr, &sdev->reset_page, 1, 0);
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR, sgx_rd(sdev, SGX_CR_EVENT_STATUS));
 			sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR2, sgx_rd(sdev, SGX_CR_EVENT_STATUS2));
-			/* The reset page's PTE is in memory before the cores leave reset. */
-			wmb();
 			reset_sleep(sdev);
 			soft_reset(sdev, false);
 			reset_sleep(sdev);
 			inval_dc(sdev);
-			pvrsgx_mmu_unmap(sdev->reset_mmu, addr, SGX_MMU_PAGE_SIZE);
 		}
 	} else {
 		soft_reset(sdev, false);
@@ -206,12 +202,17 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 	sgx_wr(sdev, SGX_CR_EVENT_HOST_CLEAR,
 	       SGX_CR_EVENT_HOST_CLEAR_SW_EVENT | SGX_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT);
 	atomic_inc(&sdev->irq_count);
+	if (!READ_ONCE(sdev->fw_running))
+		return IRQ_HANDLED;
 	/*
 	 * The microkernel may interrupt at TA and 3D completion too: wake the
-	 * thread only for a finished job or a lockup report.
+	 * thread only for a finished job, an idle notice not yet acknowledged, or
+	 * a lockup not yet reported.
 	 */
-	if (!sdev->fw_running || pvrsgx_job_oldest_done(sdev) ||
-	    (pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS) & HOSTCTL_INTERRUPT_HWR))
+	if (pvrsgx_job_oldest_done(sdev) ||
+	    (pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS) &
+	     ~pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR) & HOSTCTL_INTERRUPT_ACTIVE_POWER) ||
+	    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS) != READ_ONCE(sdev->uk_lockups))
 		return IRQ_WAKE_THREAD;
 	return IRQ_HANDLED;
 }
@@ -219,16 +220,19 @@ static irqreturn_t pvrsgx_irq(int irq, void *arg)
 static irqreturn_t pvrsgx_irq_thread(int irq, void *arg)
 {
 	struct pvrsgx_device *sdev = arg;
-	u32 flags, clear;
+	u32 flags, clear, lockups;
 
-	if (!sdev->fw_running)
+	if (!READ_ONCE(sdev->fw_running))
 		return IRQ_HANDLED;
 
 	flags = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_FLAGS);
 	clear = pvrsgx_fw_hostctl(sdev, HOSTCTL_INTERRUPT_CLEAR);
-	if ((flags & HOSTCTL_INTERRUPT_HWR) && !(clear & HOSTCTL_INTERRUPT_HWR))
-		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n",
-				    pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS));
+	/* Reported once per count; the job's timeout does the recovery. */
+	lockups = pvrsgx_fw_hostctl(sdev, HOSTCTL_UK_LOCKUPS);
+	if (lockups != READ_ONCE(sdev->uk_lockups)) {
+		WRITE_ONCE(sdev->uk_lockups, lockups);
+		drm_err_ratelimited(&sdev->base, "microkernel reports a lockup (%u)\n", lockups);
+	}
 	/*
 	 * The microkernel's idle notice: acknowledge it in the interrupt clear word.
 	 * Powering down is runtime PM's business, so nothing else happens here.
@@ -325,7 +329,8 @@ static irqreturn_t pvrsgx_gma_irq(void *data)
 	irqreturn_t ret = pvrsgx_irq(sdev->irq, sdev);
 
 	if (ret == IRQ_WAKE_THREAD) {
-		queue_work(system_highpri_wq, &sdev->irq_work);
+		/* Reclaim-safe: it signals fences. */
+		queue_work(sdev->wq, &sdev->irq_work);
 		return IRQ_HANDLED;
 	}
 	return ret;
@@ -338,6 +343,16 @@ static void pvrsgx_gma_irq_work(struct work_struct *work)
 	pvrsgx_irq_thread(sdev->irq, sdev);
 }
 #endif
+
+/* No interrupt handler still running once this returns, bottom half included. */
+void pvrsgx_irq_sync(struct pvrsgx_device *sdev)
+{
+	synchronize_irq(sdev->irq);
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
+	if (sdev->gma_sgx)
+		flush_work(&sdev->irq_work);
+#endif
+}
 
 static int irq_setup(struct pvrsgx_device *sdev)
 {
@@ -403,6 +418,10 @@ int pvrsgx_device_init(struct pvrsgx_device *sdev)
 		err = -ENOMEM;
 		goto err_mmu;
 	}
+	/* A reset, in the fence-signalling path, then maps nothing. */
+	err = pvrsgx_mmu_fill(sdev->reset_mmu, sdev->reset_page, 0);
+	if (err)
+		goto err_mmu;
 
 	err = identify(sdev);
 	if (err)

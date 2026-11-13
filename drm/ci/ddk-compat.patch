@@ -514,14 +514,15 @@ diff -ruN a/drm/powervr_sgx/pvrsgx_fw_ddk.c b/drm/powervr_sgx/pvrsgx_fw_ddk.c
 diff -ruN a/drm/powervr_sgx/pvrsgx_kobj.c b/drm/powervr_sgx/pvrsgx_kobj.c
 --- a/drm/powervr_sgx/pvrsgx_kobj.c	2026-11-12 13:59:23
 +++ b/drm/powervr_sgx/pvrsgx_kobj.c	2026-11-12 13:59:23
-@@ -178,8 +178,9 @@
+@@ -196,9 +196,10 @@
  	mutex_lock(&sdev->kobj_lock);
  	list_for_each_entry_safe(o, tmp, &sdev->graveyard, grave) {
  		/* A restart forgets everything the old run pointed at. */
 +		/* The vendor microkernel keeps pointers to earlier renders' structures. */
  		if (all || o->grave_restarts != restarts ||
--		    (o->grave_seq < renders_done && !o->until_restart))
-+		    (o->grave_seq < renders_done && !o->until_restart && !pvrsgx_fw_is_ddk(sdev)))
+ 		    (o->grave_seq < (o->transfer ? transfers_done : renders_done) &&
+-		     !o->until_restart))
++		     !o->until_restart && !pvrsgx_fw_is_ddk(sdev)))
  			list_move_tail(&o->grave, &dead);
  	}
  	mutex_unlock(&sdev->kobj_lock);
@@ -641,8 +642,8 @@ diff -ruN a/drm/powervr_sgx/pvrsgx_vm.c b/drm/powervr_sgx/pvrsgx_vm.c
 diff -ruN a/drm/powervr_sgx/pvrsgx_vm.h b/drm/powervr_sgx/pvrsgx_vm.h
 --- a/drm/powervr_sgx/pvrsgx_vm.h	2026-11-12 13:59:23
 +++ b/drm/powervr_sgx/pvrsgx_vm.h	2026-11-12 13:59:23
-@@ -60,6 +60,7 @@
- struct pvrsgx_vm *pvrsgx_vm_lookup(struct pvrsgx_file *sfile, u32 handle);
+@@ -59,6 +59,7 @@
+ struct pvrsgx_vm *pvrsgx_vm_lookup_user(struct pvrsgx_file *sfile, u32 handle);
  void pvrsgx_vm_destroy_all(struct pvrsgx_file *sfile);
  int pvrsgx_heap_find(const struct pvrsgx_device *sdev, u64 addr, u64 size);
 +bool pvrsgx_vm_shares_kernel_heaps(struct pvrsgx_device *sdev);

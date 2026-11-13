@@ -35,9 +35,11 @@ struct pvrsgx_kobj {
 	struct pvrsgx_vm *vm;
 	/** @until_restart: Once released, kept until the next microkernel start. */
 	bool until_restart;
+	/** @transfer: A transfer context's: it waits for a transfer, not a render. */
+	bool transfer;
 	/** @grave: In pvrsgx_device.graveyard once released. */
 	struct list_head grave;
-	/** @grave_seq: pvrsgx_device.renders_submitted when it was released. */
+	/** @grave_seq: Renders (or transfers) submitted when it was released. */
 	u64 grave_seq;
 	/** @flush_seq: Once unmapped, the kernel CCB command whose cache control frees it. */
 	u64 flush_seq;
@@ -60,7 +62,8 @@ void pvrsgx_kobj_fini(struct pvrsgx_device *sdev);
 struct pvrsgx_kobj *pvrsgx_kobj_create(struct pvrsgx_device *sdev, enum pvrsgx_krange range,
 				       u32 size, u32 min_addr, struct pvrsgx_vm *vm);
 void pvrsgx_kobj_release(struct pvrsgx_device *sdev, struct pvrsgx_kobj *o);
-void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done);
+void pvrsgx_kobj_free_unused(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
+void pvrsgx_kobj_reap(struct pvrsgx_device *sdev, u64 renders_done, u64 transfers_done);
 
 /* Objects and pages waiting in the graveyard, and unmapped ones waiting for the invalidate. */
 struct pvrsgx_kobj_counts {
@@ -76,6 +79,7 @@ struct pvrsgx_vm;
 int pvrsgx_kobj_new(struct pvrsgx_device *sdev, struct pvrsgx_kobj **dst,
 		    enum pvrsgx_krange range, u32 size, u32 min, struct pvrsgx_vm *vm);
 void pvrsgx_kobj_drop(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o);
+void pvrsgx_kobj_drop_sent(struct pvrsgx_device *sdev, struct pvrsgx_kobj **o, bool sent);
 void pvrsgx_kobj_dump(struct seq_buf *sb, const char *name, struct pvrsgx_kobj *o, u32 off,
 		      u32 bytes);
 

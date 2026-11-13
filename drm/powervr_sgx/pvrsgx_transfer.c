@@ -49,6 +49,11 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 				     sizeof(struct pvrsgx_fw_hw_transfer_ctx), 0, NULL);
 	if (err)
 		goto fail;
+	/* Freed after a transfer, not a render, has finished. */
+	x->ccb->transfer = true;
+	x->ccbctl->transfer = true;
+	x->done->transfer = true;
+	x->hwctx->transfer = true;
 
 	/* The words a transfer context needs; the rest stays zero. */
 	hw = (void *)kobj_cpu(x->hwctx);
@@ -67,13 +72,15 @@ fail:
 void pvrsgx_transfer_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
 {
 	struct pvrsgx_transfer_ctx *x = ctx->transfer;
+	bool sent;
 
 	if (!x)
 		return;
-	pvrsgx_kobj_drop(sdev, &x->hwctx);
-	pvrsgx_kobj_drop(sdev, &x->done);
-	pvrsgx_kobj_drop(sdev, &x->ccbctl);
-	pvrsgx_kobj_drop(sdev, &x->ccb);
+	sent = READ_ONCE(x->sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->hwctx, sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->done, sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->ccbctl, sent);
+	pvrsgx_kobj_drop_sent(sdev, &x->ccb, sent);
 	kfree(x);
 	ctx->transfer = NULL;
 }
@@ -119,6 +126,7 @@ void pvrsgx_transfer_job_build(struct pvrsgx_job *job, u32 data[6])
 	struct pvrsgx_fw_transfer_cmd *cmd = (void *)((u8 *)kobj_cpu(x->ccb) + woff);
 	u32 *done = kobj_cpu(x->done);
 
+	WRITE_ONCE(x->sent, true);
 	job->transfer.cmd_off = woff;
 	memset(cmd, 0, sizeof(*cmd));
 	cmd->bg_object = 0x2000000 | ((u32)in->bg_block_addr - base) >> 4;
