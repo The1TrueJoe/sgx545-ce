@@ -709,7 +709,7 @@ static void bind_apply(struct pvrsgx_vm *vm, struct bind_op *ops, u32 n, struct 
 	}
 }
 
-/* Wait, interruptibly, for every wait op; find every signal op's syncobj. */
+/* A synchronous bind: the ops are applied before it returns, with no fences. */
 int pvrsgx_ioctl_vm_bind(struct drm_device *drm, void *data, struct drm_file *file)
 {
 	struct drm_powervr_sgx_ioctl_vm_bind_args *args = data;

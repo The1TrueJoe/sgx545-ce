@@ -45,8 +45,10 @@ static struct krange krange(const struct pvrsgx_device *sdev, enum pvrsgx_krange
 
 	switch (r) {
 	case PVRSGX_KRANGE_KDATA:	/* past the firmware's own arenas (pvrsgx_fw.c) */
+		/* EDM-protected where the core allows it, as the firmware's data arena. */
 		return (struct krange){ h->kernel_data.base + 0x10000, h->kernel_data.end,
-					SGX_MMU_PTE_CACHECONSISTENT | SGX_MMU_PTE_EDMPROTECT };
+					SGX_MMU_PTE_CACHECONSISTENT |
+					(sdev->family->data_no_edmprotect ? 0 : SGX_MMU_PTE_EDMPROTECT) };
 	case PVRSGX_KRANGE_KCODE:
 		return (struct krange){ h->kernel_code.base + 0x10000, h->kernel_code.end,
 					SGX_MMU_PTE_CACHECONSISTENT };

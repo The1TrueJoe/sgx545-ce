@@ -29,8 +29,7 @@ static struct dma_buf *pvrsgx_gem_export(struct drm_gem_object *obj, int flags)
 /* Every CPU mapping, the dma-buf's included, needs ALLOW_CPU_ACCESS. */
 static int pvrsgx_gem_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
 {
-	if (!drm_gem_is_imported(obj) &&
-	    !(to_pvrsgx_bo(obj)->flags & DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS))
+	if (!(to_pvrsgx_bo(obj)->flags & DRM_POWERVR_SGX_BO_ALLOW_CPU_ACCESS))
 		return -EINVAL;
 	return drm_gem_shmem_object_mmap(obj, vma);
 }
@@ -73,6 +72,7 @@ int pvrsgx_ioctl_create_bo(struct drm_device *drm, void *data, struct drm_file *
 {
 	struct drm_powervr_sgx_ioctl_create_bo_args *args = data;
 	struct drm_gem_shmem_object *shmem;
+	struct address_space *m;
 	int err;
 
 	if (args->_padding_c || (args->flags & ~PVRSGX_BO_FLAGS_MASK) ||
@@ -86,9 +86,21 @@ int pvrsgx_ioctl_create_bo(struct drm_device *drm, void *data, struct drm_file *
 	if (IS_ERR(shmem))
 		return PTR_ERR(shmem);
 	to_pvrsgx_bo(&shmem->base)->flags = args->flags;
-	/* Pages the GPU can address. */
-	mapping_set_gfp_mask(shmem->base.filp->f_mapping,
-			     (GFP_HIGHUSER & ~__GFP_HIGHMEM) | __GFP_DMA32);
+	/* Pages the GPU can address; shmem's RETRY_MAYFAIL and NOWARN stay. */
+	m = shmem->base.filp->f_mapping;
+	mapping_set_gfp_mask(m, (mapping_gfp_mask(m) & ~__GFP_HIGHMEM) | __GFP_DMA32);
+	/*
+	 * Without x86's write-combined linear map the zeroing's lines stay dirty:
+	 * clean them now, before any write through a write-combined mapping.
+	 */
+	if (!IS_ENABLED(CONFIG_X86)) {
+		struct sg_table *sgt = drm_gem_shmem_get_pages_sgt(shmem);
+
+		if (IS_ERR(sgt)) {
+			drm_gem_object_put(&shmem->base);
+			return PTR_ERR(sgt);
+		}
+	}
 
 	err = drm_gem_handle_create(file, &shmem->base, &args->handle);
 	drm_gem_object_put(&shmem->base);
