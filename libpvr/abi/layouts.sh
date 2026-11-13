@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright © 2026 Joseph Telaak
 # Dump every bridge/microkernel struct layout for i386 and x86_64 with this build's defines.
 # Usage: libpvr/abi/layouts.sh   (from the repo root; writes libpvr/abi/layout-<arch>.txt)
 R=$(cd "$(dirname "$0")/../.." && pwd)

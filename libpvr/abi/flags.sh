@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright © 2026 Joseph Telaak
 # Defines and include path of the kernel driver build, for libpvr/abi/*.sh. Needs $R.
 DEFS="-DLINUX -DSGX545 -DSUPPORT_SGX545 -DSGX_CORE_REV=1013 -DSERVICES4 -DSUPPORT_SRVINIT -DSUPPORT_SGX
  -DTRANSFER_QUEUE -DSYS_USING_INTERRUPTS -DSUPPORT_HW_RECOVERY -DPVR_SECURE_HANDLES -DUSE_PTHREADS

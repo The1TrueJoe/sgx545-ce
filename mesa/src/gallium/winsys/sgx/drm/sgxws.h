@@ -10,8 +10,7 @@
  * describes them (STATE.md, PDS.md, ISA.md): nothing from the kernel's
  * services headers.  How a buffer, a context or a submission reaches the
  * kernel is the winsys's business (sgx_frame.h: the powervr_sgx DRM
- * driver, or the DDK's services through libpvr); the driver sees opaque
- * handles.
+ * driver); the driver sees opaque handles.
  */
 
 #ifndef SGXWS_H

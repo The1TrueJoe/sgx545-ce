@@ -1,13 +1,13 @@
 #!/bin/sh
-# Build Mesa with the sgx gallium driver (over powervr_sgx, or pvrsrvkm
-# through libpvr), the EGL fbdev platform, and GBM.
+# Build Mesa with the sgx gallium driver (over powervr_sgx), the EGL fbdev
+# platform, and GBM.
 #
 #   mesa/build.sh [x86_64] [i386] [armv7] [x86_64-gl] [x86_64-x11] [debian]   (default: x86_64 i386)
 #
 # Fetches the release in mesa/VERSION (checked against its sha256), unpacks
 # it under $SGX_MESA_BUILD (default build/mesa in the repo), applies
-# mesa/patches (the series for upstream, then mesa/patches/pvrsrvkm: the DDK
-# services driver's pieces, not for upstream), copies the mesa/src overlay over
+# mesa/patches (the series for upstream, then mesa/patches/local: the fbdev
+# platform and a surfaceless fallback, not for upstream), copies the mesa/src overlay over
 # the tree, and builds with
 # zig cc for each target:
 #   x86_64  glibc 2.36 ABI: newer glibc userspaces (2.42) run it;
@@ -45,19 +45,17 @@ echo "$MESA_SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || {
 	echo "build.sh: $TARBALL does not match mesa/VERSION's sha256" >&2; exit 1; }
 
 # the tree is unpacked and patched again whenever mesa/patches changes
-PATCHSUM=$(cat "$HERE"/patches/*.patch "$HERE"/patches/pvrsrvkm/*.patch | shasum -a 256 | cut -d' ' -f1)
+PATCHSUM=$(cat "$HERE"/patches/*.patch "$HERE"/patches/local/*.patch | shasum -a 256 | cut -d' ' -f1)
 if [ "$(cat "$TREE/.sgx-patched" 2>/dev/null)" != "$PATCHSUM" ]; then
 	rm -rf "$TREE"
 	tar -xJf "$TARBALL" -C "$B"
-	for p in "$HERE"/patches/*.patch "$HERE"/patches/pvrsrvkm/*.patch; do
+	for p in "$HERE"/patches/*.patch "$HERE"/patches/local/*.patch; do
 		patch -d "$TREE" -p1 --batch --forward < "$p"
 	done
 	echo "$PATCHSUM" > "$TREE/.sgx-patched"
 fi
 # the overlay, every build
 (cd "$HERE/src" && tar cf - .) | (cd "$TREE/src" && tar xf -)
-ln -sfn "$REPO/kernel/src" "$TREE/include/sgx-kernel"
-ln -sfn "$REPO/libpvr" "$TREE/src/gallium/winsys/sgx/drm/libpvr"
 python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx/drm/sgx_usse_progs.h"
 # the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
 # packers for its command streams, from their one definition
@@ -113,9 +111,6 @@ for arch in $ARCHES; do
 		api="-Dopengl=true -Dglvnd=enabled"
 	fi
 	platforms="-Dplatforms=fbdev -Degl-native-platform=fbdev -Dglx=disabled"
-	# the DDK's services backend too, for the fbdev targets
-	pvrsrvkm=-Dgallium-sgx-pvrsrvkm=true
-	[ "$arch" = armv7 ] && pvrsrvkm=
 	if [ "$arch" = x86_64-x11 ]; then
 		R=${X11_SYSROOT:?x86_64-x11 needs a Debian root in X11_SYSROOT (mesa/tests/x11/mkroot.py)}
 		sed -i.bak "s|^pkg_config_libdir = .*|pkg_config_libdir = ['$R/usr/lib/x86_64-linux-gnu/pkgconfig', '$R/usr/share/pkgconfig']\nsys_root = '$R'|" "$O/cross.ini"
@@ -124,13 +119,12 @@ for arch in $ARCHES; do
 		sed -i.bak "s|^c = \[\(.*\)\]|c = [\1, $x]|; s|^cpp = \[\(.*\)\]|cpp = [\1, $x]|" "$O/cross.ini"
 		api="-Dopengl=true -Dglvnd=enabled"
 		platforms="-Dplatforms=x11 -Degl-native-platform=x11 -Dglx=dri -Dxlib-lease=disabled"
-		pvrsrvkm=
 	fi
 	if [ ! -f "$O/build/build.ninja" ]; then
 		meson setup "$O/build" "$TREE" --cross-file "$O/cross.ini" \
 			--buildtype=release --prefix=/usr --libdir=lib \
 			$platforms \
-			-Dgallium-drivers=sgx -Dvulkan-drivers= $pvrsrvkm \
+			-Dgallium-drivers=sgx -Dvulkan-drivers= \
 			$api -Dgles1=enabled -Dgles2=enabled -Degl=enabled \
 			-Dgbm=enabled -Dllvm=disabled -Dxmlconfig=disabled -Dexpat=disabled \
 			-Dzstd=disabled -Dzlib=disabled -Dshader-cache=disabled -Dvalgrind=disabled \
