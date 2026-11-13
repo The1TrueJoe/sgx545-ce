@@ -1,0 +1,55 @@
+ima32_add_wrap           0x80000000  ok 
+ima32_add_carry          0x00000001  ok 
+ima32_sub                0xfffffffe  ok 
+ima32_sub_min            0x7fffffff  ok 
+ima32_sub_imm            0xfffffffc  ok 
+ima32_add_imm            0x00000054  ok 
+ima32_mul_lo             0xe242d208  ok 
+ima32_mul_neg            0xfffffff1  ok 
+ima32_mul_imm            0x64000064  ok 
+ima32_neg_c56            0xffffcfc7  ok 
+ima32_neg_c56_min        0x80000000  ok 
+ima32_hi_u_ff            0xfffffffe  ok 
+ima32_hi_u_big           0x09ca39e0  ok 
+ima32_hi_s_m1m1          0x00000000  ok 
+ima32_hi_s_m2x3          0xffffffff  ok 
+ima32_hi_s_big           0xf795e368  ok 
+testmask_xor_eq_t        0xffffffff  ok 
+testmask_xor_eq_f        0x00000000  ok 
+testmask_xor_ne_t        0xffffffff  ok 
+testmask_xor_ne_f        0x00000000  ok 
+testmask_or_neg_t        0xffffffff  ok 
+testmask_or_neg_f        0x00000000  ok 
+testmask_or_neg_or       0xffffffff  ok 
+testmask_or_pos_t        0xffffffff  ok 
+testmask_or_pos_f        0x00000000  ok 
+testmask_or_gt_t         0xffffffff  ok 
+testmask_or_gt_zero      0x00000000  ok 
+testmask_or_gt_neg       0x00000000  ok 
+testmask_or_le_zero      0xffffffff  ok 
+testmask_or_le_neg       0xffffffff  ok 
+testmask_or_le_pos       0x00000000  ok 
+testmask_or_neg_imm0     0xffffffff  ok 
+testmask_xor_eq_imm      0xffffffff  ok 
+test_xor_ne_t            0x00000001  ok 
+test_xor_ne_f            0x00000000  ok 
+test_and_eq_mask         0x00000000  ok 
+test_and_eq_zero         0x00000001  ok 
+and_inv_reg              0xf0f00000  ok 
+xor_inv_0                0xedcba987  ok 
+and_b2f                  0x3f800000  ok 
+asr_reg                  0xf8000001  ok 
+shl_reg                  0x80000000  ok 
+pck_f32_s16_hi           0xc0000000  ok 
+pck_f32_s16_lo           0xc0000000  ok 
+pck_f32_u16_lo           0x40400000  ok 
+pck_f32_u16_hi           0x477ffe00  ok 
+pck_u16_f32_pair         0xffff0003  ok 
+pck_u16_f32_zero_hi      0x00009c40  ok 
+pck_u16_f32_clamp        0xffff0000  ok 
+i2f_seq                  0xcceb79a3  ok 
+frcp_3                   0x3eaaaaab   
+frcp_7                   0x3e124925   
+frcp_1000003             0x358637a3   
+frcp_4294967040          0x2f800001   
+frcp_1                   0x3f2aaaab   

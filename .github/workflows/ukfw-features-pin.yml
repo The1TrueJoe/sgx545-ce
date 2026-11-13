@@ -30,11 +30,17 @@ permissions:
 jobs:
   pin:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: sgx-asm, from sgx.xml (ukernel/build.py assembles with it)
+        run: |
+          set -eux
+          python3 -m pip install -q mako
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
       - name: Default image features are a subset of the in-tree driver mask
         run: python3 drm/tools/ukfw_features_pin.py

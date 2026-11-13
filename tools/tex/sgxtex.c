@@ -124,7 +124,7 @@ void sgxpbe_words(struct sgxpbe *p, uint32_t w, uint32_t h, uint32_t pitch, uint
 		  (dither ? SGXPBE_SIDE_DITHER : 0);
 }
 
-/* LIMM rN, #v (libsrv_um FUN_000301d0) */
+/* LIMM rN, #v */
 static void limm(uint32_t *o, uint32_t reg, uint32_t v)
 {
 	o[0] = (v & 0x1fffff) | reg << 21;
@@ -156,8 +156,8 @@ void sgxtex_blit_command(uint32_t *c, const struct sgxtex_blit_ctx *x, uint32_t 
 	c[6] = base;
 	c[7] = 0x80000000;
 	c[8] = 0x88;
-	c[9] = x->pds_event & ~0xfu;		/* pixel-event program, 5 rows, 1 code unit */
-	c[10] = 5;
+	c[9] = x->pds_event & ~0xfu;		/* the pixel-event program and its data rows */
+	c[10] = SGXTEX_EVENT_ROWS;
 	c[11] = 1;
 	c[12] = 0;				/* first tile */
 	c[13] = (((w + 31) >> 5) - 1) << 16 | (((h + 15) >> 4) - 1);	/* last tile */
@@ -342,26 +342,74 @@ void sgxtex_xctx_secondary(uint32_t *p, uint32_t nop_use)
 	p[5] = 0xaf000000;	/* HALT */
 }
 
+/* PDS encodings (PDS.md), as tools/gen/sgxgen.c writes them */
+#define PDS_MOVS(r1, r2, a, b, dest) (0x07000000u | (r1) << 18 | (r2) << 13 | (a) << 11 | (b) << 9 | (dest))
+#define PDS_DOUTU 5
+#define PDS_DOUTA 6
+#define PDS_ALU(op, s, s1, s2, dst) (0x07000000u | (uint32_t)(op) << 28 | (uint32_t)(s) << 27 | (s1) << 16 | (s2) << 9 | (dst))
+#define PDS_AND(s1, s2, dst) PDS_ALU(0xc, 1, s1, s2, dst)
+#define PDS_OR(s1, s2, dst) PDS_ALU(0xc, 0, s1, s2, dst)
+#define S1_DS0(w) (2 * (w))
+#define S1_IN(n) (2 * (0x40 + (n)))
+#define S2_DS1(w) (2 * (w))
+#define U_DS0(w) (w)
+#define U_DS1(w) (0x40 + (w))
+#define U_IN(n) (0x80 + (n))
+#define PDS_SHL(src, n, dst) (0xf7000000u | (src) << 16 | (n) << 8 | (dst))
+#define PDS_TST2(s2) (0x87000000u | (s2) << 9 | 0x100)	/* p0 = src2 == 0 */
+#define PDS_BRA_P0(t) (0x90000000u | (t))
+#define PDS_HALT 0xaf000000u
+
+/*
+ * The transfer's pixel event program: tools/gen's pixel_event (STATE.md "The
+ * pixel event program"), its ptoff task the end-of-tile program with w1 b23.
+ *   in1 & 8 -> ds0[0..1]; in1 & 2 -> in1 & 0x100 ? the emit task : DOUTA in2,
+ *   then the end-of-tile task with the tile position in w1;
+ *   in1 & 4 -> the emit task (ds0[2..3]).
+ */
 void sgxtex_xctx_pixel_event(uint32_t *p, uint32_t eot_use, uint32_t emit_use)
 {
-	/* data rows DS0 DS0 DS1 DS1; the code is the 29 instructions PDS.md decodes */
-	static const uint32_t code[29] = {
-		0xcf820870, 0x8700c100, 0x90000005, 0x07000205, 0xaf000000, 0xcf820c70, 0x8700c100, 0x90000018,
-		0xdf820070, 0xcf08c070, 0x8700c100, 0x9000001b, 0x07840406, 0xf7800370, 0xcf0ac070, 0xc70cc030,
-		0xf7800370, 0xcf0ec070, 0xc760c030, 0xf7811470, 0xcf10c070, 0xc760c030, 0x07601805, 0xaf000000,
-		0xcf821070, 0x8700c100, 0x9000001c, 0x07040205, 0xaf000000,
-	};
 	const uint32_t eot = sgxtex_doutu(eot_use, 4), emit = sgxtex_doutu(emit_use, 4);
-	const uint32_t data[20] = {
-		eot, 0x00800000, 0, eot,
-		emit, 0x00c00000, 8, 2,
-		0x100, 0xff8, 4, 0,
-		0x00800000, 0x003ff000, 0, 0,
-		0x00400000, 0, 0, 0,
+	/* rows of DS0 DS0 DS1 DS1 */
+	const uint32_t data[4 * SGXTEX_EVENT_ROWS] = {
+		eot, 0x00800000, eot, 0,		/* ds0[0..1] ptoff; ds1[0] eot w0, ds1[1] DOUTA's control */
+		emit, 0x00c00000, 8, 2,			/* ds0[2..3] emit; ds1[2..3] the in1 tests */
+		0x003ffff8, 0x00400000, 4, 0x100,	/* ds0[4] the tile field, ds0[5] b22; ds1[4..5] */
+		0, 0, 0x00800000, 0,			/* ds1[6] b23 */
+	};
+	const uint32_t code[SGXTEX_EVENT_WORDS - 4 * SGXTEX_EVENT_ROWS] = {
+		/*  0 */ PDS_AND(S1_IN(1), S2_DS1(2), U_DS1(0x30)),
+		/*  1 */ PDS_TST2(S2_DS1(0x30)),
+		/*  2 */ PDS_BRA_P0(5),
+		/*  3 */ PDS_MOVS(0, 0, 0, 1, PDS_DOUTU),
+		/*  4 */ PDS_HALT,
+		/*  5 */ PDS_AND(S1_IN(1), S2_DS1(3), U_DS1(0x30)),
+		/*  6 */ PDS_TST2(S2_DS1(0x30)),
+		/*  7 */ PDS_BRA_P0(22),
+		/*  8 */ PDS_AND(S1_IN(1), S2_DS1(5), U_DS1(0x30)),
+		/*  9 */ PDS_TST2(S2_DS1(0x30)),
+		/* 10 */ PDS_BRA_P0(13),
+		/* 11 */ PDS_MOVS(1, 0, 0, 1, PDS_DOUTU),
+		/* 12 */ PDS_HALT,
+		/* 13 */ PDS_MOVS(0x21, 0, 0, 3, PDS_DOUTA),
+		/* 14 */ PDS_SHL(U_IN(0), 3, U_DS1(0x30)),
+		/* 15 */ PDS_AND(S1_DS0(4), S2_DS1(0x30), U_DS0(0x30)),
+		/* 16 */ PDS_OR(S1_DS0(0x30), S2_DS1(6), U_DS0(0x30)),
+		/* 17 */ PDS_SHL(U_IN(1), 20, U_DS1(0x30)),
+		/* 18 */ PDS_AND(S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)),
+		/* 19 */ PDS_OR(S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)),
+		/* 20 */ PDS_MOVS(0x18, 0, 2, 0, PDS_DOUTU),
+		/* 21 */ PDS_HALT,
+		/* 22 */ PDS_AND(S1_IN(1), S2_DS1(4), U_DS1(0x30)),
+		/* 23 */ PDS_TST2(S2_DS1(0x30)),
+		/* 24 */ PDS_BRA_P0(27),
+		/* 25 */ PDS_MOVS(1, 0, 0, 1, PDS_DOUTU),
+		/* 26 */ PDS_HALT,
+		/* 27 */ PDS_HALT,
 	};
 
 	memcpy(p, data, sizeof data);
-	memcpy(p + 20, code, sizeof code);
+	memcpy(p + 4 * SGXTEX_EVENT_ROWS, code, sizeof code);
 }
 
 const uint32_t sgxtex_nop_shader[4] = { 0x00000000, 0xfa440700, 0x00000000, 0xf8040140 };

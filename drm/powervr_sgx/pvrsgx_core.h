@@ -186,6 +186,22 @@ static inline bool pvrsgx_core_single_context(const struct pvrsgx_core_family *f
 	return !(f->features & PVRSGX_FEATURE_MULTIPLE_MEM_CONTEXTS);
 }
 
+extern bool pvrsgx_edm_init;
+
+/*
+ * Whether the microkernel-written data is mapped EDM-protected: the firmware
+ * data arena (pvrsgx_fw.c) and the KDATA kernel objects (pvrsgx_kobj.c: CCB
+ * control, RT data, render details, the PB descriptor) must use the same rule.
+ * A core that opts out (data_no_edmprotect) still protects it under edm_init,
+ * where the §9 launch makes the microkernel the EDM requestor — EDMPROTECT then
+ * admits its writes while keeping client tasks (single-context: every VM sees
+ * the firmware heaps) out.
+ */
+static inline bool pvrsgx_data_edmprotect(const struct pvrsgx_core_family *f)
+{
+	return !f->data_no_edmprotect || pvrsgx_edm_init;
+}
+
 extern bool pvrsgx_allow_unisolated;
 
 const struct pvrsgx_core_family *pvrsgx_core_family_get(unsigned int core);

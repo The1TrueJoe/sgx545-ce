@@ -116,6 +116,7 @@ def test_render_teardown(code, man):
     mem.wr(CTLBLK + 4 * 0x32, rd)                    # SC_RD
     mem.wr(CTLBLK + 4 * 0x34, rtentry)               # SC_RTENTRY
     mem.wr(CTLBLK + 4 * 0x30, ctx)                   # SC_CTX
+    mem.wr(CTLBLK + 4 * 0x14, rtentry)               # SC_INFLIGHT: else the 3D end is spurious
     mem.wr(rtentry + 0x30, rtdata)                   # RT-data pointer
     mem.wr(rd + 0xd0, sync0)                         # destination sync 0 = render-details word 0x34
     mem.wr(rd + 0xe0, deps)                          # TA3D dependency block pointer (word 56)
@@ -165,6 +166,51 @@ def test_xfer_done(code, man):
     print("  transfer completion: dest sync signalled, CCB advanced, render path skipped  OK")
 
 
+COUNTS = (0, 0xffff, 0x10000, 0x1ffff, 0xfffffffe)
+
+
+def test_render_counter_32bit(code, man):
+    """a render's write-ops complete is pending + 1 over all 32 bits, and the
+    completion seqno counts past 0xffff: a 16-bit increment left the job waiting
+    for 0x10001 after 65536 renders on one dataset."""
+    for n in COUNTS:
+        u, mem, regs = machine(code)
+        mem.wr(HOSTCTL, 1)
+        rd, rtentry, ctx, rtdata, deps, done = 0x32041a00, 0x32041cf0, 0x3000e000, 0x32041d60, 0x32041f80, 0x2d035004
+        mem.wr(CTLBLK + 4 * 0x32, rd)
+        mem.wr(CTLBLK + 4 * 0x34, rtentry)
+        mem.wr(CTLBLK + 4 * 0x30, ctx)
+        mem.wr(CTLBLK + 4 * 0x27, n)                 # SC_COMPLETED
+        mem.wr(CTLBLK + 4 * 0x14, rtentry)           # SC_INFLIGHT
+        mem.wr(rtentry + 0x30, rtdata)
+        mem.wr(rd + 0xe0, deps)
+        mem.wr(deps + 0x10, n)                       # write-ops pending
+        mem.wr(deps + 0x14, done)                    # write-ops complete address
+        regs.v[CR_EVENT_STATUS] = EV_3D_END
+        u.task(man["entries"]["event"] // 8)
+        assert mem.rd(done) == (n + 1) & 0xffffffff, f"pending {n:#x}: complete {mem.rd(done):#x}"
+        assert mem.rd(CTLBLK + 4 * 0x27) == (n + 1) & 0xffffffff, f"seqno {n:#x} -> {mem.rd(CTLBLK + 4 * 0x27):#x}"
+    print("  render completion: write-ops complete and seqno count over 32 bits  OK")
+
+
+def test_xfer_counter_32bit(code, man):
+    """a transfer's destination write-ops complete is pending + 1 over all 32 bits"""
+    for n in COUNTS:
+        u, mem, regs = machine(code)
+        mem.wr(HOSTCTL, 1)
+        ctx, ccb, ccbctl, done = 0x30010000, 0x32020000, 0x3201e4d0, 0x2d036004
+        mem.wr(ctx + 4 * 3, ccb)
+        mem.wr(ctx + 4 * 4, ccbctl)
+        mem.wr(ccbctl + 4, 0)
+        mem.wr(ccb + 0x13c, n)                       # asDstSyncs[0] write-ops pending
+        mem.wr(ccb + 0x140, done)                    # write-ops complete address
+        mem.wr(CTLBLK + 4 * 0x15, ctx)               # SC_XFER
+        regs.v[CR_EVENT_STATUS] = EV_3D_END
+        u.task(man["entries"]["event"] // 8)
+        assert mem.rd(done) == (n + 1) & 0xffffffff, f"pending {n:#x}: complete {mem.rd(done):#x}"
+    print("  transfer completion: write-ops complete counts over 32 bits  OK")
+
+
 def main():
     code, man = load()
     print("microkernel offline tests:")
@@ -173,8 +219,10 @@ def main():
     test_raise_irq(code, man)
     test_render_teardown(code, man)
     test_xfer_done(code, man)
+    test_render_counter_32bit(code, man)
+    test_xfer_counter_32bit(code, man)
     print("all OK")
-    print("(frame-level TA/3D register match vs the DDK: ukernel/run_ours.py TRACE --ddk FW)")
+    print("(the registers a whole frame programs: ukernel/run_ours.py TRACE)")
 
 
 if __name__ == "__main__":

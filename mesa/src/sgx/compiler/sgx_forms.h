@@ -61,12 +61,19 @@ enum sgx_form {
    SGX_OP_PCK_C10_F32,
    SGX_OP_PCK_C10_C10,
    SGX_OP_PCK_F32_S16,
+   SGX_OP_PCK_F32_U16,
+   SGX_OP_PCK_U16_F32,
+   SGX_OP_PCK_F32_F32,
    /* hw 9, f, a-b */
    SGX_OP_TEST,
    SGX_OP_TESTMASK,
    SGX_OP_AND,
    SGX_OP_OR,
    SGX_OP_XOR,
+   /* hw c-d: shifts */
+   SGX_OP_SHL,
+   SGX_OP_SHR,
+   SGX_OP_ASR,
    /* hw 11, 12: colour */
    SGX_OP_SOPWM,
    SGX_OP_SOP3,
@@ -74,6 +81,8 @@ enum sgx_form {
    /* hw 14, 15: integer */
    SGX_OP_IMA16,
    SGX_OP_IMAE,
+   /* hw 1a */
+   SGX_OP_IMA32,
    /* hw 1c, 1d, 1f */
    SGX_OP_SMP,
    SGX_OP_LD,
@@ -144,6 +153,10 @@ enum sgx_field {
    SGX_FLD_SB,
    SGX_FLD_SC,
    SGX_FLD_MSRC,
+   SGX_FLD_INV, /* bitwise: src2 inverted */
+   SGX_FLD_ROT, /* bitwise: immediate rotate */
+   SGX_FLD_HI,  /* ima32: high word to an internal register */
+   SGX_FLD_RND, /* pck rounding */
    SGX_FLD_COUNT,
 };
 

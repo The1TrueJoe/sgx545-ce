@@ -65,9 +65,20 @@ class sgx_compile_test : public ::testing::Test {
       opts.split_phases = split_phases;
       opts.dep_f16_samples = dep_f16;
       opts.tex_f32 = tex_f32;
+      opts.tex_r32x4 = tex_r32x4;
+      opts.tex_r32x2 = tex_r32x2;
       opts.driver_consts = true;
+      opts.native_integers = native;
+      opts.ubo_base_k = ubo_base_k;
+      opts.rt_packed = rt_packed;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
+      for (unsigned i = 0; drop_split && i < vary.n; i++) {
+         if (vary.v[i].split) {
+            vary.v[i].split = false;
+            vary.v[i].rows /= 2;
+         }
+      }
       compiled = true;
       return sgx_compile(b.shader, &opts, &vary, &out) == 0;
    }
@@ -105,8 +116,35 @@ class sgx_compile_test : public ::testing::Test {
    bool pds_alone = false;
    bool f16_samples = false;
    bool split_phases = false;
+   bool drop_split = false; /* a layout that doesn't split integer varyings */
    bool dep_f16 = false;
    uint32_t tex_f32 = 0;
+   uint32_t tex_r32x4 = 0, tex_r32x2 = 0;
+   bool native = false;
+   unsigned ubo_base_k = 0;
+   uint8_t rt_packed = 0;
+
+   /* a vertex shader with ivec4 attributes a, b (pa0-3, pa4-7) storing
+    * fn(a, b) to a flat ivec4 varying */
+   void int_vertex(nir_def *(*fn)(nir_builder *, nir_def *, nir_def *),
+                   const glsl_type *t = glsl_ivec4_type())
+   {
+      start(MESA_SHADER_VERTEX);
+      nir_variable *a = var(nir_var_shader_in, t, "a", VERT_ATTRIB_GENERIC0);
+      nir_variable *bv = var(nir_var_shader_in, t, "b", VERT_ATTRIB_GENERIC1);
+      nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(),
+                              "gl_Position", VARYING_SLOT_POS);
+      nir_variable *r = var(nir_var_shader_out, t, "r", VARYING_SLOT_VAR0);
+      r->data.interpolation = INTERP_MODE_FLAT;
+      nir_store_var(&b, pos, nir_imm_vec4(&b, 0, 0, 0, 1), 0xf);
+      nir_store_var(&b, r, fn(&b, nir_load_var(&b, a), nir_load_var(&b, bv)),
+                    0xf);
+   }
+
+   bool has(const char *text)
+   {
+      return disasm().find(text) != std::string::npos;
+   }
 };
 
 TEST_F(sgx_compile_test, fragment_varying_to_colour)
@@ -1735,6 +1773,613 @@ TEST(sgx_fixed, programs_match_golden)
       checked++;
    }
    EXPECT_EQ(checked, 42u);
+}
+
+/* native integers: 32-bit add, multiply, shift and or in the integer units */
+TEST_F(sgx_compile_test, vertex_int_alu)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *t = nir_ixor(b, nir_imul(b, x, y), nir_ishl(b, x, y));
+      return nir_ior(b, nir_ushr(b, t, y), nir_iand_imm(b, x, 0x0ff00000));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("ima32")) << disasm();
+   EXPECT_TRUE(has("shl")) << disasm();
+   /* a register shift count is masked to 0-31 first */
+   EXPECT_TRUE(has(", #31 ")) << disasm();
+   /* 0x0ff00000 as a rotated 16-bit immediate */
+   EXPECT_TRUE(has("rot=")) << disasm();
+   EXPECT_FALSE(has("fmad")) << disasm();
+}
+
+/* the same shader without native integers computes in floats */
+TEST_F(sgx_compile_test, vertex_int_alu_as_floats)
+{
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_imul(b, x, y), x);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("ima32")) << disasm();
+}
+
+/* signed and unsigned compares as 0 / ~0 masks, selects on them */
+TEST_F(sgx_compile_test, vertex_int_compare_select)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *lt = nir_ilt(b, x, y), *ul = nir_ult(b, x, y);
+      return nir_bcsel(b, nir_ior(b, lt, nir_ieq(b, x, nir_imm_int(b, 5))),
+                       nir_imin(b, x, y), nir_bcsel(b, ul, x, y));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("testmask.or.neg.dword")) << disasm();
+   EXPECT_TRUE(has("testmask.xor.eq.dword")) << disasm();
+   EXPECT_TRUE(has("movc.nz.i32")) << disasm();
+   EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
+}
+
+/* sign(int): lower_isign's clamp to [-1, 1] back to isign, two movc (not
+ * the compare masks of imin and imax) */
+TEST_F(sgx_compile_test, vertex_int_sign)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_isign(b, x), y);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("movc.z.i32")) << disasm();
+   EXPECT_TRUE(has("movc.ltz.i32")) << disasm();
+   EXPECT_FALSE(has("testmask")) << disasm();
+}
+
+/* division: nir_lower_idiv, the high word of a product through i1 */
+TEST_F(sgx_compile_test, vertex_int_divide)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_iadd(b, nir_idiv(b, x, y), nir_umod(b, x, y));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("frcp")) << disasm();
+   EXPECT_TRUE(has("hi=i1")) << disasm();
+   EXPECT_TRUE(has(", i1 ")) << disasm();
+}
+
+/* int <-> float: 16-bit halves through pck */
+TEST_F(sgx_compile_test, vertex_int_float_conversions)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *f = nir_fadd(b, nir_i2f32(b, x), nir_u2f32(b, y));
+      return nir_iadd(b, nir_f2i32(b, f), nir_f2u32(b, nir_fabs(b, f)));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("pck.f32.s16")) << disasm();
+   EXPECT_TRUE(has("pck.f32.u16")) << disasm();
+   EXPECT_TRUE(has("pck.u16.f32")) << disasm();
+   EXPECT_TRUE(has("rnd=zero")) << disasm();
+}
+
+/* an if on an integer equality tests it straight into p0 */
+TEST_F(sgx_compile_test, fragment_if_int_compare)
+{
+   native = true;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u = var(nir_var_uniform, glsl_int_type(), "u_n", -1);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "v_c", VARYING_SLOT_VAR0);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "color",
+                           FRAG_RESULT_COLOR);
+   nir_variable *res = nir_local_variable_create(b.impl, glsl_vec4_type(), "t");
+   nir_store_var(&b, res, nir_load_var(&b, in), 0xf);
+   nir_push_if(&b, nir_ieq_imm(&b, nir_load_var(&b, u), 3));
+   nir_store_var(&b, res, nir_fmul_imm(&b, nir_load_var(&b, in), 0.5), 0xf);
+   nir_pop_if(&b, NULL);
+   nir_store_var(&b, col, nir_load_var(&b, res), 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_GT(out.n_flow, 0u) << disasm();
+   EXPECT_TRUE(has("test.xor.ne p0")) << disasm();
+}
+
+/* txs as the driver lowers it: a constant size */
+static bool
+const_txs(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   if (tex->op == nir_texop_query_levels) {
+      b->cursor = nir_before_instr(&tex->instr);
+      nir_def_replace(&tex->def, nir_imm_int(b, 7));
+      return true;
+   }
+   if (tex->op != nir_texop_txs)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   nir_def *sz = nir_imm_ivec4(b, 64, 32, 1, 1);
+   nir_def_replace(&tex->def,
+                   nir_trim_vector(b, sz, tex->def.num_components));
+   return true;
+}
+
+/* GLSL 1.30 texture functions: textureLod (smp's LOD replace), texelFetch
+ * (sgx_lower_tex: an explicit-LOD read marked fetch), an integer texture's
+ * bytes */
+TEST_F(sgx_compile_test, fragment_tex_lod_fetch)
+{
+   native = true;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec_type(2), "v", VARYING_SLOT_VAR0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+      "t", -1);
+   nir_variable *usmp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "u", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "color",
+                           FRAG_RESULT_COLOR);
+   nir_def *uv = nir_load_var(&b, in);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   nir_deref_instr *ud = nir_build_deref_var(&b, usmp);
+   struct nir_tex_builder tb = {};
+   tb.coord = uv;
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_float32;
+   tb.lod = nir_imm_float(&b, 1.5);
+   nir_def *a = nir_build_tex_struct(&b, nir_texop_txl, tb);
+   tb.coord = nir_f2i32(&b, nir_fmul_imm(&b, uv, 64.0));
+   tb.lod = nir_imm_int(&b, 1);
+   tb.sampler_deref = NULL;
+   nir_def *f = nir_build_tex_struct(&b, nir_texop_txf, tb);
+   tb.coord = uv;
+   tb.texture_deref = ud;
+   tb.sampler_deref = ud;
+   tb.lod = NULL;
+   tb.dest_type = nir_type_uint32;
+   nir_def *u = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_def *r = nir_fadd(&b, nir_fadd(&b, a, f), nir_u2f32(&b, u));
+   nir_store_var(&b, col, r, 0xf);
+   EXPECT_TRUE(sgx_lower_tex(b.shader, NULL));
+   nir_shader_tex_pass(b.shader, const_txs, nir_metadata_control_flow, NULL);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 3u);
+   unsigned lods = 0, fetches = 0;
+   for (unsigned i = 0; i < out.n_samples; i++) {
+      if (!out.samples[i].dependent)
+         continue;
+      char text[256];
+      sgx_disasm_one(out.samples[i].smp, NULL, text, sizeof(text));
+      lods += std::string(text).find(".lod") != std::string::npos;
+      fetches += out.samples[i].fetch;
+   }
+   EXPECT_EQ(lods, 2u);
+   EXPECT_EQ(fetches, 1u);
+   /* the uint texel's bytes, not normalized */
+   EXPECT_TRUE(has("#255")) << disasm();
+}
+
+/* a loop that only runs once (a switch from GLSL) has no branches */
+TEST_F(sgx_compile_test, vertex_loop_once_no_branches)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_variable *t =
+         nir_local_variable_create(b->impl, glsl_ivec4_type(), "t");
+      nir_store_var(b, t, x, 0xf);
+      nir_loop *l = nir_push_loop(b);
+      nir_push_if(b, nir_ieq(b, nir_channel(b, x, 0), nir_channel(b, y, 0)));
+      nir_store_var(b, t, y, 0xf);
+      nir_pop_if(b, NULL);
+      nir_jump(b, nir_jump_break);
+      nir_pop_loop(b, l);
+      return nir_load_var(b, t);
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("br")) << disasm();
+}
+
+/* a constant integer varying: its high half from the constant's top 16
+ * bits, not the low half again (pck .l2 of a literal) */
+TEST_F(sgx_compile_test, int_varying_constant_halves)
+{
+   native = true;
+   int_vertex(
+      [](nir_builder *b, nir_def *x, nir_def *y) {
+         return nir_imm_int(b, (int)0x8080c0c0u);
+      },
+      glsl_uint_type());
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   bool lo = false, hi = false;
+   for (unsigned i = 0; i < out.n_consts; i++) {
+      if (out.consts[i].fmt != 0x11)
+         continue;
+      uint32_t v = out.consts[i].value & 0xffff;
+      lo |= v == 0xc0c0;
+      hi |= v == 0x8080;
+   }
+   EXPECT_TRUE(lo && hi) << disasm();
+}
+
+/* an integer varying in a layout without split: an error, not a raw word
+ * iterated as an F32 */
+TEST_F(sgx_compile_test, int_varying_unsplit_fails)
+{
+   native = true;
+   drop_split = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_imul(b, x, y);
+   });
+   ASSERT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("not split"),
+             std::string::npos);
+}
+
+/* integer varyings as two exact 16-bit halves: two sets per row, written
+ * with pck.f32.u16, joined with pck.u16.f32 */
+TEST_F(sgx_compile_test, int_varying_as_halves)
+{
+   native = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_imul(b, x, y);
+   });
+   struct sgx_varyings vv;
+   sgx_assign_varyings(b.shader, true, &vv);
+   ASSERT_EQ(vv.n, 1u);
+   EXPECT_TRUE(vv.v[0].split);
+   EXPECT_EQ(vv.v[0].rows, 2u);
+   EXPECT_EQ(vv.v[0].comps, 4u);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("pck.f32.u16 o")) << disasm();
+   EXPECT_EQ(out.set_comps[0], 4u);
+   EXPECT_EQ(out.set_comps[1], 4u);
+   sgx_shader_free(&out);
+   compiled = false;
+   ralloc_free(b.shader);
+
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_ivec4_type(), "r", VARYING_SLOT_VAR0);
+   in->data.interpolation = INTERP_MODE_FLAT;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(), "color",
+                           FRAG_RESULT_COLOR);
+   nir_store_var(&b, col,
+                 nir_i2f32(&b, nir_iadd_imm(&b, nir_load_var(&b, in), 1)),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.n_iters, 2u);
+   EXPECT_TRUE(has("pck.u16.f32")) << disasm();
+}
+
+/* uniform blocks: ld.a.d from the block's address (constant ubo_base_k +
+ * block), the immediate counting words from base + 4; word 0 and offsets in
+ * a register through an address computed first */
+TEST_F(sgx_compile_test, vertex_ubo_loads)
+{
+   native = true;
+   ubo_base_k = 1080;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      nir_def *a = nir_load_ubo(b, 4, 32, nir_imm_int(b, 1), nir_imm_int(b, 16),
+                                .align_mul = 16, .range = ~0u);
+      nir_def *z = nir_load_ubo(b, 4, 32, nir_imm_int(b, 0), nir_imm_int(b, 0),
+                                .align_mul = 16, .range = ~0u);
+      nir_def *i = nir_load_ubo(b, 4, 32, nir_imm_int(b, 1),
+                                nir_imul_imm(b, nir_channel(b, x, 0), 16),
+                                .align_mul = 16, .range = ~0u);
+      return nir_iadd(b, nir_iadd(b, a, z), nir_iadd(b, i, y));
+   });
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("ld.a.d")) << disasm();
+   EXPECT_TRUE(has(", #3 ")) << disasm(); /* byte 16 = base + 4 * (3 + 1) */
+   EXPECT_TRUE(has("wdf")) << disasm();
+   bool k0 = false, k1 = false;
+   for (unsigned n = 0; n < out.n_consts; n++) {
+      k0 |= out.consts[n].k == 1080;
+      k1 |= out.consts[n].k == 1081;
+   }
+   EXPECT_TRUE(k0 && k1);
+}
+
+/* vertex texture fetch: a dependent smp at LOD 0 (c48), as the vendor
+ * compiler's vertex reads */
+TEST_F(sgx_compile_test, vertex_texture_fetch)
+{
+   native = true;
+   start(MESA_SHADER_VERTEX);
+   nir_variable *in =
+      var(nir_var_shader_in, glsl_vec4_type(), "p", VERT_ATTRIB_GENERIC0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
+      "h", -1);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(),
+                           "gl_Position", VARYING_SLOT_POS);
+   nir_def *p = nir_load_var(&b, in);
+   nir_store_var(&b, pos,
+                 nir_fadd(&b, p, sample_dim(&b, smp, nir_trim_vector(&b, p, 2))),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   ASSERT_EQ(out.n_samples, 1u);
+   EXPECT_TRUE(out.samples[0].dependent);
+   char text[256];
+   sgx_disasm_one(out.samples[0].smp, NULL, text, sizeof(text));
+   EXPECT_NE(std::string(text).find(".lod"), std::string::npos) << text;
+   EXPECT_NE(std::string(text).find("c48"), std::string::npos) << text;
+}
+
+/* a render target word the driver packs (rt_packed): moved to the colour
+ * register as it is, and the tile's word read from o0 */
+TEST_F(sgx_compile_test, fragment_packed_render_target)
+{
+   native = true;
+   rt_packed = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *u = var(nir_var_uniform, glsl_uint_type(), "u_v", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_uint_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_intrinsic_instr *lo =
+      nir_intrinsic_instr_create(b.shader, nir_intrinsic_load_output);
+   lo->num_components = 1;
+   lo->src[0] = nir_src_for_ssa(nir_imm_int(&b, 0));
+   nir_io_semantics sem = {};
+   sem.location = FRAG_RESULT_DATA0;
+   nir_intrinsic_set_io_semantics(lo, sem);
+   nir_def_init(&lo->instr, &lo->def, 1, 32);
+   nir_builder_instr_insert(&b, &lo->instr);
+   nir_def *tile = &lo->def;
+   nir_store_var(&b, col,
+                 nir_ior(&b, nir_iand_imm(&b, tile, 0xff000000),
+                         nir_load_var(&b, u)),
+                 0x1);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_EQ(out.colour_pa, 0u);
+   EXPECT_FALSE(has("pck.u8")) << disasm();
+   EXPECT_TRUE(has(", o0, ")) << disasm();
+}
+
+/* rt_packed with a uvec4 output the driver didn't pack: an error, not .x */
+TEST_F(sgx_compile_test, fragment_packed_render_target_wide_fails)
+{
+   native = true;
+   rt_packed = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *col = var(nir_var_shader_out, glsl_uvec4_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_store_var(&b, col, nir_imm_ivec4(&b, 1, 2, 3, 4), 0xf);
+   ASSERT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("not one word"),
+             std::string::npos);
+}
+
+/* tex_f32 on an integer sampler (R32UI): the missing w is an integer 1 */
+TEST_F(sgx_compile_test, fragment_r32ui_texel_integer_one)
+{
+   native = true;
+   rt_packed = 1;
+   tex_f32 = 1;
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *uv =
+      var(nir_var_shader_in, glsl_vec_type(2), "uv", VARYING_SLOT_VAR0);
+   nir_variable *smp = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "t", -1);
+   nir_variable *col = var(nir_var_shader_out, glsl_uint_type(), "color",
+                           FRAG_RESULT_DATA0);
+   nir_deref_instr *sd = nir_build_deref_var(&b, smp);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_load_var(&b, uv);
+   tb.texture_deref = sd;
+   tb.sampler_deref = sd;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_uint32;
+   nir_def *t = nir_build_tex_struct(&b, nir_texop_tex, tb);
+   nir_store_var(&b, col, nir_ixor(&b, nir_channel(&b, t, 0), nir_channel(&b, t, 3)),
+                 0x1);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_FALSE(has("3f80")) << disasm();
+   EXPECT_FALSE(has(".u8")) << disasm();
+   EXPECT_TRUE(has(", #1 ")) << disasm();
+}
+
+/* tex_r32x4 / tex_r32x2: an RGBA32UI / RG32I texel as one dependent read
+ * per plane, tagged with it, its word as it is (no RGBA8 unpack), the
+ * missing channels (0, 1); a texture() of a varying too */
+TEST_F(sgx_compile_test, r32_wide_texels_one_read_per_channel)
+{
+   for (unsigned st = 0; st < 2; st++) {
+      native = true;
+      tex_r32x4 = 1;
+      tex_r32x2 = 2;
+      mesa_shader_stage stage = st ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT;
+      start(stage);
+      nir_variable *in =
+         st ? var(nir_var_shader_in, glsl_vec_type(2), "v", VERT_ATTRIB_GENERIC0)
+            : var(nir_var_shader_in, glsl_vec_type(2), "v", VARYING_SLOT_VAR0);
+      nir_variable *us = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+         "u", -1);
+      nir_variable *is = var(
+         nir_var_uniform,
+         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_INT),
+         "i", -1);
+      is->data.binding = 1;
+      nir_variable *out_v =
+         st ? var(nir_var_shader_out, glsl_uvec4_type(), "r", VARYING_SLOT_VAR0)
+            : var(nir_var_shader_out, glsl_uint_type(), "color",
+                  FRAG_RESULT_DATA0);
+      if (st) {
+         out_v->data.interpolation = INTERP_MODE_FLAT;
+         nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(),
+                                 "gl_Position", VARYING_SLOT_POS);
+         nir_store_var(&b, pos, nir_imm_vec4(&b, 0, 0, 0, 1), 0xf);
+      }
+      nir_def *uv = nir_load_var(&b, in);
+      nir_deref_instr *ud = nir_build_deref_var(&b, us);
+      nir_deref_instr *id = nir_build_deref_var(&b, is);
+      struct nir_tex_builder tb = {};
+      tb.coord = uv;
+      tb.texture_deref = ud;
+      tb.sampler_deref = ud;
+      tb.dim = GLSL_SAMPLER_DIM_2D;
+      tb.dest_type = nir_type_uint32;
+      if (st)
+         tb.lod = nir_imm_float(&b, 0.0);
+      nir_def *a = nir_build_tex_struct(&b, st ? nir_texop_txl : nir_texop_tex, tb);
+      tb.coord = nir_f2i32(&b, nir_fmul_imm(&b, uv, 16.0));
+      tb.lod = nir_imm_int(&b, 0);
+      tb.texture_deref = id;
+      tb.sampler_deref = NULL;
+      tb.texture_index = 1;
+      tb.dest_type = nir_type_int32;
+      nir_def *f = nir_build_tex_struct(&b, nir_texop_txf, tb);
+      nir_def *r = nir_iadd(&b, a, f);
+      if (st)
+         nir_store_var(&b, out_v, r, 0xf);
+      else
+         nir_store_var(&b, out_v,
+                       nir_ixor(&b, nir_ixor(&b, nir_channel(&b, r, 0),
+                                             nir_channel(&b, r, 1)),
+                                nir_ixor(&b, nir_channel(&b, r, 2),
+                                         nir_channel(&b, r, 3))),
+                       0x1);
+      struct sgx_compile_options o = {};
+      o.tex_r32x4 = tex_r32x4;
+      o.tex_r32x2 = tex_r32x2;
+      EXPECT_TRUE(sgx_lower_tex(b.shader, &o));
+      nir_shader_tex_pass(b.shader, const_txs, nir_metadata_control_flow, NULL);
+      if (!st)
+         rt_packed = 1;
+      ASSERT_TRUE(compile()) << out.log;
+      expect_decodes();
+      ASSERT_EQ(out.n_samples, 6u);
+      unsigned fetches = 0, planes[2] = {0, 0};
+      for (unsigned k = 0; k < out.n_samples; k++) {
+         EXPECT_TRUE(out.samples[k].dependent);
+         fetches += out.samples[k].fetch;
+         planes[out.samples[k].sampler & 1] |= 1u << out.samples[k].plane;
+      }
+      EXPECT_EQ(fetches, 2u);
+      EXPECT_EQ(planes[0], 0xfu);
+      EXPECT_EQ(planes[1], 0x3u);
+      EXPECT_FALSE(has(".u8")) << disasm();
+      EXPECT_FALSE(has("#255")) << disasm();
+      sgx_shader_free(&out);
+      compiled = false;
+      ralloc_free(b.shader);
+      b.shader = NULL;
+      rt_packed = 0;
+   }
+}
+
+/* r32 units: each plane's read keeps the coordinate and LOD (the hardware
+ * wraps and picks the level), its plane in backend_flags */
+TEST_F(sgx_compile_test, r32_plane_reads_keep_coordinates)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *us = var(
+      nir_var_uniform,
+      glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_UINT),
+      "u", -1);
+   nir_variable *r =
+      var(nir_var_shader_out, glsl_uvec4_type(), "r", VARYING_SLOT_VAR0);
+   nir_deref_instr *ud = nir_build_deref_var(&b, us);
+   struct nir_tex_builder tb = {};
+   tb.coord = nir_imm_vec2(&b, 1.3f, 0.25f);
+   tb.texture_deref = ud;
+   tb.sampler_deref = ud;
+   tb.dim = GLSL_SAMPLER_DIM_2D;
+   tb.dest_type = nir_type_uint32;
+   tb.lod = nir_imm_float(&b, 1.2f);
+   nir_store_var(&b, r, nir_build_tex_struct(&b, nir_texop_txl, tb), 0xf);
+   struct sgx_compile_options o = {};
+   o.tex_r32x4 = 1;
+   EXPECT_TRUE(sgx_lower_tex(b.shader, &o));
+   unsigned planes = 0, n = 0;
+   nir_foreach_function_impl(impl, b.shader) {
+      nir_foreach_block(blk, impl) {
+         nir_foreach_instr(instr, blk) {
+            if (instr->type != nir_instr_type_tex)
+               continue;
+            nir_tex_instr *t = nir_instr_as_tex(instr);
+            ASSERT_EQ(t->op, nir_texop_txl);
+            nir_src *c = &t->src[nir_tex_instr_src_index(t, nir_tex_src_coord)].src;
+            nir_src *l = &t->src[nir_tex_instr_src_index(t, nir_tex_src_lod)].src;
+            ASSERT_TRUE(nir_src_is_const(*c) && nir_src_is_const(*l));
+            EXPECT_FLOAT_EQ(nir_src_comp_as_float(*c, 0), 1.3f);
+            EXPECT_FLOAT_EQ(nir_src_comp_as_float(*c, 1), 0.25f);
+            EXPECT_FLOAT_EQ(nir_src_as_float(*l), 1.2f);
+            planes |= 1u << (t->backend_flags >> 2 & 3);
+            n++;
+         }
+      }
+   }
+   EXPECT_EQ(n, 4u);
+   EXPECT_EQ(planes, 0xfu);
+   ralloc_free(b.shader);
+   b.shader = NULL;
+}
+
+/* noperspective: the vertex shader writes v * gl_Position.w and w itself
+ * (SGX_NOPERSPECTIVE_W), the fragment shader divides by w */
+TEST_F(sgx_compile_test, noperspective_through_w)
+{
+   start(MESA_SHADER_VERTEX);
+   nir_variable *a = var(nir_var_shader_in, glsl_vec4_type(), "a",
+                         VERT_ATTRIB_GENERIC0);
+   nir_variable *bv = var(nir_var_shader_in, glsl_vec4_type(), "b",
+                          VERT_ATTRIB_GENERIC1);
+   nir_variable *pos = var(nir_var_shader_out, glsl_vec4_type(),
+                           "gl_Position", VARYING_SLOT_POS);
+   nir_variable *r = var(nir_var_shader_out, glsl_vec_type(2), "r",
+                         VARYING_SLOT_VAR0);
+   r->data.interpolation = INTERP_MODE_NOPERSPECTIVE;
+   nir_store_var(&b, pos, nir_load_var(&b, a), 0xf);
+   nir_store_var(&b, r, nir_trim_vector(&b, nir_load_var(&b, bv), 2), 0x3);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   std::string vs = disasm();
+   /* r * w into o4-o5, w into the next set's o6 */
+   EXPECT_TRUE(has("fmad r0, r0, pa3, -c48")) << vs;
+   EXPECT_TRUE(has("mov o6, pa3")) << vs;
+   sgx_shader_free(&out);
+   compiled = false;
+   ralloc_free(b.shader);
+   b.shader = NULL;
+
+   start(MESA_SHADER_FRAGMENT);
+   nir_variable *in = var(nir_var_shader_in, glsl_vec_type(2), "r",
+                          VARYING_SLOT_VAR0);
+   in->data.interpolation = INTERP_MODE_NOPERSPECTIVE;
+   nir_variable *col = var(nir_var_shader_out, glsl_vec4_type(),
+                           "gl_FragColor", FRAG_RESULT_COLOR);
+   nir_def *v = nir_load_var(&b, in);
+   nir_store_var(&b, col, nir_vec4(&b, nir_channel(&b, v, 0),
+                                   nir_channel(&b, v, 1),
+                                   nir_imm_float(&b, 0), nir_imm_float(&b, 1)),
+                 0xf);
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   EXPECT_TRUE(has("frcp")) << disasm();
 }
 
 } /* namespace */

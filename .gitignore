@@ -7,11 +7,9 @@
 Module.symvers
 modules.order
 build/
-srvinit/srvinit
 mesa/src/gallium/winsys/sgx545/drm/sgx545_usse_progs.h
 tools/tex/blitest
-# the DDK microkernel fetched by srvinit/fetch-firmware.sh (never committed; it
-# is Imagination's) and the frames generated for the offline validators
+# the frames generated for the offline validators
 cap/
 fw/
 /gen/

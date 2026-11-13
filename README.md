@@ -1,7 +1,11 @@
 # powervr_sgx
 
-> **Working on this repo?** Read [AGENTS.md](AGENTS.md) first: the end goal (upstream Linux, Mesa and
-> linux-firmware support for Cedarview), the standards the work must meet, and the milestones.
+> **Status:** this is an out-of-tree driver, maintained for the people who use it on Cedarview
+> and CE5300 hardware. It was written with heavy use of an AI coding assistant. An RFC for the
+> kernel driver and a draft merge request for the Mesa driver were posted in November 2026; Mesa
+> declined the driver over its AI-generated code and provenance, so I withdrew both, and the
+> driver is not headed upstream. Material derived from the vendor's closed drivers has been
+> removed from the tree.
 
 An open graphics driver stack for the PowerVR **SGX** GPUs. It supports the **SGX545**: the
 GPU in Intel's Cedarview Atoms (N2600, N2800, D2500, D2550, D2700, "GMA 3600/3650") and in the
@@ -37,9 +41,8 @@ the porting guide, [docs/porting/](docs/porting/README.md).
 | Tools | [`tools/`](tools/) | The ISA assembler and disassembler, the offline microkernel emulator, decoders, frame and blit generators, and hardware tests. |
 | Documentation | [`docs/`](docs/) | The hardware as we understand it ([ISA](docs/ISA.md), [state](docs/STATE.md), [microkernel](docs/UKERNEL.md), [uAPI](docs/UAPI.md)), and the [build log](docs/log/BUILDLOG.md). |
 
-`kernel/`, `srvinit/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver
-(`pvrsrvkm`) ported to modern Linux, with our own bring-up and client library. They stay for
-comparisons against the DDK; the new stack does not use them.
+`kernel/` and `libpvr/` are the earlier path: Intel's GPL DDK kernel driver (`pvrsrvkm`)
+ported to modern Linux, and our own client library. The new stack does not use them.
 
 ## Status
 
@@ -76,6 +79,7 @@ write it, boot it, attach the results file to the issue.
 - `drm/` (the `powervr_sgx` kernel driver): GPL-2.0-only; its uAPI header is
   GPL-2.0-only WITH Linux-syscall-note, or MIT.
 - `kernel/src/`: GPL-2.0, Imagination Technologies, as published by Intel.
+- `libpvr/`: GPL-2.0-only (built against and generated from `kernel/src`'s headers).
 - Everything else here (the microkernel, the Mesa driver, the tools, the test sticks): MIT.
 
 ## Contributing

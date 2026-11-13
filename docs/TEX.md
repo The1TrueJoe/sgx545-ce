@@ -504,8 +504,36 @@ word outside it: 43200 of 43200 at 1 sample. At 4 samples, the count of
   0x564000), and the buffer is 0x6bd000 bytes: 1 byte per sample after the
   depth. Its contents and order are not covered (no stencil in these
   captures).
-- Not covered: a 16-bit depth buffer (the `zls-*` frames: only their
-  decodes are kept, not the traces), stencil, FBOs, other sample counts.
+- Not covered by the captures: a 16-bit depth buffer (the `zls-*` frames:
+  only their decodes are kept, not the traces), stencil, FBOs, other sample
+  counts.
+
+**FBOs, 16-bit depth and the stencil** (**hardware, open driver**,
+2026-11-12, test H9: `mesa/tests/sgx_zls_layout.c`, read by
+`tools/zls_layout.py`). The open driver stores ZLS for FBO renders too
+(section 7's store and load words). Each case draws a depth plane whose
+every stored float names the window position it was computed at, and 8×8
+stencil blocks set to `bx << 4 | by`; the buffer is read back after the
+render. Cases: 96×64 (3 × 4 whole tiles) and 120×72 (padded to 128 × 80),
+DEPTH_COMPONENT24 and DEPTH24_STENCIL8, at 1 and 4 samples, plus
+DEPTH_COMPONENT16 at 1 sample and a DEPTH24_STENCIL8 FBO with no colour
+buffer. In **every case every word fits the order above** and no
+alternative fits: 6144/6144 and 8640/8640 depths at 1 sample, 24576/24576
+and 34560/34560 samples at 4.
+
+- **FBOs** use the same order as windows: rows top-down (row 0 is the FBO's
+  last row in GL's y-up terms), 32 × 16 tiles over the padded width, the
+  same bits inside a tile, at 1 and 4 samples.
+- **A 16-bit depth buffer is stored as float32 too**, in the same order (as
+  the store proven above already showed for its values).
+- **The stencil** is one byte per sample right after the depth (at
+  `padded width × padded height × samples × 4`), **in the same order as the
+  depth**: byte i is the stencil of depth word i. 6144/6144 and 8640/8640 at
+  1 sample, 24576/24576 and 34560/34560 at 4.
+- A **depth-only FBO** (no colour attachment; the open driver binds a dummy
+  colour target for the PBE) stores the same way.
+- The padding (columns past the width, rows past the height) holds no
+  drawn values: 10240 − 8640 words at 120×72.
 
 ## 8. Cube maps
 

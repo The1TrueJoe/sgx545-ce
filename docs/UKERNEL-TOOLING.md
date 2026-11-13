@@ -6,7 +6,7 @@ constants, and `isaspec` patch 0004 and the core-id parameter are carried pinned
 until they land upstream.
 
 Today's microkernel is one Python module, `ukernel/ukernel.py`, hardcoded to
-SGX545 (`CORE_NAME = "sgx545"`), assembled by `tools/isa/asm.py` and packaged by
+SGX545 (`CORE_NAME = "sgx545"`), assembled by `sgx-asm` (from `sgx.xml`) and packaged by
 `drm/tools/mkukfw.py`. It works, and its serial image is a fixed 14400 bytes we
 treat as a regression oracle. This document proposes how to grow that into tooling
 for the whole SGX family without forking per core and without losing that
@@ -295,6 +295,10 @@ behavior.
    is either an `sgx.xml` bug or an `asm.py`/`hw.py` bug, resolved through `ISA.md`
    (the spec side) — never by making `sgx.xml` match `asm.py`. CI also hash-checks the
    pinned `sgx.xml` against Mesa's (§1).
+   **Done 2026-11-13:** `build.py` assembles only through `sgx-asm` (`SGX_ASM`;
+   `ukernel/sgx-asm.sh` builds one); the `asm.py` path and `isa_coverage.py` are gone.
+   `ukernel-isa-gate` now builds every `UK_*` variant through `sgx-asm`, which refuses
+   any instruction `sgx.xml` doesn't cover.
 7. **Second core (SGX535).** Add `cores/sgx535.py` and its golden; nothing in the
    545 path changes. This is the proof the generalization is real.
 8. **USSE2 later.** When a 543/544/554 target is real, add the USSE2 ISA tables and

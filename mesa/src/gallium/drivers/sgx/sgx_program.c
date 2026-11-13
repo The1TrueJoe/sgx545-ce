@@ -140,6 +140,11 @@ match_fs(struct sgx_pipe_shader *so)
 
    if (!st)
       return;
+   /* (the fixed programs write a float colour: an integer one is compiled,
+    * packed for its target) */
+   nir_alu_type ot = nir_alu_type_get_base_type(nir_intrinsic_src_type(st));
+   if (ot == nir_type_int || ot == nir_type_uint)
+      return;
    loc = nir_intrinsic_io_semantics(st).location;
    if ((loc != FRAG_RESULT_COLOR && loc != FRAG_RESULT_DATA0) ||
        nir_intrinsic_write_mask(st) != 0xf ||
@@ -158,11 +163,9 @@ match_fs(struct sgx_pipe_shader *so)
 
       if (!l || comp != c || (load && l != load))
          return;
-      if (l->intrinsic == nir_intrinsic_load_ubo) {
-         if (!nir_src_is_const(l->src[0]) || nir_src_as_uint(l->src[0]) != 0 ||
-             !nir_src_is_const(l->src[1]))
-            return;
-      } else if (l->intrinsic == nir_intrinsic_load_uniform) {
+      /* (a load_ubo is a uniform block's, compiled: st's default uniforms
+       * are load_uniform, as nothing lowers them to constant buffer 0) */
+      if (l->intrinsic == nir_intrinsic_load_uniform) {
          if (!nir_src_is_const(l->src[0]))
             return;
       } else {
@@ -170,12 +173,9 @@ match_fs(struct sgx_pipe_shader *so)
       }
       load = l;
    }
-   /* load_ubo: a byte offset into constant buffer 0; load_uniform: vec4 slots */
-   if (load->intrinsic == nir_intrinsic_load_ubo)
-      so->ubo_offset = nir_src_as_uint(load->src[1]);
-   else
-      so->ubo_offset =
-         (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
+   /* load_uniform's vec4 slots */
+   so->ubo_offset =
+      (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
    so->kind = SGX_SHADER_FS_UNIFORM;
 }
 
@@ -209,31 +209,16 @@ rescale_uniform(nir_builder *b, nir_intrinsic_instr *in, void *data)
    return true;
 }
 
-/* textureSize (level 0) of a fragment program, which st's lowering of
- * rectangle lookups asks for (coords / textureSize): the size from driver
- * constants (SGX_K_TEXSIZE) the draw fills, as floats, where the program
- * converts it to float anyway */
-static bool
-lower_txs(nir_builder *b, nir_instr *instr, void *data)
+/* Uses of the integer def by those of f, a float the draw fills: an i2f32 of
+ * it takes f itself, anything else f2i32(f).  The integer is whole and well
+ * within F32's 24 bits (a size, an instance number), so the conversions are
+ * exact. */
+static void
+rewrite_int_as_float(nir_builder *b, nir_def *def, nir_def *f)
 {
-   if (instr->type != nir_instr_type_tex)
-      return false;
-   nir_tex_instr *tex = nir_instr_as_tex(instr);
-   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
-
-   if (tex->op != nir_texop_txs || tex->def.num_components > 2 ||
-       tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
-       (li >= 0 && (!nir_src_is_const(tex->src[li].src) ||
-                    nir_src_as_uint(tex->src[li].src))))
-      return false;
-   b->cursor = nir_before_instr(instr);
-   nir_def *f = nir_load_uniform(
-      b, tex->def.num_components, 32, nir_imm_int(b, 0),
-      .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
-      .range = tex->def.num_components, .dest_type = nir_type_float32);
    nir_def *i = NULL;
 
-   nir_foreach_use_including_if_safe (use, &tex->def) {
+   nir_foreach_use_including_if_safe (use, def) {
       nir_instr *u = nir_src_is_if(use) ? NULL : nir_src_use_instr(use);
 
       if (u && u->type == nir_instr_type_alu &&
@@ -254,7 +239,105 @@ lower_txs(nir_builder *b, nir_instr *instr, void *data)
          nir_src_rewrite(use, i);
       }
    }
+}
+
+/* textureSize of a program compiled with native integers: the base level's
+ * size from driver constants (SGX_K_SIZE + 3u: width, height, depth or
+ * layers, raw integers), shifted down to the level asked for; an array's
+ * layer count isn't */
+static bool
+lower_txs_int(nir_builder *b, nir_tex_instr *tex)
+{
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+   unsigned n = tex->def.num_components;
+
+   if (tex->texture_index >= SGX_K_SIZE_UNITS || n > 3)
+      return false;
+   b->cursor = nir_before_instr(&tex->instr);
+   nir_def *size = nir_load_uniform(
+      b, n, 32, nir_imm_int(b, 0), .base = SGX_K_SIZE + 3 * tex->texture_index,
+      .range = n, .dest_type = nir_type_int32);
+
+   if (li >= 0 && !(nir_src_is_const(tex->src[li].src) &&
+                    nir_src_as_uint(tex->src[li].src) == 0)) {
+      nir_def *lod = tex->src[li].src.ssa;
+      nir_def *c[3];
+      unsigned mips = n - (tex->is_array ? 1 : 0);
+
+      for (unsigned i = 0; i < n; i++) {
+         c[i] = nir_channel(b, size, i);
+         if (i < mips)
+            c[i] = nir_imax(b, nir_ushr(b, c[i], lod), nir_imm_int(b, 1));
+      }
+      size = nir_vec(b, c, n);
+   }
+   nir_def_replace(&tex->def, size);
+   return true;
+}
+
+/* textureSize (level 0) of a fragment program, which st's lowering of
+ * rectangle lookups asks for (coords / textureSize): the size from driver
+ * constants (SGX_K_TEXSIZE) the draw fills, as floats, where the program
+ * converts it to float anyway.  With native integers (data), lower_txs_int. */
+static bool
+lower_txs(nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_tex)
+      return false;
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   int li = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+
+   if (tex->op == nir_texop_txs && *(const bool *)data)
+      return lower_txs_int(b, tex);
+   /* the view's level count, from the draw (SGX_K_LEVELS) */
+   if (tex->op == nir_texop_query_levels && *(const bool *)data &&
+       tex->texture_index < SGX_K_SIZE_UNITS) {
+      b->cursor = nir_before_instr(instr);
+      nir_def_replace(&tex->def,
+                      nir_load_uniform(b, 1, 32, nir_imm_int(b, 0),
+                                       .base = SGX_K_LEVELS + tex->texture_index,
+                                       .range = 1, .dest_type = nir_type_int32));
+      return true;
+   }
+   if (tex->op != nir_texop_txs || tex->def.num_components > 2 ||
+       tex->texture_index >= SGX_K_TEXSIZE_UNITS ||
+       (li >= 0 && (!nir_src_is_const(tex->src[li].src) ||
+                    nir_src_as_uint(tex->src[li].src))))
+      return false;
+   b->cursor = nir_before_instr(instr);
+   nir_def *f = nir_load_uniform(
+      b, tex->def.num_components, 32, nir_imm_int(b, 0),
+      .base = SGX_K_TEXSIZE + 2 * tex->texture_index,
+      .range = tex->def.num_components, .dest_type = nir_type_float32);
+
+   rewrite_int_as_float(b, &tex->def, f);
    nir_instr_remove(instr);
+   return true;
+}
+
+/* gl_InstanceID of a vertex program: an instanced draw is one draw per
+ * instance (sgx_draw_vbo), each with its instance number in a driver
+ * constant: SGX_K_INSTANCE as a float, or with native integers (data)
+ * SGX_K_INSTANCE_INT as an integer */
+static bool
+lower_instance_id(nir_builder *b, nir_intrinsic_instr *in, void *data)
+{
+   if (in->intrinsic != nir_intrinsic_load_instance_id)
+      return false;
+   b->cursor = nir_before_instr(&in->instr);
+   if (*(const bool *)data) {
+      nir_def_replace(&in->def,
+                      nir_load_uniform(b, 1, 32, nir_imm_int(b, 0),
+                                       .base = SGX_K_INSTANCE_INT, .range = 1,
+                                       .dest_type = nir_type_int32));
+      return true;
+   }
+   nir_def *f =
+      nir_load_uniform(b, 1, 32, nir_imm_int(b, 0), .base = SGX_K_INSTANCE,
+                       .range = 1, .dest_type = nir_type_float32);
+
+   rewrite_int_as_float(b, &in->def, f);
+   nir_instr_remove(&in->instr);
    return true;
 }
 
@@ -370,8 +453,28 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
             BITFIELD64_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 63);
    }
    /* a set per slot in slot order (after gl_PointCoord's set 0), each
-    * variable at its component in the slot */
+    * variable at its component in the slot; two for a slot that holds an
+    * integer: the compiler passes an integer row as its 16-bit halves, exact
+    * floats, the low ones in the first set and the high ones in the next
+    * (sgx_varying.split). A raw word iterated as an F32 doesn't survive: -1
+    * is a NaN, and small ones are denormals */
    qsort(vars, n, sizeof(vars[0]), cmp_varying);
+   uint8_t slot_sets[64] = {0};
+   for (unsigned s = 0; s < 64; s++)
+      slot_sets[s] = rows_used & BITFIELD64_BIT(s) ? 1 : 0;
+   for (unsigned i = 0; i < n; i++) {
+      unsigned slot = vars[i]->data.location - VARYING_SLOT_VAR0;
+
+      if (!glsl_base_type_is_integer(
+             glsl_get_base_type(glsl_without_array(vars[i]->type))))
+         continue;
+      for (unsigned r = 0;
+           r < glsl_count_vec4_slots(vars[i]->type, false, false); r++)
+         slot_sets[(slot + r) & 63] = 2;
+   }
+   unsigned n_sets = 0;
+   for (unsigned s = 0; s < 64; s++)
+      n_sets += slot_sets[s];
    for (unsigned i = 0; i < n; i++) {
       nir_variable *var = vars[i];
       const struct glsl_type *t = var->type;
@@ -393,8 +496,20 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
          frac = 0;
          comps = 4;
       }
-      set =
-         (sprite ? 1 : 0) + util_bitcount64(rows_used & BITFIELD64_MASK(slot));
+      set = sprite ? 1 : 0;
+      for (unsigned s = 0; s < slot && s < 64; s++)
+         set += slot_sets[s];
+      bool split = glsl_base_type_is_integer(glsl_get_base_type(t));
+      /* a float sharing an integer's slot (another location_frac) is in the
+       * slot's first set; one over several such slots would need every
+       * other set, which a varying can't say */
+      if (!split && rows > 1)
+         for (unsigned r = 0; r < rows; r++)
+            if (slot_sets[(slot + r) & 63] == 2 && !warned) {
+               fprintf(stderr, "sgx: a float array shares slots with an "
+                               "integer varying: not laid out\n");
+               warned = true;
+            }
       /* The compiler finds a varying's set by name.  st's packed slots are
        * named after what they hold ("packed:a,b"), and a varying split over
        * two slots names both: two vec3 texture coordinates and the fog had
@@ -410,12 +525,38 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
       snprintf(v->name, sizeof(v->name), "%s", name);
       v->set = set;
       v->comp = frac;
-      v->rows = rows;
       v->comps = comps;
       v->precision = var->data.precision;
+      if (split) {
+         /* (whole numbers to 65535: an F32 iteration) */
+         v->split = true;
+         rows *= 2;
+         v->precision = GLSL_PRECISION_HIGH;
+      }
+      v->rows = rows;
       for (unsigned r = 0; r < rows && set + r < SGX_MAX_SETS; r++)
          vary->set_comps[set + r] =
             MAX2(vary->set_comps[set + r], frac + comps);
+   }
+   /* noperspective: the compiler's own w varying (SGX_NOPERSPECTIVE_W, one
+    * highp component), in the set after the slots', the same in both stages
+    * (the vertex program writes v * w and w, the fragment one divides) */
+   bool noperspective = false;
+   for (unsigned i = 0; i < n; i++)
+      noperspective |=
+         vars[i]->data.interpolation == INTERP_MODE_NOPERSPECTIVE;
+   if (noperspective && vary->n < ARRAY_SIZE(vary->v)) {
+      struct sgx_varying *v = &vary->v[vary->n++];
+      unsigned set = (sprite ? 1 : 0) + n_sets;
+
+      snprintf(v->name, sizeof(v->name), "%s", SGX_NOPERSPECTIVE_W);
+      v->set = set;
+      v->comp = 0;
+      v->rows = 1;
+      v->comps = 1;
+      v->precision = GLSL_PRECISION_HIGH;
+      if (set < SGX_MAX_SETS)
+         vary->set_comps[set] = MAX2(vary->set_comps[set], 1);
    }
    /* A flat primary colour (glShadeModel(GL_FLAT): st makes it a flat
     * input) goes to set 0 as the TA's vertex colour, the one source the PDS
@@ -485,6 +626,8 @@ struct prog_info {
       unsigned at, sampler, raw;
       unsigned phase; /* split: at indexes code1 */
       bool f16;       /* the texel returns F16, two registers from raw */
+      bool fetch;     /* a texelFetch: state of its own (sgx_draw.c) */
+      unsigned plane; /* an RG32 / RGBA32 unit's plane (channel) */
       uint64_t smp;
    } deps[SGX_MAX_DEP_SAMPLES];
    unsigned n_deps;
@@ -592,6 +735,8 @@ read_program(const struct sgx_shader *out, struct sgx_pipe_shader *so,
       info->deps[info->n_deps].smp = x->smp;
       info->deps[info->n_deps].phase = x->phase;
       info->deps[info->n_deps].f16 = x->f16;
+      info->deps[info->n_deps].fetch = x->fetch;
+      info->deps[info->n_deps].plane = x->plane;
       info->n_deps++;
    }
    for (unsigned i = 0; i < out->n_blocks; i++) {
@@ -748,6 +893,149 @@ lower_shadow(nir_shader *nir, const uint8_t *compare, const uint16_t *swz)
 /* fs_vary: a vertex shader compiled to a fragment shader's sets; srgb: the
  * samplers whose texels a fragment shader decodes from sRGB, srgb_filter
  * those of them it filters itself (lower_srgb_filter) */
+/* An integer colour buffer's word, which the PBE stores unchanged
+ * (sgx_resource_target; the compiler's rt_packed): output 0's channels as
+ * the colour word's B, G, R, A bytes for a target of 8 bits a channel, their
+ * low bytes (PBE format 1 stores them R, G, B, A); for R32 the value
+ * itself; for plane c of an RG32 or RGBA32 one, channel c (kind: the
+ * variant's rt_int). */
+static nir_def *
+pack_word(nir_builder *b, nir_def *v, unsigned wm, unsigned kind)
+{
+   unsigned n = v->num_components;
+
+   if (kind >= 2) {
+      /* R32: the value; a plane of RG32 / RGBA32 (kind 3 + c): channel c */
+      unsigned c = kind == 2 ? 0 : kind - 3;
+      return c < n ? nir_channel(b, v, c) : nir_imm_int(b, 0);
+   }
+   static const unsigned shift[4] = {16, 8, 0, 24}; /* r, g, b, a */
+   nir_def *word = nir_imm_int(b, 0);
+
+   for (unsigned c = 0; c < n; c++) {
+      if (!(wm >> c & 1))
+         continue;
+      word = nir_ior(b, word,
+                     nir_ishl_imm(b, nir_iand_imm(b, nir_channel(b, v, c), 0xff),
+                                  shift[c]));
+   }
+   return word;
+}
+
+/* The program as the compiler takes it still has its outputs as variables
+ * (sgx_lower lowers I/O itself): output 0 is brought down to one store of
+ * the variable at the end, and that store becomes one of the packed word,
+ * the variable a uint (the compiler's rt_packed: one word, mask 1). */
+static bool
+pack_int_outputs(nir_shader *nir, unsigned kind)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   nir_variable *out = NULL;
+
+   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, impl,
+            nir_var_shader_out);
+   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+   NIR_PASS(_, nir, nir_split_var_copies);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+   /* after the lowering: it makes the variable that was the output the
+    * temporary and the output a new variable */
+   nir_foreach_shader_out_variable (var, nir) {
+      if (var->data.location == FRAG_RESULT_COLOR ||
+          var->data.location == FRAG_RESULT_DATA0)
+         out = var;
+   }
+   if (!out || !glsl_type_is_32bit(glsl_without_array(out->type)))
+      return false;
+
+   nir_builder b = nir_builder_create(impl);
+   bool progress = false;
+
+   nir_foreach_block (block, impl) {
+      nir_foreach_instr_safe (instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *st = nir_instr_as_intrinsic(instr);
+
+         if (st->intrinsic != nir_intrinsic_store_deref ||
+             nir_deref_instr_get_variable(nir_src_as_deref(st->src[0])) != out)
+            continue;
+         /* the new store goes in before the old one goes (the cursor is
+          * the old one's place) */
+         b.cursor = nir_before_instr(instr);
+         nir_def *word = pack_word(&b, st->src[1].ssa,
+                                   nir_intrinsic_write_mask(st), kind);
+         out->type = glsl_uint_type();
+         nir_store_deref(&b, nir_build_deref_var(&b, out), word, 0x1);
+         nir_instr_remove(instr);
+         progress = true;
+      }
+   }
+   if (progress) {
+      out->type = glsl_uint_type();
+      NIR_PASS(_, nir, nir_opt_dce);
+   }
+   return progress;
+}
+
+/* MRT, a pass a colour buffer: the pass for buffer t keeps FRAG_RESULT_DATA0
+ * + t as output 0 and drops the other DATA outputs (gl_FragColor stays: it
+ * writes every buffer) */
+static void
+remap_outputs(nir_shader *nir, unsigned t)
+{
+   bool demoted = false;
+
+   /* gl_FragData is one array variable at FRAG_RESULT_DATA0: an element a
+    * variable first, each at its own location */
+   NIR_PASS(_, nir, nir_lower_io_array_vars_to_elements_no_indirects, true);
+
+   nir_foreach_shader_out_variable (var, nir) {
+      int loc = var->data.location;
+
+      if (loc < FRAG_RESULT_DATA0 || loc >= FRAG_RESULT_DATA0 + 8)
+         continue;
+      if (loc == FRAG_RESULT_DATA0 + (int)t) {
+         var->data.location = FRAG_RESULT_DATA0;
+      } else {
+         var->data.mode = nir_var_shader_temp;
+         demoted = true;
+      }
+   }
+   if (demoted) {
+      nir_fixup_deref_modes(nir);
+      NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+      NIR_PASS(_, nir, nir_opt_dce);
+      NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
+   }
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+}
+
+/* nir_lower_clip_vs stores CLIP_DIST0 (planes 0-3) only when one of them is
+ * enabled, CLIP_DIST1 (4-7) only when one of those is.  The compiler counts
+ * the planes from the variables (0..n-1, the TA's output select), so with
+ * planes 4 and 5 alone it enables 0-5 and planes 0-3 read whatever cp
+ * registers held: those distances written 0.0 (inside), as the lowering
+ * itself writes a disabled plane below the last one. */
+static void
+fill_clip_dist0(nir_shader *nir)
+{
+   bool d0 = false, d1 = false;
+
+   nir_foreach_shader_out_variable (var, nir) {
+      d0 |= var->data.location == VARYING_SLOT_CLIP_DIST0;
+      d1 |= var->data.location == VARYING_SLOT_CLIP_DIST1;
+   }
+   if (!d1 || d0)
+      return;
+   nir_variable *v = nir_variable_create(nir, nir_var_shader_out,
+                                         glsl_vec4_type(), "sgx_clipdist0");
+   v->data.location = VARYING_SLOT_CLIP_DIST0;
+   nir_builder b = nir_builder_at(nir_after_impl(nir_shader_get_entrypoint(nir)));
+   nir_store_var(&b, v, nir_imm_vec4(&b, 0, 0, 0, 0), 0xf);
+   nir->info.outputs_written |= BITFIELD64_BIT(VARYING_SLOT_CLIP_DIST0);
+}
+
 static bool
 compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                nir_shader *orig, const struct sgx_varyings *fs_vary,
@@ -788,6 +1076,13 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    /* list C kinds 0x10 and 0x11 (fill_consts): lowp colours pre-converted to
     * F16 and literals in SA, where libusc converts in a secondary program */
    opts.driver_consts = true;
+   /* GLSL 1.30's integers, once the screen has them: the cap is the
+    * screen's, so GLSL ES 1.00 programs come with integers then too */
+   opts.native_integers = so->native_integers =
+      screen->base.shader_caps[nir->info.stage].integers;
+   /* uniform block n's address in constant SGX_K_UBO + n (fill_consts) */
+   if (nir->info.num_ubos)
+      opts.ubo_base_k = SGX_K_UBO;
    if (vtx_fmt) {
       memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));
@@ -803,6 +1098,10 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       opts.tex_bgra = ~not_bgra & ~(depth | shadow);
       opts.tex_f32 = depth | shadow;
+      /* RGBA32 and RG32: a read of each channel's R32 plane (each read's
+       * plane in its sample info, sgx_draw.c adds it to the address) */
+      opts.tex_r32x4 = so->r32x4;
+      opts.tex_r32x2 = so->r32x2;
       /* a coordinate only samples read: the PDS samples from the set
        * itself (a pure-sample DOUTI, source 0x24, below) */
       opts.pds_samples_alone = screen->core->pds_samples;
@@ -844,9 +1143,17 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
                   nir_metadata_control_flow, &srgb_filter);
       NIR_PASS(_, nir, nir_lower_tex, &tex);
    }
+   /* textureGrad, the Offset variants and texelFetch as smp can do them;
+    * the sizes they ask for are lower_txs's */
+   if (opts.native_integers)
+      NIR_PASS(_, nir, sgx_lower_tex, &opts);
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_shader_instructions_pass, lower_txs,
-               nir_metadata_control_flow, NULL);
+               nir_metadata_control_flow, &opts.native_integers);
+      NIR_PASS(_, nir, nir_opt_dce);
+   } else {
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, lower_instance_id,
+               nir_metadata_control_flow, &opts.native_integers);
       NIR_PASS(_, nir, nir_opt_dce);
    }
    remap_legacy_varyings(nir);
@@ -900,6 +1207,22 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * alpha-tested ones: the test before the visibility feedback, the colour
     * after it for the pixels that pass (out.code1); the compiler decides */
    opts.split_phases = !vertex && !(sgx_drv_debug & SGX_DEBUG_NO_PHASE_SPLIT);
+   if (vertex)
+      fill_clip_dist0(nir);
+   /* MRT: this variant's colour buffer's output as output 0 */
+   if (!vertex && so->rt_target)
+      remap_outputs(nir, so->rt_target - 1);
+   /* an integer colour buffer: output 0 packed for it, as one word */
+   if (!vertex && so->rt_int) {
+      unsigned kind = so->rt_int;
+
+      if (pack_int_outputs(nir, kind))
+         opts.rt_packed = 1;
+      if (sgx_drv_debug & SGX_DEBUG_NIR) {
+         fprintf(stderr, "sgx: after pack_int_outputs (kind %u):\n", kind);
+         nir_print_shader(nir, stderr);
+      }
+   }
    if (sgx_compile(nir, &opts, &vary, &out)) {
       fprintf(stderr, "sgx: %s shader did not compile:\n%s\n",
               vertex ? "vertex" : "fragment", out.log ? out.log : "");
@@ -1042,6 +1365,8 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             so->dep_sa[j] = 9 + so->const_dwords + 4 * j;
             so->dep_sampler[j] = info.deps[j].sampler;
             so->dep_f16[j] = info.deps[j].f16;
+            so->dep_fetch[j] = info.deps[j].fetch;
+            so->dep_plane[j] = info.deps[j].plane;
             sa[j] = so->dep_sa[j];
          }
          so->n_deps = info.n_deps;
@@ -1100,6 +1425,7 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
        * not the shader's: a sampler view's swizzle can fold one away (an RGB
        * texture's alpha is 1) */
       so->discard_pa = -1;
+      so->depth_pa = -1;
       if (out.discards) {
          if (!so->n_code || so->code[so->n_code - 1] != (uint64_t)0xf8000140u
                                                            << 32) {
@@ -1112,11 +1438,13 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
          }
       }
       /* gl_FragDepth waits in pa<depth_pa> at the feedback nop for a depthf
-       * whose form isn't traced yet: until then the triangle's own depth */
-      if (out.writes_depth && !ctx->warned_frag_depth) {
-         fprintf(
-            stderr,
-            "sgx: gl_FragDepth not written yet (the triangle's depth is used)\n");
+       * there (ISA.md, test H10) */
+      if (out.writes_depth && so->code && so->n_code &&
+          so->code[so->n_code - 1] == (uint64_t)0xf8000140u << 32) {
+         so->depth_pa = out.depth_pa;
+      } else if (out.writes_depth && !ctx->warned_frag_depth) {
+         fprintf(stderr, "sgx: gl_FragDepth with no feedback point: the "
+                         "triangle's depth is used\n");
          ctx->warned_frag_depth = true;
       }
       so->uses_front_face = out.uses_front_face;
@@ -1244,14 +1572,20 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
             so->prog.sec_dwords = 9 + so->const_dwords;
          }
       }
+      if (so->code && so->depth_pa >= 0) {
+         /* depthf reads its depth, and the depth words in sa3, sa4 */
+         so->prog.pa_dwords = MAX2(so->prog.pa_dwords, so->depth_pa + 1);
+         so->prog.sec_dwords = 9 + so->const_dwords;
+      }
+      struct sgxws_fs_feedback fb = {so->discard_pa, so->depth_pa};
       so->prog.code =
          !so->code ? 0
          : so->code1 && so->discard_pa >= 0
             ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
-                                    so->n_code1, so->color_reg, NULL,
-                                    so->discard_pa, so->temps)
+                                    so->n_code1, so->color_reg, NULL, &fb,
+                                    so->temps)
             : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg,
-                              NULL, so->discard_pa, so->temps);
+                              NULL, &fb, so->temps);
       if (last_plain >= 0)
          so->prog.douti[last_plain].last_iter = true;
       if (last_sample >= 0)
@@ -1281,6 +1615,7 @@ sgx_create_shader_state(struct pipe_context *pctx,
    if (!so)
       return NULL;
    so->discard_pa = -1;
+   so->depth_pa = -1;
    if (cso->type == PIPE_SHADER_IR_NIR)
       nir = cso->ir.nir;
    else
@@ -1291,6 +1626,13 @@ sgx_create_shader_state(struct pipe_context *pctx,
 
    if (!nir->info.io_lowered) {
       uint64_t t = os_time_get_nano();
+      /* a shader for several colour buffers (gl_FragData[1..]): the base is
+       * the first buffer's variant (remap_outputs), so that a draw into one
+       * buffer has a program and a draw into several gets a variant each */
+      if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+          (nir->info.outputs_written &
+           BITFIELD64_RANGE(FRAG_RESULT_DATA1, 7)))
+         so->rt_target = 1;
       bool ok = compile_shader(ctx, so, nir, NULL, 0, 0, NULL, 0, NULL, false,
                                0, NULL);
 
@@ -1416,6 +1758,7 @@ sgx_vs_for(struct sgx_context *ctx, struct sgx_pipe_shader *vs,
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
+   (*slot)->depth_pa = -1;
    (*slot)->points = points;
    if (!compile_shader(ctx, *slot, vs->nir, fs ? fs->vary : NULL, 0, 0, NULL, 0,
                        vtx_fmt, points, 0, NULL) ||
@@ -1451,9 +1794,21 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    uint32_t not_bgra = 0, depth = 0;
    uint8_t compare[PIPE_MAX_SAMPLERS] = {0};
    bool any_swz = false;
+   uint8_t rt_int = 0;
+   uint32_t r32x4 = 0, r32x2 = 0;
+   /* MRT: a variant a colour buffer (remap_outputs) */
+   uint8_t rt_target =
+      ctx->framebuffer.nr_cbufs > 1 ? ctx->rt_index + 1 : 0;
 
    if (fs->kind != SGX_SHADER_COMPILED || !fs->nir)
       return fs;
+   /* an integer colour buffer takes its own packing (pack_int_outputs) */
+   if (sgx_cbuf(ctx)->texture &&
+       util_format_is_pure_integer(sgx_cbuf(ctx)->format))
+      rt_int = sgx_tex_raw32(sgx_cbuf(ctx)->format) > 1
+                  ? 3 + ctx->rt_plane /* a plane: channel rt_plane */
+               : sgx_tex_raw32(sgx_cbuf(ctx)->format) ? 2
+                                                                 : 1;
    BITSET_FOREACH_SET (unit, fs->nir->info.textures_used, PIPE_MAX_SAMPLERS) {
       const struct pipe_sampler_view *v = ctx->views[unit];
 
@@ -1473,6 +1828,14 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
       }
       if (!sgx_tex_bgra(v->format))
          not_bgra |= 1u << unit;
+      /* one F32 word a texel (tex_f32): depth, and R32 (raw); RG32 and
+       * RGBA32 a read a plane (tex_r32x2 / x4) */
+      if (sgx_tex_raw32(v->format) == 1)
+         depth |= 1u << unit;
+      if (sgx_tex_raw32(v->format) == 4)
+         r32x4 |= 1u << unit;
+      else if (sgx_tex_raw32(v->format) == 2)
+         r32x2 |= 1u << unit;
       if (sgx_tex_depth(v->format)) {
          const struct pipe_sampler_state *ss = ctx->samplers[unit];
 
@@ -1489,13 +1852,18 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
          any_swz = true;
       }
    }
-   if (!srgb && !any_swz && !not_bgra)
+   if (!srgb && !any_swz && !not_bgra && !rt_int && !r32x4 && !r32x2 &&
+       !rt_target)
       return fs;
    for (unsigned i = 0; i < ARRAY_SIZE(fs->variants_srgb); i++) {
       if (fs->variants_srgb[i] && fs->variants_srgb[i]->srgb == srgb &&
           fs->variants_srgb[i]->srgb_filter == srgb_filter &&
           fs->variants_srgb[i]->not_bgra == not_bgra &&
           fs->variants_srgb[i]->depth == depth &&
+          fs->variants_srgb[i]->rt_int == rt_int &&
+          fs->variants_srgb[i]->rt_target == rt_target &&
+          fs->variants_srgb[i]->r32x4 == r32x4 &&
+          fs->variants_srgb[i]->r32x2 == r32x2 &&
           !memcmp(fs->variants_srgb[i]->compare, compare, sizeof(compare)) &&
           !memcmp(fs->variants_srgb[i]->swz, swz, sizeof(swz)))
          return fs->variants_srgb[i];
@@ -1507,11 +1875,16 @@ sgx_fs_for(struct sgx_context *ctx, struct sgx_pipe_shader *fs)
    if (!(*slot = CALLOC_STRUCT(sgx_pipe_shader)))
       return NULL;
    (*slot)->discard_pa = -1;
+   (*slot)->depth_pa = -1;
    (*slot)->srgb = srgb;
    (*slot)->srgb_filter = srgb_filter;
    memcpy((*slot)->swz, swz, sizeof(swz));
    (*slot)->not_bgra = not_bgra;
    (*slot)->depth = depth;
+   (*slot)->rt_int = rt_int;
+   (*slot)->rt_target = rt_target;
+   (*slot)->r32x4 = r32x4;
+   (*slot)->r32x2 = r32x2;
    memcpy((*slot)->compare, compare, sizeof(compare));
    if (!compile_shader(ctx, *slot, fs->nir, NULL, srgb, srgb_filter, swz,
                        not_bgra, NULL, false, depth, compare) ||
@@ -1542,12 +1915,13 @@ sgx_fs_program(struct sgx_context *ctx, struct sgx_pipe_shader *so,
    if (!so->code)
       return 0;
    simple_mtx_lock(&screen->lock);
+   struct sgxws_fs_feedback fb = {so->discard_pa, so->depth_pa};
    va = so->code1 && so->discard_pa >= 0
            ? sgxws_upload_fs_split(ctx->hw, so->code, so->n_code, so->code1,
-                                   so->n_code1, so->color_reg, b,
-                                   so->discard_pa, so->temps)
+                                   so->n_code1, so->color_reg, b, &fb,
+                                   so->temps)
            : sgxws_upload_fs(ctx->hw, so->code, so->n_code, so->color_reg, b,
-                             so->discard_pa, so->temps);
+                             &fb, so->temps);
    /* past the table's size, the slots are reused in turn, their programs
     * freed (dEQP's fragment_ops.interaction draws one shader with dozens of
     * blends) */

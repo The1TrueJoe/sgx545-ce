@@ -11,8 +11,8 @@ bring-up stage. Build scripts expect
 | `decode/` | Capture readers: memory map, TA command, diffs, `mkreplay.py` (capture to replay script), `cmpfb.py`, `fig.py` (frames to PNG) |
 | `replay/` | Native x86_64 replayer for captured frames |
 | `gen/` | Frame generator: builds every buffer of a frame from GL-level parameters (`docs/GEN.md`) |
-| `isa/` | USSE assembler/disassembler, encoding tables (`hw*.py`), libusc encoder oracle, hardware tests (`hwt*.py`), shader corpus |
+| `isa/` | `asm.py` (USSE text to words and back through `sgx-asm` / `sgx-disasm`, built from `sgx.xml`), hardware tests (`hwt*.py`), shader corpus |
 | `pds/` | PDS disassembler and example listings |
-| `state/` | Render-state decoder (`decode.py`, `--usse` disassembles the programs), per-draw statistics (`vdmstats.py`), the per-unit busy/idle split of a register sample (`busysplit.py`), the formulas that rebuild it (`build.py --check`), and `sgxstate.h`: header-only C for the state past the basic triangle (scissor, lines/points, constant blending, alpha test), checked by `sgxstate_test.c` |
+| `state/` | Render-state decoder (`decode.py`, `--usse` disassembles the programs), per-draw statistics (`vdmstats.py`), the per-unit busy/idle split of a register sample (`busysplit.py`), the formulas that rebuild it (`build.py --check`) |
 | `probe/` | GLES2 (`probe.c`) and GLES1 (`probe1.c`) programs driven by environment variables, for one-change captures |
 | `ddk/` | Helpers for the Intel DDK userspace, kept for A/B testing: `sgxinit`, `gles2tri`, `gpubench`, `busidshim`, `sgxregs.sh` |

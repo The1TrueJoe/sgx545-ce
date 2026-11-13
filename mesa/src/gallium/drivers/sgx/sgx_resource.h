@@ -90,6 +90,12 @@ struct sgx_resource {
     * last stored at (0: nothing stored yet, so nothing to load). */
    struct sgxws_bo zls;
    uint32_t zls_bytes, zls_w, zls_h;
+   /* a render stored into zls after the CPU copy (data) was last brought
+    * up from it: a map reads it back first (sgx_transfer_map) */
+   bool zls_stored;
+   /* a depth texture's CPU copy brought up from zls by a map, which its
+    * sampled copy doesn't have yet (sgx_resource_zls_for_sampling) */
+   bool zls_unsampled;
 };
 
 static inline struct sgx_resource *
@@ -129,6 +135,11 @@ void sgx_resource_context_init(struct sgx_context *ctx);
 bool sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
                          unsigned level, unsigned layer,
                          struct sgxws_target *t);
+
+/* before a draw samples res: a depth texture's stored depth (ZLS) into its
+ * sampled copy */
+void sgx_resource_zls_for_sampling(struct sgx_context *ctx,
+                                   struct sgx_resource *res);
 
 /* brings res->cube0 up to date with level 0 (sgx_tex_words samples it) */
 bool sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res);

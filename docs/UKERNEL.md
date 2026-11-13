@@ -680,8 +680,7 @@ into the sync-object updates the host and the next client wait on.
   parameter-buffer pages to the free list: the 3D start armed the release
   (0x63c = 3, section 6), and 0x724 counts down while the 3D runs. The DDK's
   handler writes **no DPM register and no PB-descriptor word**. In every
-  trace its only register write is the ack (`EVENT_HOST_CLEAR` = 0x1, pc
-  0x0e1e), then the rendezvous, then the completion below and
+  trace its only register write is the ack (`EVENT_HOST_CLEAR` = 0x1), then the rendezvous, then the completion below and
   SW_EVENT. It waits on nothing. The only PB-descriptor words the DDK writes
   during a frame:
   - +0x14 = the high half of 0x724 (the TA's allocated pages) at every TA
@@ -689,8 +688,7 @@ into the sync-object updates the host and the next client wait on.
   - +0x18..+0x24 = the live counters, by `save_ta_state` before each 3D
     start.
 
-  Per scene the DDK also runs the DPM **clear** at the kick (pc
-  0x0a1d-0x0a4a):
+  Per scene the DDK also runs the DPM **clear** at the kick:
   - 0x694 = 0x698 = `2 | i<<3` for each RT data entry i up to entry word 10;
   - it waits for `EVENT_STATUS` & 0x240 (STATE_CLEAR b6, CONTROL_CLEAR b9)
     and acks 0x134 = 0x240;
@@ -725,17 +723,16 @@ first kick, a client that submits a render and then does not let it complete
 
 ### Where the DDK microkernel raises the host interrupt
 
-Each site writes `EUR_CR_EVENT_STATUS` (0x12c) = SW_EVENT (0x4000)
-(`ddk-uk.bin`). A normal completion sets no `ui32InterruptFlags` bit: only HWR
+Each site writes `EUR_CR_EVENT_STATUS` (0x12c) = SW_EVENT (0x4000). A normal completion sets no `ui32InterruptFlags` bit: only HWR
 and ACTIVE_POWER use the flags.
 
-| pc | path | runs on |
-|---|---|---|
-| 0x066b | TA finished, after the TA status values are written | TA_FINISHED (0x2000), **every** TA, including the kicks that don't end the scene |
-| 0x086c | the kick path, after its status-value copy | a host kick |
-| 0x0fce | render completion | the second of PIXELBE_END_RENDER (0x40000; handler 0x0ebb) and DPM_3D_MEM_FREE (0x1; handler 0x0eb4). The 3D start arms both halves in sa9 (b4, b5). With render details +0xd4 b3 it arms only the 3D end, and that completes alone |
-| 0x14f7 | transfer completion (0x1461, taken at the 3D end when sa9 b2 marks a transfer) | PIXELBE_END_RENDER alone: a transfer doesn't wait for a DPM free |
-| 0x0397, 0x04d4 | cleanup completion | the cleanup command, or its retry |
+| path | runs on |
+|---|---|
+| TA finished, after the TA status values are written | TA_FINISHED (0x2000), **every** TA, including the kicks that don't end the scene |
+| the kick path, after its status-value copy | a host kick |
+| render completion | the second of PIXELBE_END_RENDER (0x40000) and DPM_3D_MEM_FREE (0x1). The 3D start arms both halves in sa9 (b4, b5). With render details +0xd4 b3 it arms only the 3D end, and that completes alone |
+| transfer completion (taken at the 3D end when sa9 b2 marks a transfer) | PIXELBE_END_RENDER alone: a transfer doesn't wait for a DPM free |
+| cleanup completion | the cleanup command, or its retry |
 
 **No completion waits for the timer.** The only wait inside a completion
 handler is the ISP clock poll in the 3D-end handler:
@@ -783,8 +780,8 @@ DPM_OUT_OF_MEMORY_* fires at a threshold, while 0x22 pages are still free.
 
 **The handler.** The event word bits 0x100000 and 0x200000 (the pds3 word
 for MT and GBL) reach the OOM handler. It acks `EVENT_HOST_CLEAR` = 0x6 (MT and
-GBL together) and records which one fired in a sa8 flag. It then runs 0x0b50
-(the same entry from pds4 at 0x0af0). Run in the emulator with an injected
+GBL together) and records which one fired in a sa8 flag. It then runs the out-of-memory path (also
+reached from pds4). Run in the emulator with an injected
 event (`tools/ukernel/run.py`'s `Runner.event`), it does this:
 
 1. `rtdata` +0xc += 1 (an out-of-memory count), the RT data entry's state
@@ -961,8 +958,7 @@ Using the separate texture heap on all of them is always safe.
 **`FIX_HW_BRN_31939` (build 1013 only) is a firmware TA watchdog.**
 1. It adds host-control word 16 (`ui32BRN31939Mem`, §1).
 2. The DDK microkernel, which is built with the workaround, sets that word
-   to 500 at the kick of a TA whose TA flags have b12 (0x1000) set (pc
-   0x0ac8). It clears it at that TA's finish.
+   to 500 at the kick of a TA whose TA flags have b12 (0x1000) set. It clears it at that TA's finish.
 3. Every lockup sample (each `ui32HWRecoverySampleRate` ticks) it counts the
    word down. At 0 it runs the lockup check,
    about 5 s after the kick.
@@ -1075,26 +1071,10 @@ reads its command through list 0 with `BIF_FAULT = 0`). Do not share the EDM's
 dir-list with a client requestor.
 
 **How the DDK reaches client memory from the EDM.** It never uses a second
-bank or a separate data requestor. A subroutine copies the TA's
-nibble (r16 = 0) or the 3D's (r16 = 1) of `BIF_BANK0` into the EDM nibble,
-and r16 = 2 puts the EDM back on list 15. Its callers bracket every EDM
-access to client memory:
-
-| set (pc) | restore (pc) | list | what runs inside | when (DDK traces) |
-|---|---|---|---|---|
-| 0x128b | 0x129b | 3D | the background-block write ([0..2]) | **every 3D start** |
-| 0x0941 | 0x094d | TA | the PB setup (0x170d) and the TA free-list load (0x16a2). They read the PB descriptor and TA3D words (kernel data) and write DPM registers. Client memory is touched only when PB descriptor +0x00 b0 is set: then 0x170d walks the PB block list and rewrites the free list | the first kick after the PB changes |
-| 0x190c | 0x1918 | TA | `save_ta_state` (0x168d), then the same PB setup and TA load | a PB switch mid-scene; not in any trace |
-| 0x0835 | 0x0843 | TA | zeroes the RT data entry's tail-pointer array (entry words 8/9) | a kick path; not in any trace |
-| 0x0d90 | 0x0da0 | 3D | a second copy of the background-block write, on another 3D-start path | not in any trace |
-| 0x1234 | 0x123a | 3D | copies a 2-word pair indexed by the pass cursor (+0x108) | multi-pass renders only; not in any trace |
-| 0x13ae | 0x13be | 3D | writes (address, value) pairs from +0x1a0 (count at +0x19c of the same object) | only with a nonzero count; not in any trace |
-| 0x1517 | 0x1527 | 3D | the same pair loop, on the transfer side | only with a nonzero count; not in the trace's transfer |
-| 0x0ed5 | 0x0f34 | 3D | a 3D-end branch taken when the ISP clock check fails | not in any trace |
-
-In all four DDK microkernel traces (one-, two- and four-frame runs) only two
-windows run. 0x128b runs at every 3D start. 0x0941 runs once, on the first
-kick of a new PB.
+bank or a separate data requestor: around the background-block write at every 3D
+start, and around the PB setup on the first kick of a new PB, it points the EDM's
+`BIF_BANK0` nibble at the TA's or the 3D's directory list, then puts it back on
+list 15.
 
 The open microkernel opens none of these windows: its EDM stays on list 15.
 Its one exception was the background-block pulse (`BIF_BANK0` = 0x1011 in
@@ -1103,30 +1083,24 @@ block instead. Everything else the EDM reads or writes is in kernel code,
 kernel data or the sync heap, all mapped in the kernel PD.
 
 The background-block write at 3D start (`docs/STATE.md`
-§6) is the 0x128b window, and it also reads render details +0x130/+0x134/+0x114
+§6) is one of these windows, and it also reads render details +0x130/+0x134/+0x114
 inside it. While a window is open, the EDM fetches its instructions and reads
 kernel data through the client's page directory. The DDK therefore needs the
 kernel code and kernel-data heaps mapped in every client PD; it has no mode
 that works without them.
 
-**The TA and the 3D each get their own directory list.** Every TA
-and 3D kick path calls one routine to point a requestor at a memory context.
-r16 is the context; its word 2 is the page-directory address. `r17 & 3`
-picks the 3D (BANK0 b12-15) or the TA (b4-7).
-- **Pick a list.** It treats lists 0-14 as a cache of page directories. It
-  takes list 0 if that is empty or already holds this directory, otherwise
-  the first of lists 1-14 that is empty or matches.
-- **Evict when all are full.** It advances a round-robin cursor (TA3D word
-  49) mod 15 and skips the list that the *other* requestor is using
-. A TA can therefore load its context's directory while
-  the 3D keeps translating through a different context's directory.
-- **Load the list.**
-  1. `BIF_CTRL` |= 8, then restore it (invalidate).
-  2. For the TA only: 0xad0 = 1, 0xae0 = 1 and 0x804 b15.
-  3. 0xa08 = 1, wait for 0x138 & 0x27, then acknowledge it in 0x140.
-  4. Wait for `EVENT_STATUS` b26.
-  5. Write the list register, only if its value changes.
-  6. Write the requestor's nibble in `BIF_BANK0`.
+**The TA and the 3D each get their own directory list.** The DDK points each
+requestor at a context's page directory through lists 0-14 used as a cache, so a TA
+can load its context's directory while the 3D keeps translating through another
+context's. Loading a list:
+
+1. `BIF_CTRL` |= 8, then restore it (invalidate).
+2. For the TA only: 0xad0 = 1, 0xae0 = 1 and 0x804 b15.
+3. 0xa08 = 1, wait for 0x138 & 0x27, then acknowledge it in 0x140.
+4. Wait for `EVENT_STATUS` b26.
+5. Write the list register, only if its value changes.
+6. Write the requestor's nibble in `BIF_BANK0`.
+
 - **Shared PB.** The DDK's default PB is one buffer that every context
   shares, so the two DPM slots hold scenes from any context.
 - **What a microkernel needs.** One that lets two contexts' jobs onto the
@@ -1139,7 +1113,7 @@ picks the 3D (BANK0 b12-15) or the TA (b4-7).
 
 `EUR_CR_BIF_BANK1` (0xc7c, the same nibbles) and `BIF_BANK_SET`
 SELECT_EDM (b8) exist, but the DDK never writes BANK1. It touches only
-BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load (0x1778, 0x17be). The header doesn't separate the EDM's instruction fetch from
+BANK_SET b9 (SELECT_DPM_LSS) around the DPM store and load. The header doesn't separate the EDM's instruction fetch from
 its data accesses in either bank. (oracle)
 
 **Parameter-buffer / DPM setup.** `pb[n]` is word n of the PB descriptor
@@ -1208,7 +1182,7 @@ its data accesses in either bank. (oracle)
   `EVENT_STATUS` 0x90), 2 clear (waits for 0x240), 4 load (waits for 0x20 /
   0x100100).
   - A fresh scene runs the **clear**.
-  - The load only resumes a stored scene (on the kick and the 3D start, after the store at 0x1778).
+  - The load only resumes a stored scene (on the kick and the 3D start, after a store).
   - A CE5300 register sample shows 0x694 never at 4 over a run of frames.
 - **The OTPM clear** (0x24c), with its two done bits, follows.
 - **Two scenes on one PB: two DPM context slots.** A client that renders to
@@ -1265,7 +1239,7 @@ its data accesses in either bank. (oracle)
   register sample read 0x740 = 0 throughout. 0x630 read 0 in a register
   sample across an FBO interleave, which may mean 0x630 does not read back.]
 
-All [D] from the DDK microkernel's code and trace; the release behavior is
+All **oracle** (the reference firmware run in the emulator); the release behavior is
 from the hardware register sample.
 
 **TA start.** The first kick of a scene (TA flags b0) pulses `SOFT_RESET`'s

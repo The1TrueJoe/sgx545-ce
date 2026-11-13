@@ -76,6 +76,25 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 	u32 doutu = pvrsgx_doutu(pvrsgx_heaps(sdev)->kernel_code.base,
 				 sdev->fw.addr[PVRSGX_FW_UKERNEL] + e);
 
+	if (b == PVRSGX_FW_PDS0 && pvrsgx_edm_init &&
+	    pvrsgx_core_single_context(sdev->family)) {
+		/*
+		 * EDM launch (edm-path.md §2): the §9 bare-DOUTU event program — the
+		 * three fixed DOUTU words in an 8-word data interleave (code base 15 |
+		 * bit 21, so the task runs with data-master 3 as the EDM requestor;
+		 * offset 0), one MOVS->DOUTU, HALT. This is the launch that makes the
+		 * microkernel's stores commit under EDMPROTECT; it starts the
+		 * init/event entry at offset 0.
+		 */
+		p = pvrsgx_pds_prog(sdev, b, 12);
+		p.w[0] = 0x0020000f;	/* DS0[0]: code base 15, bit 21, no temps */
+		p.w[1] = 0x04000000;	/* DS0[1] */
+		p.w[8] = 0x00000001;	/* DS1[0]: DOUTU word 2 */
+		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
+		pvrsgx_pds_halt(&p);
+		return;
+	}
+
 	if (sdev->family->features & PVRSGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS) {
 		pvrsgx_pds_ds(&p, PDS_D0(0), doutu);
 		pvrsgx_pds_ds(&p, PDS_D0(1), 2);

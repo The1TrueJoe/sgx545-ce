@@ -263,20 +263,9 @@ The draw is six words:
   picks one of four copies.
 - **The state-emit USSE programs are just `emit` instructions.** They copy
   the DMA'd attributes to the MTE (macro tiling engine). The block is the
-  state; the program only forwards it. The DDK's, from the base4 capture
-  (`0x3c008700` for 12 dwords, `0x3c008a00` for 18):
-
-      phas.i #0, #0 [wait=7]                         fa440700 00000000
-      nop [nosched]                                  f8000940 00000000
-      test.and.ne p0, #0, #0 [skipinv]               48831280 a00c0000
-      (p0) ld.a.d pa0, pa0, #0 [skipinv rpt=4]       e9833084 a0000000
-      wdf                                            f9200000 00000000
-      mov o0, pa0 [skipinv rcnt rpt=n]               rpt at most 16 per mov: 18 dwords
-                                                     are `rpt=16` then `mov o16, pa16 rpt=2`
-      emit.t3 r0, #0, #0                             fb23c000 a0000000
-      op0xd6 #0                                      ff200000 00000000
-      emit.t1 o0, #0, #0 [end f3_20]                 fb2f4000 a0200000
-
+  state; the program only forwards it: it waits for the DMA, moves the
+  attributes to the outputs (`mov o0, pa0` with a repeat count, at most 16 per
+  `mov`), then emits them to the MTE and ends
   [capture]. The triangle's block is DMAed as 25 dwords, but its program
   forwards 18 (pa0-pa17). The clear's DMA and program both cover 12.
 - **The TA terminate's USSE task (`0x3c000000`) is the same program for two
@@ -530,19 +519,9 @@ z scale.
     **guess**: every working draw has it, and none has been run without it.
     No second color source (0x21) has been seen.
   - Status: capture; hardware (open driver).
-- **The clear's vertex program** (the DDK's built-in, `0x3c008080` in the
-  base4 capture; 4 input dwords from one vertex stream, 8 output dwords):
-
-      phas.i #<phase 1>, #0 [wait=2]; then the prologue (nop / test / ld pa / wdf)
-      mov o0, pa0 [skipinv rcnt rpt=3]                o0-o2 = x, y, z
-      mov o3, c3 [skipinv rcnt]                       o3 = 1.0 (w)
-      pck.f32.u8 o4, pa3.l2, pa3.l2 [skipinv rcnt scale]   R = byte 2 of the ARGB8888 word
-      pck.f32.u8 o5, pa3.l1, pa3.l1 [...]                  G = byte 1
-      pck.f32.u8 o6, pa3,    pa3    [...]                  B = byte 0
-      pck.f32.u8 o7, pa3.l3, pa3.l3 [...]                  A = byte 3
-      emit.t3 r0, #0, #0 [end f12 f10]
-      phas.i #0, #0 [wait=7]; emit.t1 r0, #0, #0 [end f12 f10 f3_20]
-
+- **The clear's vertex program** (the DDK's built-in; 4 input dwords from one
+  vertex stream, 8 output dwords) moves the position, sets w to 1.0 and unpacks
+  the color word's four bytes to floats.
   So the vertex stream is x, y, z (floats) and the color as one ARGB8888
   word, and the outputs are position (4) then color as 4 floats in 0-1
   [capture].
@@ -606,9 +585,8 @@ hardware, open driver]:
 
 ### Constant-color blending
 
-`sgxs_blend_const` in `tools/state/sgxstate.h` builds the five
-instructions. They are bit-exact with the DDK's for k1-k5, k7 and k8
-[capture].
+The Mesa winsys (`blend_const_words` in `sgx_frame.c`) builds the five
+instructions [hardware, open driver].
 
 sop2's selectors can't name a constant. With any CONSTANT_COLOR /
 ONE_MINUS_CONSTANT_COLOR / CONSTANT_ALPHA / ONE_MINUS_CONSTANT_ALPHA
@@ -660,8 +638,7 @@ instruction instead of its final `mov o0, color`:
 
     atst8 o0, p0.nw, pa0, sa0, sa1  [end]      f0000001 f934000d   (e1gt5)
 
-with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
-`sgxs_atst8`, `sgxs_atst_depth_word` and `sgxs_atst_alpha_word`.
+with ISPA pass type 1 (`03d00200`).
 
 **The operands.** The secondary program writes sa0 and sa1 with DOUTA:
 
@@ -715,7 +692,6 @@ per pixel**, and every object is drawn only where it is set. Pass type 3
 ("viewport generate") objects write the bit and draw nothing else. The
 **region clip** (group 0x80) limits which tiles the TA bins an object into,
 and it is **sticky**: an object without group 0x80 keeps the last one.
-`tools/state/sgxstate.h` builds all of it (`sgxs_scissor_objects`).
 
 **The two objects** (TA block header `d485`: ISPA, ISPC, region clip,
 output select, MTE, TSP; 9 dwords, DMA kind 0; no PDS group, so no pixel
@@ -732,8 +708,7 @@ program runs):
   q4].
 - The vertices are 2 dwords (x, y). The vertex program is
   `mov o0, pa0 [rpt=2]; mov o2, c3; mov o3, c3` (z = w = 1.0), output
-  select `0x00040000`, MTE `0x40` [capture; hardware, open driver]. The
-  words are in `sgxstate.h`.
+  select `0x00040000`, MTE `0x40` [capture; hardware, open driver].
 - Pixel centers inside the strip get the bit: moving its left edge from
   x 100 to 150 moved the scissor's edge [hardware: q2].
 - The set object only reaches its region clip's tiles [hardware: q3].
@@ -780,8 +755,6 @@ program runs):
 
 ### Lines and points
 
-`tools/state/sgxstate.h` has the words (`sgxs_prim`, `sgxs_ispa_objtype`,
-`sgxs_ispb_width`, `sgxs_point_size_word`, `sgxs_line_list_indices`).
 
 **Primitives.** The VDM index-list word is
 `0x80000000 | 0x00c00000 | prim << 26 | count`. prim is 0 triangles,
@@ -1028,29 +1001,23 @@ of a blend.
 
 ### The pixel event program (render details +0x5c)
 
-The DDK's, from the base4 capture (0x2e006000, data 0x50 bytes, 29
-instructions). The data rows:
+The 3D runs it for pixel events with the event word in in1, the tile position
+in in0 and a word to forward in in2. What it must do, by in1:
 
-| word | value | what |
-|---|---|---|
-| ds0[0], ds0[1] | `00010400`, 0 | DOUTU of the ptoff task (`0x37008200`) |
-| ds1[0] | 0 | compare operand for in1's b8 test |
-| ds1[1] | `01008000` | DOUTU w0 of the end-of-tile task (`0x37004000`, temps 4) |
-| ds0[2], ds0[3] | `01010500`, `00c00000` | DOUTU of the pixel-event emit task (`0x37008280`, temps 4), w1 = b22 \| b23 |
-| ds1[2], ds1[3], ds1[4] | 8, 2, 4 | the in1 bit masks |
-| ds0[4]..ds0[8] | `00000100 00000ff8 00800000 003ff000 00400000` | masks for building the end-of-tile DOUTU w1 |
-
-The code, by in1 (the event word the hardware passes):
-
-- in1 & 8 → DOUTU the **ptoff** task, then halt. That task is
-  `phas.i #0, #0 [wait=7]; ptoff [end]`.
-- else in1 & 2 → test `op0xd(in1, ds1[0]) & 0x100`:
-  - if set → `douta in2 → attr 0`, then DOUTU the **end-of-tile** task with
-    w1 = `(in0<<3 & 0xff8) | 0x00800000 | (in0<<3 & 0x3ff000) | (in1<<20 & 0x400000)`;
-  - else → the emit task below.
-- else in1 & 4 → DOUTU the **pixel-event emit** task, which is
+- in1 & 8 → start the **ptoff** task (`phas.i #0, #0 [wait=7]; ptoff [end]`),
+  then halt.
+- else in1 & 2:
+  - with in1 b8 **clear** → `douta in2 → attr 0`, then start the
+    **end-of-tile** task with DOUTU w1 =
+    `(in0<<3 & 0x3ffff8) | 0x00800000 | (in1<<20 & 0x400000)`;
+  - with b8 set → the emit task below.
+  [hardware: the open program; with the b8 test reversed nothing is drawn]
+- else in1 & 4 → start the **pixel-event emit** task,
   `phas.i #0, #0 [wait=7]; limm r0, #0; emit.t0 r0, #0, r0 [end f3_20 imm=512]`.
 - else halt.
+
+The end-of-tile and emit tasks take 4 temporaries; the emit task's DOUTU w1
+is b22 | b23.
 
 [capture]. What each in1 bit is (end of tile, end of render, …), and
 what in0 and in2 carry, is [guess]. `docs/PDS.md` has the instruction

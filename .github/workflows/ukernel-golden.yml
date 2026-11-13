@@ -12,12 +12,14 @@ on:
     branches: [dev, main]
     paths:
       - ukernel/**
-      - tools/isa/**
+      - mesa/src/sgx/isa/**
+      - mesa/tests/isa-standalone/**
       - .github/workflows/ukernel-golden.yml
   pull_request:
     paths:
       - ukernel/**
-      - tools/isa/**
+      - mesa/src/sgx/isa/**
+      - mesa/tests/isa-standalone/**
 
 permissions:
   contents: read
@@ -25,13 +27,17 @@ permissions:
 jobs:
   golden:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Symbolic assembler resolves per-core constants to the same bytes
-        run: python3 tools/isa/test_symbols.py
+      - name: sgx-asm, from sgx.xml (ukernel/build.py assembles with it)
+        run: |
+          set -eux
+          python3 -m pip install -q mako
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
       - name: Rebuild the SGX545 serial image and verify its hash
         run: python3 ukernel/golden/check.py

@@ -31,7 +31,7 @@ Two live hypotheses:
   goes quiescent and the watchdog still fires. Not a storm (14/30 renders, no hang),
   which fits "period 0 = effectively no tick".
 - **H2: hostctl[6] nonzero, timer fires, but our fall-through timer event doesn't move
-  0xb14.** The DDK's timer event has a real handler (AP countdown 0x04b0-0x04d6); ours
+  0xb14.** The DDK's timer event has a real handler (an active-power countdown); ours
   acks the bit and falls through to `ba kick` -> empty CCB -> end. If EDMTaskReg0
   (0xb14) only advances for a dispatched TA/3D task, not a bare event-program pass, the
   watchdog still sees no progress.

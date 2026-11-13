@@ -163,3 +163,58 @@ Unknowns, each an hwt test to write before relying on it:
    UBOs and SA copies.
 4. Only then the compiler: integer isel behind a "GLSL 3" switch, keeping the
    ES 1.00 float path pixel-exact against the DDK.
+
+## Status (2026-11-11)
+
+The compiler side of GLSL 1.30 and 1.40 is in, behind
+`sgx_compile_options.native_integers`, which the driver sets screen-wide
+once it reports integers (GL3.md, "Crossing the driver/compiler line").
+Without it nothing changes: GLSL ES 1.00 integers and booleans stay floats,
+and the corpus output is byte-identical. GLSL 1.50 is not planned (GL3.md:
+no geometry-shader path).
+
+| GLSL feature | how | relies on |
+|---|---|---|
+| int/uint add, sub, negate, multiply | `ima32` (`a * #1 + -b`, `-a` as `a * c56`) | **hardware** (hwt_int) |
+| `umulExtended`-style high words (division) | `ima32 [hi=i1]`, read by the next instruction | **hardware** (hwt_gaps, hwt_int: unsigned and `.sgn`) |
+| bitwise ops, shifts | hw 0a-0d; constants as rotated 16-bit immediates; register counts masked to 0-31 | **hardware** (hwt_p7, hwt_int) |
+| compares | `testmask.xor.eq/ne.dword`; lt/ge from a - b and the operands' signs (no overflow), then `testmask.or.neg/pos.dword` | **hardware** (hwt_int) |
+| min, max, abs, sign, selects | `movc.ltz/z/nz.i32` | **hardware** (hwt_p2) |
+| `/`, `%` | `nir_lower_idiv` (reciprocal, two fix-ups) | frcp exactly rounded on the five values hwt_int tried; the fix-up steps don't need it |
+| int/uint ↔ float | the two 16-bit halves through `pck.f32.s16/u16` and one `fmad`; back by trunc, floor(\|t\| / 65536), `pck.u16.f32` | **hardware** (hwt_int; trunc and floor hwt_p4) |
+| booleans | 0 / ~0 (`nir_lower_bool_to_int32`); an `if` tests the comparison into p0 (`test.xor` for ieq/ine) or `test.and.eq` on the mask | **hardware** (hwt_p13, hwt_int) |
+| `switch` | GLSL's loop-once lowering, emitted without branches | — |
+| `textureLod`, vertex texture reads | dependent `smp` with LOD replace (vertex: LOD c48) | **corpus** |
+| `texelFetch` | `sgx_lower_tex`: txl at (i + 0.5) / max(size >> lod, 1), marked `sgx_sample_info.fetch` for NEAREST state of its own | — |
+| `textureSize`, `textureGrad`, the Offset variants, rect, 1D | `sgx_lower_tex` (`nir_lower_tex`); txs is the driver's (`SGX_K_TEXSIZE`) | — |
+| isampler / usampler | an RGBA8 texel's bytes, sign- or zero-extended | — |
+| R32F / R32UI / R32I | `tex_f32`: the raw word, (x, 0, 0, 1) with an integer 1 for an integer sampler | — |
+| RGBA32 / RG32 (int or float) | `tex_r32x4` / `tex_r32x2`: N R32 planes of the texture's size (H2: T1 0x12 returns the word as it is); one dependent read per plane at the read's own coordinate and LOD, tagged `sgx_sample_info.plane` for the driver's state to address that plane. The hardware wraps, filters and picks the level | — |
+| noperspective | the vertex shader writes v · w and w itself (`SGX_NOPERSPECTIVE_W`), the fragment shader divides by the interpolated w: perspective-correct iteration of both leaves the screen-linear value | — |
+| integer varyings | two sets per row, the 16-bit halves as exact floats (`sgx_varying.split`) | flat: see below |
+| uniform blocks | `ld.a.d` from the address in constant `ubo_base_k + n`; word d at `#(d - 1)`, others through an `ima32` address | ld.a.d immediates: **hardware** (hwt_gaps) |
+| gl_VertexID, gl_InstanceID | the driver's (an input it gathers, a constant) | — |
+
+Checks: `tools/usc/usse_sim.py` models the integer and conversion forms the
+compiler emits, with ISA.md's semantics, and `tools/usc/int_check.py` runs
+42 GLSL 1.30 operations through sgxc and the model on random inputs; all
+give exact results. `tools/isa/hwt_int.py` checked the semantics the model
+assumes on a CE5300 board (2026-11-11): all 50 expected words, so every
+form in the table is now **hardware** (log in `tools/isa/hwt_out/open/`).
+What is not yet run on hardware is the compiled programs themselves
+(piglit's GLSL 1.30 tests, once the driver exposes integers).
+
+Flat varyings: the TA's vertex-colour source iterates flat, but into one
+register as BGRA8 unorm (clamped to [0, 1], 8 bits), so it carries only st's
+flat legacy primary colour (usse-compiler's `sgx_varyings.colour`). Every
+other flat varying iterates in its sets like a smooth one, and the driver makes
+its three vertices equal (provoking-vertex replication, a vertex-program variant
+over copied inputs). The compiler does nothing extra for them. Equal vertices
+still pass through the perspective-correct iteration, so a float can come out a
+rounding step off; a split integer's halves are exact floats below 2^16, and
+`pck.u16.f32` rounds them back to the exact value (to nearest, as hwt_p4
+measured for s16; u16 is assumed the same).
+
+Not done here: MRT (H1),
+transform feedback (H4), texture arrays (GL3.md's layer-address path), and
+shadow-compare and cube-array variants beyond what Mesa lowers.
