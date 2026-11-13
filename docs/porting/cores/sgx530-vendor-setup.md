@@ -53,7 +53,7 @@ vendor-stack capture needs a 5.4/6.0-class kernel RAM-booted on the OMAP3630 boa
 | `0xa58` (event enable) | 0x2204f00f | 0x2204b00f | — |
 | Clock-gate control value | 0x00222220 (2D left off) | per the 530 clock table | — |
 
-## 2. The PDS program data layout: an 8-word interleave (U; explains gate 2's C result)
+## 2. The PDS program data layout: an 8-word interleave (C; explains gate 2, and confirmed load-bearing for rendering)
 
 The SGX530 lacks `SGX_FEATURE_PDS_DATA_INTERLEAVE_2DWORDS` (K). The vendor lays out a PDS
 program's data segment so that the two data stores interleave **eight words at a time**, not
@@ -74,6 +74,16 @@ pds3-mirror variants failed the same way for the same reason. Under the 8-word i
 launch word's sources sit where the 530 reads them. Every PDS program the microkernel uses
 depends on this layout: the event entry, the launch programs, and Mesa's vertex and pixel
 programs.
+
+**Frame-scale confirmation (2026-11-13, C).** A 64x64 kick host-played on 530 silicon (driver
+`edm_init`) rendered nothing: the microkernel started and consumed both kicks but the TA emitted
+no tiles. The played command's state-emit program (`frame64.trace`) is the PDS.md template
+ending `doutu ds0[4..5]`; its DOUTU source `ds0[4]` is memory word 8 (= 0x0000070a, the task
+descriptor) under the 2-word layout but memory word 4 (= 0x00000000) under this 8-word one — so
+every USSE launch reads a null source on the 530 and starts at code base 0. The open microkernel
+and the command/uAPI layer are proven on silicon; the remaining blocker is sgxgen emitting its
+PDS data segments in this 8-word interleave (a codegen/packing change keyed on
+`!PDS_DATA_INTERLEAVE_2DWORDS`, not an ISA change).
 
 ## 3. The EDM task launch word (DOUTU), all three words (U)
 

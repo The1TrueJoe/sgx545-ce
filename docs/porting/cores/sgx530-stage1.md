@@ -2341,3 +2341,29 @@ power-off), so it is OMAP3-specific.
 
 The only step left for a first frame is the kick test (a frame-fake render through
 run_job on the m2-drm base).
+
+## MILESTONE: first 64x64 kick on silicon — microkernel + command layer PROVEN; blocker is sgxgen's PDS layout (2026-11-13)
+
+The kick test ran on 530 silicon (driver `edm_init`, 64x64, stock `fa361aad` and edm
+`47e4282a` packages). Both images, identical:
+- microkernel starts (EDM init event 0x0, BIF 0x0), consumes both kicks (`consumed 2`);
+- no completion → watchdog → HWR (`microkernel started again`);
+- output all-zero (no tiles emitted).
+
+Stock (WAIT_3D/WAIT_FREE) == edm (SW_EVENT) rules out the completion path; nothing renders
+to complete. `consumed 2` means `do_ta`/`do_3d` ran — the break is below the command layer.
+
+**Root cause, from the played command (`frame64.trace`, no board capture needed):** sgxgen
+emits its PDS data segments in the 545's **2-word interleave**. The state-emit program is the
+PDS.md template `tst; bra; doutd ds0[0..1]; tst; bra; doutd ds0[2..3]; doutu ds0[4..5]`; its
+DOUTU source `ds0[4]` lands on memory word 8 (= 0x0000070a, the task descriptor) under the
+2-word layout but memory word 4 (= **0x00000000**) under the 530's 8-word interleave. So every
+DOUTU/DOUTD reads a null source on the 530 → the USSE task launches at code base 0 → no emit.
+This is gate 2 (vendor-setup §2) at frame scale.
+
+**What this proves:** the open microkernel and the command/uAPI layer both work on 530 silicon.
+The only remaining blocker to a first frame is a **codegen change in sgxgen's PDS data-segment
+packing** — lay DS0/DS1 out in 8-word blocks when the core lacks `PDS_DATA_INTERLEAVE_2DWORDS`
+(formula in vendor-setup §2; 16-byte row size and the row-count bump in PDS.md). Not an ISA
+change: the PDS instructions and USSE words are unchanged, only the byte placement within the
+data segment. This is the handoff point from the microkernel/driver bring-up to the PDS codegen.

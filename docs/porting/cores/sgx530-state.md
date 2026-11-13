@@ -9,6 +9,29 @@ the OMAP3630 board: a vendor-stack capture (a separate analysis-side session, in
 `sgx530-vendor-setup.md`), plus cheap black-box checks from this side (runbook §"fresh black-box
 hypotheses").
 
+## UPDATE 2026-11-13: full 64x64 kick on silicon — microkernel + command layer PROVEN; only blocker left is sgxgen's PDS data layout
+
+The driver's `edm_init` + host-played kick ran a 64x64 frame on SGX530 silicon (core rev
+0x00010205). Result: the microkernel starts clean (EDM init event 0x0, BIF 0x0), consumes
+both kicks (`consumed 2`), and HWR recovers on the completion timeout — but the TA emits no
+tiles, so the output is all-zero. **Stock (WAIT_3D/WAIT_FREE) and edm (SW_EVENT) images behave
+identically**, so completion is not the issue; nothing is rendered to complete.
+
+Root cause, confirmed from the played command (`frame64.trace`, decode in the kick-annotation
+note): **sgxgen emits its PDS data segments in the 545's 2-word interleave.** The state-emit
+program is the PDS.md template `… doutu ds0[4..5]`; its DOUTU source `ds0[4]` sits at memory
+word 8 (= 0x0000070a, the task descriptor) under the 2-word layout, but at memory word 4 (=
+**0x00000000**) under the 530's 8-word interleave (vendor-setup §2). So on 530 silicon every
+DOUTU/DOUTD reads a null source → the USSE task launches at code base 0 → no emit. This is
+gate 2 (vendor-setup §2) reproduced at frame scale.
+
+**So the open microkernel AND the command/uAPI layer are both proven on 530 silicon.** The one
+remaining blocker is a **codegen change in sgxgen's PDS data-segment packing**: lay DS0/DS1 out
+in 8-word blocks when the core lacks `PDS_DATA_INTERLEAVE_2DWORDS` (formula in vendor-setup §2,
+row-size note in PDS.md). It is NOT an ISA/encoding change — the PDS instructions and USSE words
+are unchanged. Everything below this line predates the kick and is the register-file stage-1
+history.
+
 ## Where it stands, in one paragraph
 
 The open microkernel's USSE code **executes** on the SGX530 (two per-core fixes got it there,
