@@ -55,6 +55,31 @@ static void dump_render(unsigned f)
 	dump_file("render", "after", f);
 }
 
+/* The mapped RT structures after a render, read straight from the client's BOs
+ * (works with no render debugfs). Fields and format match tools/gen dump_after /
+ * dump64.txt, so a 530 result diffs 1:1 against the 64x64 reference. rgn0/1 and
+ * tailptr are the "did the TA emit tiles" signal. */
+static void dump_bo(const char *name, const struct sgx_bo *b, uint32_t words)
+{
+	printf("%s @ 0x%08x:", name, b->va);
+	for (uint32_t i = 0; i < words; i++)
+		printf("%s%08x", i % 8 ? " " : "\n  ", b->map[i]);
+	putchar('\n');
+}
+
+static void dump_rt(const struct sgx_surface *s)
+{
+	printf("== RT structures after render\n");
+	dump_bo("rtdata", &s->rtdata, (2 * 0x38 + 0x18) / 4);
+	dump_bo("rtword", &s->rtword, 1);
+	dump_bo("entword0", &s->entword[0], 1);
+	dump_bo("entword1", &s->entword[1], 1);
+	dump_bo("rgn0", &s->rgn[0], 0x60 / 4);
+	dump_bo("rgn1", &s->rgn[1], 0x60 / 4);
+	dump_bo("tailptr", &s->tailptr, 0x40 / 4);
+	dump_bo("hwsync", &s->hwsync, 0x28 / 4);
+}
+
 /* The frame's render, depth times back to back in one SUBMIT_JOBS, then a wait. */
 static int flush_deep(struct sgx_ctx *c, unsigned depth, unsigned timeout_ms)
 {
@@ -179,6 +204,8 @@ int main(int argc, char **argv)
 		       e ? "FAILED" : "done", centre, want_tri, corner, want_bg);
 		if (e || centre != want_tri || corner != want_bg)
 			bad++;
+		if (dump)
+			dump_rt(s);
 		/* The frame is done (or reset): its programs and data can go. */
 		sgx_ctx_rewind(c);
 		if (dump)

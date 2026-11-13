@@ -17,6 +17,7 @@ on:
     paths:
       - tools/gen/**
       - tools/ukernel/**
+      - drm/tests/powervr_sgx_frame.c
       - .github/workflows/sgx530-kick-frame.yml
 
 concurrency:
