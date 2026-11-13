@@ -155,6 +155,14 @@ static u32 job_completions(struct pvrsgx_device *sdev, struct pvrsgx_job *job)
 	return job->noops_before - sdev->noops_seen + 1;
 }
 
+/* A job off the GPU, done or ended by a reset: its time on it, for fdinfo. */
+static void job_account(struct pvrsgx_job *job, u64 now)
+{
+	if (job->type == DRM_POWERVR_SGX_JOB_TYPE_NULL || now < job->start_ns)
+		return;
+	atomic64_add(now - job->start_ns, &job->ctx->usage->busy_ns);
+}
+
 static bool job_done(struct pvrsgx_job *job, u64 consumed)
 {
 	if (job->done_cpu)
@@ -250,8 +258,7 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &finished, node) {
 		list_del_init(&job->node);
-		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER)
-			atomic64_add(ktime_get_ns() - job->start_ns, &job->ctx->usage->render_ns);
+		job_account(job, ktime_get_ns());
 		trace_pvrsgx_job_done(job->type, job->hw_fence->seqno);
 		dma_fence_signal_locked(job->hw_fence);
 	}
@@ -452,6 +459,7 @@ fail:
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
+		job_account(job, ktime_get_ns());
 		if (job->ctx != bad->ctx)
 			WRITE_ONCE(job->ctx->state, DRM_POWERVR_SGX_CONTEXT_STATE_INNOCENT);
 		dma_fence_set_error(job->hw_fence, lost ? -ENODEV : job != bad ? -ECANCELED :
@@ -606,6 +614,7 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	list_for_each_entry_safe(job, tmp, &sdev->active, node) {
 		list_del_init(&job->node);
+		job_account(job, ktime_get_ns());
 		dma_fence_set_error(job->hw_fence, -ENODEV);
 		dma_fence_signal_locked(job->hw_fence);
 	}

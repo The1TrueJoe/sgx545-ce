@@ -217,13 +217,17 @@ static const struct drm_ioctl_desc pvrsgx_ioctls[] = {
 	IOCTL(UPLOAD_CODE, pvrsgx_ioctl_upload_code),
 };
 
-/* drm-usage-stats.rst: the file's render time and its objects' memory. */
+/*
+ * drm-usage-stats.rst: the file's GPU time on its one engine and its objects'
+ * memory; the core adds drm-driver and drm-client-id. No drm-cycles or
+ * drm-maxfreq: the driver doesn't set the clock.
+ */
 static void pvrsgx_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 {
 	struct pvrsgx_file *sfile = to_pvrsgx_file(file);
 
 	drm_printf(p, "drm-engine-render:\t%llu ns\n",
-		   (u64)atomic64_read(&sfile->usage->render_ns));
+		   (u64)atomic64_read(&sfile->usage->busy_ns));
 	drm_show_memory_stats(p, file);
 }
 

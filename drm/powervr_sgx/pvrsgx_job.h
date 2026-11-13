@@ -29,8 +29,12 @@ struct pvrsgx_vm;
 struct pvrsgx_usage {
 	/** @ref: Held by the file and by each of its contexts. */
 	struct kref ref;
-	/** @render_ns: Time render jobs of the file spent on the GPU. */
-	atomic64_t render_ns;
+	/**
+	 * @busy_ns: Time the file's render and transfer jobs spent on the GPU,
+	 * from their send to their end. The GPU runs one job at a time, both
+	 * kinds on its 3D pipeline: fdinfo's one engine, "render".
+	 */
+	atomic64_t busy_ns;
 };
 
 struct pvrsgx_usage *pvrsgx_usage_new(void);
