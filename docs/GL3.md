@@ -425,7 +425,10 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
   `fbo-alphatest-formats` intensity formats, and the 4x `alpha-blending`
   twice, `alpha-to-one-single-sample-buffer 4` and seven `interpolation 0`
   tests); 10 FBO depth tests that never ran before pass.
-- **Known failures that the cap lets run** (they skipped before):
+- **Known failures that the cap lets run** (they skipped before). Against
+  plain dev (run 34, 2026-11-13: dev 489bf56f with and without this
+  branch, full dEQP-GLES2 and the zs, ms, ff and gl21 lists), these five are
+  the only tests that go from skip to fail; nothing goes from pass to fail:
   - `tex-miplevel-selection` (`-nobias -nolod`): the sampled level is one
     below the base level at the top of the chain (level 4 for base level 5,
     max level 5).
@@ -435,6 +438,9 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     whose rectangles are clipped (source or destination off the
     framebuffer) leaves the destination at its clear colour
     (`sgx_blit_resolve`); not diagnosed further.
+  - `ext_framebuffer_multisample-alpha-to-coverage-no-draw-buffer-zero 4`
+    (four colour buffers make it run): alpha to coverage from buffer 0
+    when the shader doesn't write buffer 0; not looked at.
 - **The FBO depth tests** (64): 28 pass, 31 skip (`ARB_depth_buffer_float`,
   `EXT_texture_array`), 5 fail with and without the cap, so they are known
   failures that don't come from it:
