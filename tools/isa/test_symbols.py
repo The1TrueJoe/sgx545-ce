@@ -11,7 +11,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)                                       # asm, hw
+sys.path.insert(0, HERE)                                       # asm
 sys.path.insert(0, os.path.join(HERE, "..", "..", "ukernel"))  # cores package
 import asm  # noqa: E402
 

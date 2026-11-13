@@ -254,30 +254,34 @@ USSE = False   # --usse: disassemble the USSE programs the PDS programs start
 
 
 def usse_dis(o, mem, va, maxn=96):
-    """the USSE program at va, up to the first instruction flagged end"""
+    """the USSE program at va, up to the first instruction flagged end
+    (disassembled by sgx-disasm: tools/isa/asm.py, SGX_ASM or SGX_DISASM)"""
     if not USSE:
         return
     isa = os.path.join(HERE, "..", "isa")
     if isa not in sys.path:
         sys.path.append(isa)
-    import hw
+    import asm
     o.h(f"USSE program {va:#x}")
     heap = va & ~0x7ffff
-    nxt = set()   # phase entry points (phas.i #pc: heap + 8 * pc); an end before one doesn't stop
+    words = []
     for i in range(maxn):
         lo, hi = mem.u32(va + 8 * i), mem.u32(va + 8 * i + 4)
         if lo is None or hi is None:
             break
-        x = hw.decode(lo, hi)
-        t = hw.fmt(x) if x is not None else f"hw{hi >> 27:02x}?"
-        if x is not None and x.unknown:
-            t += f"  {{?{' '.join(x.unknown)}}}"
+        words.append((lo, hi))
+    nxt = set()   # phase entry points (phas.i #pc: heap + 8 * pc); an end before one doesn't stop
+    for i, ((lo, hi), d) in enumerate(zip(words, asm.disasm(words))):
+        known = asm.matched(d)
+        t = asm.body(d) if known else f"hw{hi >> 27:02x}?"
+        if known and not asm.ok(d):
+            t += "  {?unused bits set}"
         o.lines.append(f"    {va + 8 * i:#010x}  {hi:08x} {lo:08x}  {t}")
         if t.startswith("phas") and "#" in t:
             nxt.add(heap + 8 * int(t.split("#")[1].split(",")[0]))
         if va + 8 * (i + 1) in nxt:
             continue
-        if x is not None and " end" in " " + t.replace("[", " ").replace("]", " ").replace(",", " ") + " ":
+        if known and " end" in " " + t.replace("[", " ").replace("]", " ").replace(",", " ") + " ":
             break
 
 
