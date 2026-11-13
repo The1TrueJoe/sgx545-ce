@@ -1990,6 +1990,29 @@ TEST_F(sgx_compile_test, vertex_loop_once_no_branches)
    EXPECT_FALSE(has("br")) << disasm();
 }
 
+/* a constant integer varying: its high half from the constant's top 16
+ * bits, not the low half again (pck .l2 of a literal) */
+TEST_F(sgx_compile_test, int_varying_constant_halves)
+{
+   native = true;
+   int_vertex(
+      [](nir_builder *b, nir_def *x, nir_def *y) {
+         return nir_imm_int(b, (int)0x8080c0c0u);
+      },
+      glsl_uint_type());
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   bool lo = false, hi = false;
+   for (unsigned i = 0; i < out.n_consts; i++) {
+      if (out.consts[i].fmt != 0x11)
+         continue;
+      uint32_t v = out.consts[i].value & 0xffff;
+      lo |= v == 0xc0c0;
+      hi |= v == 0x8080;
+   }
+   EXPECT_TRUE(lo && hi) << disasm();
+}
+
 /* an integer varying in a layout without split: an error, not a raw word
  * iterated as an F32 */
 TEST_F(sgx_compile_test, int_varying_unsplit_fails)
