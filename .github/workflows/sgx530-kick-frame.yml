@@ -58,3 +58,65 @@ jobs:
           path: ${{ runner.temp }}/kick/
           if-no-files-found: error
           retention-days: 14
+
+  # The DRM frame client (drm/tests/powervr_sgx_frame.c on sgxgen -DSGXGEN_DRM)
+  # cross-built static for the board's armhf/musl, to run on the 530 against the
+  # driver with edm_init=1. Same build as powervr-sgx.yml's x86 frame, Bootlin
+  # musl toolchain instead of host musl-gcc. NOTE: still 545-shaped sgxgen — the
+  # frame must be made 530-correct (PDS interleave, state, heaps) before any
+  # board run; this job validates the cross-build and records the md5.
+  frame-armhf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TOOLCHAIN: armv7-eabihf--musl--stable-2026.08-1
+      TOOLCHAIN_SHA256: 9147bafae4aa272321a3c6440d04d83b7e23411b2d344f875541d84c4444ba9b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore the toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN }}.tar.xz
+          key: toolchain-${{ env.TOOLCHAIN }}
+
+      - name: The board's musl toolchain (Bootlin)
+        run: |
+          set -eux
+          [ -f $TOOLCHAIN.tar.xz ] ||
+            curl -sfLO https://toolchains.bootlin.com/downloads/releases/toolchains/armv7-eabihf/tarballs/$TOOLCHAIN.tar.xz
+          echo "$TOOLCHAIN_SHA256  $TOOLCHAIN.tar.xz" | sha256sum -c -
+          mkdir -p $RUNNER_TEMP/tc && tar xf $TOOLCHAIN.tar.xz -C $RUNNER_TEMP/tc
+          gcc=$(ls $RUNNER_TEMP/tc/$TOOLCHAIN/bin/*-linux-*-gcc | head -1)
+          echo "CROSS=${gcc%gcc}" >> $GITHUB_ENV
+          "$gcc" --version | head -1
+
+      - name: DRM uapi headers (arch-neutral, from linux-libc-dev)
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends linux-libc-dev
+          mkdir -p hdr/include
+          cp -r /usr/include/drm hdr/include/
+
+      - name: Build the DRM frame client, static armhf
+        run: |
+          set -eux
+          python3 tools/gen/mkusse.py > tools/gen/usse_progs.h
+          ${CROSS}gcc -static -O2 -fno-strict-aliasing -Wall -Wno-unused-function -DSGXGEN_DRM \
+            -I hdr/include -I hdr/include/drm -I drm/powervr_sgx/include/uapi/drm -I tools/gen \
+            -o $RUNNER_TEMP/powervr_sgx_frame-armhf \
+            drm/tests/powervr_sgx_frame.c tools/gen/sgxgen.c -lm
+          ${CROSS}readelf -h $RUNNER_TEMP/powervr_sgx_frame-armhf | grep -E 'Machine|Class|Type'
+          file $RUNNER_TEMP/powervr_sgx_frame-armhf
+          md5sum $RUNNER_TEMP/powervr_sgx_frame-armhf | tee $RUNNER_TEMP/powervr_sgx_frame-armhf.md5
+          echo "NOTE: 545-shaped sgxgen; make the frame 530-correct before any board run."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powervr_sgx_frame-armhf
+          path: |
+            ${{ runner.temp }}/powervr_sgx_frame-armhf
+            ${{ runner.temp }}/powervr_sgx_frame-armhf.md5
+          if-no-files-found: error
+          retention-days: 14
