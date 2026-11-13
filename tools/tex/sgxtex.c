@@ -360,8 +360,8 @@ void sgxtex_xctx_secondary(uint32_t *p, uint32_t nop_use)
 /*
  * The transfer's pixel event program: tools/gen's pixel_event (STATE.md "The
  * pixel event program"), its ptoff task the end-of-tile program with w1 b23.
- *   in1 & 8 -> ds0[0..1]; in1 & 2 -> in1 & 0x100 ? DOUTA in2, then the
- *   end-of-tile task with the tile position in w1 : the emit task;
+ *   in1 & 8 -> ds0[0..1]; in1 & 2 -> in1 & 0x100 ? the emit task : DOUTA in2,
+ *   then the end-of-tile task with the tile position in w1;
  *   in1 & 4 -> the emit task (ds0[2..3]).
  */
 void sgxtex_xctx_pixel_event(uint32_t *p, uint32_t eot_use, uint32_t emit_use)
@@ -382,24 +382,27 @@ void sgxtex_xctx_pixel_event(uint32_t *p, uint32_t eot_use, uint32_t emit_use)
 		/*  4 */ PDS_HALT,
 		/*  5 */ PDS_AND(S1_IN(1), S2_DS1(3), U_DS1(0x30)),
 		/*  6 */ PDS_TST2(S2_DS1(0x30)),
-		/*  7 */ PDS_BRA_P0(20),
+		/*  7 */ PDS_BRA_P0(22),
 		/*  8 */ PDS_AND(S1_IN(1), S2_DS1(5), U_DS1(0x30)),
 		/*  9 */ PDS_TST2(S2_DS1(0x30)),
-		/* 10 */ PDS_BRA_P0(23),
-		/* 11 */ PDS_MOVS(0x21, 0, 0, 3, PDS_DOUTA),
-		/* 12 */ PDS_SHL(U_IN(0), 3, U_DS1(0x30)),
-		/* 13 */ PDS_AND(S1_DS0(4), S2_DS1(0x30), U_DS0(0x30)),
-		/* 14 */ PDS_OR(S1_DS0(0x30), S2_DS1(6), U_DS0(0x30)),
-		/* 15 */ PDS_SHL(U_IN(1), 20, U_DS1(0x30)),
-		/* 16 */ PDS_AND(S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)),
-		/* 17 */ PDS_OR(S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)),
-		/* 18 */ PDS_MOVS(0x18, 0, 2, 0, PDS_DOUTU),
-		/* 19 */ PDS_HALT,
-		/* 20 */ PDS_AND(S1_IN(1), S2_DS1(4), U_DS1(0x30)),
-		/* 21 */ PDS_TST2(S2_DS1(0x30)),
-		/* 22 */ PDS_BRA_P0(24),
-		/* 23 */ PDS_MOVS(1, 0, 0, 1, PDS_DOUTU),
-		/* 24 */ PDS_HALT,
+		/* 10 */ PDS_BRA_P0(13),
+		/* 11 */ PDS_MOVS(1, 0, 0, 1, PDS_DOUTU),
+		/* 12 */ PDS_HALT,
+		/* 13 */ PDS_MOVS(0x21, 0, 0, 3, PDS_DOUTA),
+		/* 14 */ PDS_SHL(U_IN(0), 3, U_DS1(0x30)),
+		/* 15 */ PDS_AND(S1_DS0(4), S2_DS1(0x30), U_DS0(0x30)),
+		/* 16 */ PDS_OR(S1_DS0(0x30), S2_DS1(6), U_DS0(0x30)),
+		/* 17 */ PDS_SHL(U_IN(1), 20, U_DS1(0x30)),
+		/* 18 */ PDS_AND(S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)),
+		/* 19 */ PDS_OR(S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)),
+		/* 20 */ PDS_MOVS(0x18, 0, 2, 0, PDS_DOUTU),
+		/* 21 */ PDS_HALT,
+		/* 22 */ PDS_AND(S1_IN(1), S2_DS1(4), U_DS1(0x30)),
+		/* 23 */ PDS_TST2(S2_DS1(0x30)),
+		/* 24 */ PDS_BRA_P0(27),
+		/* 25 */ PDS_MOVS(1, 0, 0, 1, PDS_DOUTU),
+		/* 26 */ PDS_HALT,
+		/* 27 */ PDS_HALT,
 	};
 
 	memcpy(p, data, sizeof data);
