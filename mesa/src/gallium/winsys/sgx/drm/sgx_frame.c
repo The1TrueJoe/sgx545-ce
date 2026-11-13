@@ -2651,7 +2651,7 @@ sgxws_upload_vs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
    return va;
 }
 
-/* sop2's fields (hw10, tools/isa/hw_int.py): c1 h6-8 (complement h24), c2
+/* sop2's fields (hw10, docs/ISA.md "sop2"): c1 h6-8 (complement h24), c2
  * h3-5 (h15), a1 h20-21 (h11), a2 h9-10 (h2), cop l18-19, aop l16-17, end
  * h18, dst l21-27 (bank h0-1: o 1, pa 2); the base is
  * `sop2 r0, pa0, o0 [skipinv]` with every factor zero, add.  The alpha
