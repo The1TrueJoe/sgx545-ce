@@ -24,8 +24,7 @@ libsgxwinsys = static_library(
     inc_gallium, inc_gallium_aux, inc_gallium_drivers,
   ],
   c_args : sgx_ws_args,
-  dependencies : [idep_mesautil, dep_libdrm, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_core, idep_sgx_compiler],
+  dependencies : [idep_mesautil, dep_libdrm, idep_sgx_pds, idep_sgx_csb],
   gnu_symbol_visibility : 'hidden',
 )
 
@@ -36,8 +35,7 @@ sgx_frame_test = executable(
   files('sgx_frame_test.c'), sgx_ws_files,
   include_directories : [sgx_ws_inc, inc_src, inc_include],
   c_args : sgx_ws_args,
-  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb,
-                  idep_sgx_core, idep_sgx_compiler],
+  dependencies : [idep_mesautil, dep_libdrm, dep_m, idep_sgx_pds, idep_sgx_csb],
   build_by_default : false,
   install : false,
 )
