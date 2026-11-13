@@ -222,7 +222,7 @@ def main():
     test_render_counter_32bit(code, man)
     test_xfer_counter_32bit(code, man)
     print("all OK")
-    print("(frame-level TA/3D register match vs the DDK: ukernel/run_ours.py TRACE --ddk FW)")
+    print("(the registers a whole frame programs: ukernel/run_ours.py TRACE)")
 
 
 if __name__ == "__main__":
