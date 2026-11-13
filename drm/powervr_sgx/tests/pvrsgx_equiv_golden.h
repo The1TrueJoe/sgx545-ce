@@ -20,7 +20,7 @@ static const struct pvrsgx_equiv_golden pvrsgx_equiv_golden_545[] = {
 	{ "init", 102, 0x0df03815 },
 	{ "start", 82, 0xb260b7dd },
 	{ "send", 20, 0x09fa89bc },
-	{ "recover", 197, 0x4ae5dc12 },
+	{ "recover", 1221, 0xf687a9cc },
 	{ "stop", 26, 0x936dee2f },
 	{ "resume", 82, 0xb260b7dd },
 	{ "ctx", 29, 0xeb46322d },
