@@ -35,7 +35,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libelf-dev libssl-dev cpio ccache sparse musl-tools
+            bc bison flex libelf-dev libssl-dev cpio ccache sparse musl-tools python3-mako
 
       - name: Restore the kernel tarball
         uses: actions/cache@v4
@@ -83,6 +83,12 @@ jobs:
           touch $L/drivers/gpu/drm/gma500/*.c $L/drivers/gpu/drm/powervr_sgx/*.c
           make -C $L ARCH=x86_64 W=1 C=1 drivers/gpu/drm/gma500/ drivers/gpu/drm/powervr_sgx/ 2>&1 | tee w1.log
           if grep -E '(gma500|powervr_sgx)/.*(warning|error):' w1.log; then exit 1; fi
+
+      - name: sgx-asm, from sgx.xml (tools/gen/mkusse.py assembles with it)
+        run: |
+          set -eux
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
 
       - name: Collect the Cedarview set
         run: |

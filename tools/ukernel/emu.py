@@ -3,10 +3,11 @@
 It runs the scalar integer subset the SGX545 microkernel uses: moves, limm,
 bitwise, test, the integer multiply-adds, loads and stores to device memory,
 register-bank access (ldr/str), branches and calls (ba/br/lapc/savl/setl),
-emit (task launch) and the task-ending forms. Instructions are decoded with
-tools/isa/hw.py, so anything the decoder knows can be traced; anything the
-emulator has no semantics for stops the run with an error rather than being
-guessed at.
+emit (task launch) and the task-ending forms. Instructions are decoded by
+sgx-disasm (built from sgx.xml; tools/isa/asm.py finds it through SGX_ASM or
+SGX_DISASM) and the text read back by decode() below, so anything the
+disassembler knows can be traced; anything the emulator has no semantics for
+stops the run with an error rather than being guessed at.
 
 The machine around it is a model, not the hardware:
   Mem    sparse 32-bit device-virtual memory (word granular)
@@ -24,9 +25,8 @@ import re
 import struct
 import sys
 
-# appended, not inserted: tools/isa/dis.py would shadow the standard library's dis
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "isa"))
-import hw  # noqa: E402
+import asm  # noqa: E402
 
 M32 = 0xFFFFFFFF
 
@@ -122,6 +122,52 @@ for _i in range(60, 64):
 
 PRED_RE = re.compile(r"^\((!?)p(\d)\) ")
 
+# test conditions (ISA.md "test"): sign test | zero test << 2 | AND << 4
+COND = {f"s{v & 3}z{v >> 2 & 3}{'a' if v >> 4 else 'o'}": v for v in range(32)}
+COND.update(eq=0x14, ne=0x18, lt=0x19, gt=0x1A, le=0x05, ge=0x06, neg=0x11, pos=0x12)
+
+
+def _signed_imms(name, d):
+    """operand indices whose 7-bit immediates are two's complement (ISA.md:
+    ima16 unless the source format is u8, imae src1 with sgn and src2 unless
+    t2 is u16, ima32 with sgn)"""
+    if name == "ima16":
+        return [i for i, f in ((2, "f1"), (3, "f2")) if d.get(f) != "u8"]
+    if name == "imae":
+        return ([2] if d.get("sgn") else []) + ([3] if d.get("t2") else [])
+    if name == "ima32":
+        return [2, 3] if d.get("sgn") else []
+    return []
+
+
+def decode(text):
+    """sgx-disasm text -> asm.Inst with `d`: the [flags], the mnemonic's
+    .modifiers as flags, and the fields the semantics below read by name
+    (test alu/cond, ld/st am/size, emit tgt, imae t2) """
+    x = asm.parse(text)
+    d = dict(x.flags)
+    n, mods = x.name, x.mods
+    if n == "test" and len(mods) >= 2:
+        d["alu"] = mods[0]
+        d["cond"] = COND[mods[1]]
+        if len(x.ops) == 3:
+            d["nodst"] = 1
+    elif n in ("ld", "st") and len(mods) >= 2:
+        d["am"], d["size"] = mods[0], mods[1]
+    elif n == "emit" and mods and mods[0][:1] == "t":
+        d["tgt"] = int(mods[0][1:])
+    else:
+        for m in mods:
+            d[m] = 1
+    if n == "imae":
+        d["t2"] = {"s16": 1, "u32": 2, "x3": 3}.get(d.get("t2"), 0)
+    for i in _signed_imms(n, d):
+        o = x.ops[i] if i < len(x.ops) else None
+        if o and o["kind"] == "#" and 64 <= o["n"] < 128:
+            o["n"] -= 128
+    x.d = d
+    return x
+
 
 class Task:
     tt = None
@@ -147,6 +193,7 @@ class USSE:
         self.base = base
         self.n = len(code) // 8
         self.dec = [None] * self.n
+        self.text = None           # sgx-disasm's text per instruction, when first needed
         self.mem = mem or Mem()
         self.regs = regs or Regs()
         self.sa = [0] * 128
@@ -167,11 +214,14 @@ class USSE:
             raise EmuError(f"pc {pc:#x} outside the program")
         d = self.dec[pc]
         if d is None:
-            lo, hi = struct.unpack_from("<II", self.code, pc * 8)
-            x = hw.decode(lo, hi)
-            if x is None:
+            if self.text is None or len(self.text) != self.n:
+                self.text = asm.disasm(self.code[:self.n * 8])
+            t = self.text[pc]
+            if not asm.matched(t):
+                lo, hi = struct.unpack_from("<II", self.code, pc * 8)
                 raise EmuError(f"{pc:#06x}: undecodable {hi:08x} {lo:08x}")
-            t = hw.fmt(x)
+            t = asm.body(t)     # bits the form leaves unused don't change what it does
+            x = decode(t)
             m = PRED_RE.match(t)
             pred = None
             if m:
@@ -239,14 +289,8 @@ class USSE:
         landing pad, so a closing `lapc` returns there and the task ends"""
         land = self.n
         # append one `nop [end]` as the return landing pad
-        import struct as _s
-        lo, hi = 0, 0
-        for cand in ("nop [end]",):
-            import sys as _sys, os as _os
-            _sys.path.append(_os.path.join(_os.path.dirname(__file__), "..", "isa"))
-            import asm as _asm
-            hi, lo = _asm.assemble(cand)
-        self.code = self.code + _s.pack("<II", lo, hi)
+        hi, lo = asm.assemble("nop [end]")
+        self.code = self.code + struct.pack("<II", lo, hi)
         self.dec.append(None)
         self.n += 1
         t = Task(pc, pa, poison)
@@ -415,8 +459,7 @@ class USSE:
     }
 
     def op_test(self, t, x, d, ops, pc, text):
-        from hw_pack import ALU
-        an = ALU[d["alu"]]
+        an = d["alu"]
         if an not in self.ALUF:
             raise EmuError(f"{pc:#06x}: test alu {an}")
         if d.get("chan", 0) or d.get("mask", 1) != 1 or d.get("fmt"):
@@ -490,7 +533,7 @@ class USSE:
         self.wr(t, ops[0], (a * b + c) & 0xFFFF)
 
     # memory ---------------------------------------------------------
-    SIZE = {0: 4, 1: 2, 2: 1}
+    SIZE = {"d": 4, "w": 2, "b": 1}
 
     def addrs(self, t, d, base_op, off_op):
         """the byte address of each repeat; pre/post increment update the base
@@ -519,7 +562,7 @@ class USSE:
         return [(base + (off + 1 + k) * sz) & M32 for k in range(n)]
 
     def op_ld(self, t, x, d, ops, pc, text):
-        if d["am"] != 0:
+        if d["am"] != "a":
             raise EmuError(f"{pc:#06x}: ld mode {text}")
         sz = self.SIZE[d["size"]]
         for k, a in enumerate(self.addrs(t, d, ops[1], ops[2])):
@@ -531,7 +574,7 @@ class USSE:
             self.wr(t, ops[0], w, k)
 
     def op_st(self, t, x, d, ops, pc, text):
-        if d["am"] != 0:
+        if d["am"] != "a":
             raise EmuError(f"{pc:#06x}: st mode {text}")
         sz = self.SIZE[d["size"]]
         for k, a in enumerate(self.addrs(t, d, ops[0], ops[1])):

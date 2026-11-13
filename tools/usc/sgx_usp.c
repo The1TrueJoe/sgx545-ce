@@ -4,8 +4,8 @@
  */
 
 /*
- * The DDK 1.7 USP container (docs/ISA.md "The USP container"; usp.py
- * parses it), built from a compiled struct sgx_shader: header, list A
+ * The DDK 1.7 USP container (docs/ISA.md "The USP container"; sgx_usp.py
+ * reads it back), built from a compiled struct sgx_shader: header, list A
  * (iterated inputs), list C (constants in SA), the (empty) secondary update
  * program, masks and the block stream. Header values the compiler doesn't
  * decide are the ones libusc writes for the same kind of shader (corpus c1).
