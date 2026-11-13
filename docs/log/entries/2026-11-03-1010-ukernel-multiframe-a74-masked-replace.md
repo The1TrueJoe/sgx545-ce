@@ -7,10 +7,10 @@ across different draw flags). The DDK does a masked field-REPLACE, each field wi
 its own mask, so srvinit's init bits (0x00208200, outside every mask) persist while
 each field is rewritten (ta3d-state, from the firmware):
 
-- do_ta TA kick (pc 0x0986):   0xa74 = (0xa74 & ~0xf8000000) | cmd+0x14   (TA field b27-31)
-- do_3d 3D start (pc 0x1244):  0xa74 = (0xa74 & ~0x07c00000) | rd+0x13c   (3D field b22-26)
-- k_transfer start (pc 0x13a1):0xa74 = (0xa74 & ~0x07c00000) | cmd+0x194  (3D field, transfer)
-- ta_finished (pc 0x15b7):     0xa74 &= ~0xf                              (clear b0-3 between scenes)
+- do_ta TA kick:   0xa74 = (0xa74 & ~0xf8000000) | cmd+0x14   (TA field b27-31)
+- do_3d 3D start:  0xa74 = (0xa74 & ~0x07c00000) | rd+0x13c   (3D field b22-26)
+- k_transfer start:0xa74 = (0xa74 & ~0x07c00000) | cmd+0x194  (3D field, transfer)
+- ta_finished:     0xa74 &= ~0xf                              (clear b0-3 between scenes)
 
 (The assembler has no immediate-AND, so each is `limm rN, #<mask>; and; or`.)
 Removed 0xa74 from run_ours' PLUMBING set so the oracle now COMPARES the 0xa74

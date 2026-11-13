@@ -14,7 +14,7 @@ answered a hardware register as 0 (the same class of miss each time):
 
 The HW DDK register baseline showed `EUR_CR_BIF_BANK0` (0xc78) go 0x0f -> 0x1f (TA)
 -> 0x101f (3D) during a healthy render, and `CLKGATESTATUS` (0x8) reach 0x000fffa7.
-ta3d-state traced the DDK's slot allocator (pc 0x17ec): it reads DIR_LIST_BASE0
+ta3d-state traced the DDK's slot allocator: it reads DIR_LIST_BASE0
 (0xc84); when that is non-zero and != the context PD (on HW it holds the kernel PD,
 0x01d2x000), it puts the client PD in **slot 1** (DIR_LIST_BASE1 = 0xc38) and routes
 the TA/3D requestors to list 1 via BANK0. Our microkernel instead wrote the client

@@ -222,11 +222,9 @@ PVR_K:(Error): DoMapToUser: Error - VM_INSERT_PAGE failed (-14)</pre>
   <div class="prose">
     <p>Before every shader task, a small undocumented processor called the PDS runs a program. It DMAs vertices, sets up varyings, hands texture state to the texture unit and starts the shader. Its halt word appears as an immediate in four of Intel's libraries, which pointed to one shared code generator that writes each instruction as shifted fields ORed into a base word. The disassembler now reads all 13 captures with no unexplained bit.</p>
   </div>
-  <pre><span class="c">; the triangle's vertex fetch, as dis.py prints it</span>
-<span class="k">mul16</span>       ds1[0x32], in0.lo, ds1[0].lo          <span class="c">; temp = vertex index × stride (8)</span>
-<span class="k">movs.x2.s27</span> doutd, ds0[0], ds0[1], ds1[0x32], …  <span class="c">; DMA 2 dwords from 0x3e51d030 + temp</span>
-<span class="k">movs.cc3</span>    doutu, ds0[2], ds0[3], ds1[1], ds1[1] <span class="c">; start the vertex shader</span>
-<span class="k">halt</span></pre>
+  <div class="prose">
+    <p>The triangle's vertex fetch is four instructions: multiply the vertex index by the stride, DMA the vertex into the attribute registers, start the vertex shader, halt.</p>
+  </div>
   <figure>
     <img src="img/story-03-pds-bits.png" width="1480" height="256" alt="Four frames: a normal triangle, an empty frame, a wrong triangle in the corner, and a solid black frame.">
     <figcaption>One PDS word poked per replay. <b>A:</b> control. <b>B:</b> both address-add bits cleared, so every vertex fetches vertex 0 and nothing is drawn. <b>D:</b> one bit alone, a wrong triangle; the two bits only work together. <b>C:</b> bit 26 of the shader-start word. The GPU never finished.</figcaption>
@@ -290,13 +288,8 @@ PVR_K: HWRecoveryResetSGX: SGX Hardware Recovery triggered
     <img src="img/story-06-fsin-quarter-turns.png" width="720" height="360" alt="Two sine curves with measured points sitting on them.">
     <figcaption><b>Squares:</b> <code>fsin</code> (blue) and <code>fcos</code> (orange) as measured on the CE5300 board. <b>Lines:</b> sin and cos of t·π/2. The largest error over 17 points is 2.1 × 10⁻⁵.</figcaption>
   </figure>
-  <pre><span class="c">// normalize(p.xyz), as the decoder prints it</span>
-<span class="k">fdual.fssq.mov</span> o0, pa2, pa0, pa1  [sd=i2 msrc=src0]  <span class="c">; o0 = x² + y², and i2 = z</span>
-<span class="k">fdual.mov.fmad</span> o3, r0, c52, o0                       <span class="c">; add z²</span>
-<span class="k">frsq</span>           o1, i2                                 <span class="c">; 1 / sqrt</span>
-<span class="k">fmad</span>           o0, pa0, o1, -c48  [rpt=3 moe]         <span class="c">; scale x, y, z in one instruction</span></pre>
   <div class="prose">
-    <p>The first line here exposed a decoder bug: when the dual-issued secondary op is a <code>mov</code>, it takes one source selector, not two. And <code>discard</code> isn't in the compiled shader at all. The driver rebuilds the program into two phases at draw time and swaps a placeholder <code>nop</code> for an alpha-test instruction.</p>
+    <p>The compiled <code>normalize()</code> exposed a decoder bug: when a dual-issued secondary op is a <code>mov</code>, it takes one source selector, not two. And <code>discard</code> isn't in the compiled shader at all. The driver rebuilds the program into two phases at draw time and swaps a placeholder <code>nop</code> for an alpha-test instruction.</p>
   </div>
 </section>
 

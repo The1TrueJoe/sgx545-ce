@@ -1826,69 +1826,8 @@ whole layout is **unconfirmed**; the field meanings beyond the layout are
 
 ### The finalizer
 
-All of this section is **unconfirmed** except where a tag says otherwise. Per
-sampler, the driver hands the finalizer a texture format descriptor, and for
-some formats the texture's width and height.
-
-**Linking and planning**:
-1. Each sample finds its unpack by sample id (the ids pair one to one in the
-   corpus: **capture**).
-2. From the format descriptor and the swizzle, which *chunks* of the texel are
-   needed. A texture format is split into up to 4 chunks; chunk c returns
-   `ceil(bits/32)` dwords at a dword offset in the raw area. Channels can also
-   be constant 0/1, which need no chunk. A YUV-like format (channels 0-2 all
-   from one chunk) adds a FIRH color conversion later.
-3. The final **iterator list** (what GL's PDS generator turns into DOUTIs;
-   PDS.md "DOUTI"): for non-dependent samples it adds sample entries (key:
-   coordinate iterator, dimension, block 5 flag b2) within a PA budget of
-   `0x80 -` header 0x42. Only the **first** needed chunk of a non-dependent
-   sample can come from the PDS (**capture**: one DOUTT per non-dependent
-   sample in PDS.md's tex1/tex2).
-4. Per non-dependent sample: a *plain* iteration of the coordinate is added
-   when some chunk still needs a USSE smp, and the PDS-delivered chunks are
-   placed. Then **texture state**: per (sampler, chunk) 4 consecutive dwords,
-   placed in SA registers after the program's own or, when they don't fit
-   below header 0x3c + 0x3e, in memory. The finalized program carries the
-   table for GL to fill. Dependent samples get the same allocation.
-   (**hardware**, open stack: a dependent sample's 4 state words in SA after
-   the program's constants.)
-
-**Code generation**: per sample (the non-dependent ones first, then the
-dependent ones), then per unpack. For each sample, in order:
-1. If the MOE state at the sample isn't the default: `smbo` 0,0,0,0 and/or
-   `smlsi` 1,1,1,1.
-2. If internal registers are live and some chunk needs a USSE smp: save each
-   live i_n to scratch (`mov`; C10 ones with a `sopwm` + `pck` pair), after a
-   `setfc` if C10 ones are live.
-3. Texture state held in memory: `ld` 4 dwords per chunk into scratch (hi
-   `0xe8800000 | (n-1)<<12`, base = an SA register from the program header +
-   offset; which field: **unconfirmed**), merging adjacent chunks up to 16
-   dwords, then `wdf`.
-4. When the format setup flags the sampler: a coordinate fix-up before the
-   smp: `fsubflr` (wrap) unless a second flag is set, `limm` 1/w (and 0.5/w),
-   a hw 6 multiply-add; the same for h. **Guess**: NPOT/rectangle emulation.
-5. Per needed chunk not delivered by the PDS: copy the template;
-   non-dependent: set h10/h11 from the dimension and src0 = the plain
-   iteration's PA register; set src1 = the chunk's 4 state registers; set the
-   destination to dest + chunk offset. (**hardware**, open stack, for the
-   dependent case: template, src1 and destination filled in this way.)
-6. After the last smp: `wdf drc` (hi `0xf9200000 | drc`, drc = template
-   h0-1). (**hardware**, open stack: the same word after each smp.)
-7. For one texture format (not identified): `and dst, dst, #0x7fffffff` on
-   the result.
-8. Restore the saved internal registers.
-
-Then, per sample: chunks the PDS delivered are found in PA and, if needed,
-moved; the YUV conversion; and **the unpack**: per output channel, by result
-format (block 6, or the forced format): f32: `pck.f32.<src>` with normalize
-(src by the channel's texel format: u8, s8, u16, s16, f16, f32), or `mov` when
-the channel is already f32; f16: `pck.f16.<src>`; c10/u8: pck to c10/u8, or in
-place when the raw data already have that layout (with the swizzle); formats
-6 and 7 take other paths (`limm 0xffff8000`, test). The pck format fields are
-hw 08's (dst h6-8, src h9-11; **oracle**). **Hardware**: `pck.f32.u8 [scale]`
-gives b/255 (hwt_p4) and the open stack unpacks with it and `pck.f16.u8`; the
-u8 in-place path runs in the A/B harness. Finally the MOE state is put back
-(smbo/smlsi/setfc) if it was changed.
+The vendor driver finalizes these blocks into instructions at draw time. Its algorithm
+is not described here; the open compiler emits the sequence below itself.
 
 ### The smp instruction, as the vendor compiler writes it
 

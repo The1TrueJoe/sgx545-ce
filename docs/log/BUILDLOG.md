@@ -131,15 +131,9 @@ shifted fields into literal base words, so a decompile gives the field positions
 `tools/pds/dis.py` now disassembles all 13 captures (117–125 instructions each) with no
 unexplained bit.
 
-This is the triangle's vertex fetch, as `dis.py` prints it, with notes. The GL driver
-generates it at draw time.
-
-```
-mul16 ds1[0x32], in0.lo, ds1[0].lo                     ; temp = vertex index * stride (8)
-movs.x2.s27 doutd, ds0[0], ds0[1], ds1[0x32], ...      ; DMA 2 dwords from 0x3e51d030 + temp into attr 0
-movs.cc3 doutu, ds0[2], ds0[3], ds1[1], ds1[1]         ; start the vertex shader at 0x3c008d80
-halt
-```
+The triangle's vertex fetch, which the GL driver generates at draw time, is four
+instructions: a multiply for the vertex index times the stride, a DMA of the vertex
+into the attribute registers, the start of the vertex shader, and a halt.
 
 The open bits were settled by replaying the frame with one PDS word poked:
 
@@ -226,16 +220,8 @@ A few results the documentation would not have told you:
 
 ![One swatch per register value read back off the screen](img/story-07-hwt-swatches.png)
 
-`normalize()` is where the decoder caught a real bug. The first line is a dual-issued
-instruction whose secondary `mov` takes a single source selector:
-
-```
-fdual.fssq.mov o0, pa2, pa0, pa1  [sd=i2 msrc=src0]   ; o0 = x² + y², and i2 = z
-fdual.mov.fmad o3, r0, c52, o0                         ; add z²
-frsq o1, i2                                            ; 1/sqrt
-smlsi …                                                ; per-operand register increments
-fmad o0, pa0, o1, -c48  [rpt=3 moe]                    ; scale all three components
-```
+`normalize()` is where the decoder caught a real bug: in a dual-issued instruction whose
+secondary op is a `mov`, the secondary takes a single source selector.
 
 `discard` is not in the compiled shader at all. GLSL compiles it to a `test` and a
 placeholder `nop`. At draw time the driver turns the program into two phases and swaps the
