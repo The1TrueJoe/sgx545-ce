@@ -1,5 +1,5 @@
 #!/bin/sh
-# Replay a recorded Minecraft GL trace on the EA3 through gl4es, on the DDK
+# Replay a recorded Minecraft GL trace on the CE5300 board through gl4es, on the DDK
 # or ours: the A/B of the game's own frames, frame for frame.
 #   mcreplay.sh ddk|ours        (INTERVAL=n: a snapshot every n frames, 40)
 # The trace (/opt/minecraft/rootfs/ctest/out/mc-world.trace) is recorded with

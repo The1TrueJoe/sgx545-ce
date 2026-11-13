@@ -11,7 +11,7 @@ and every perf change is measured against them.
 
 ## The suite
 
-`mesa/tests/perf/run-suite.sh old|new` runs on the EA1, after the host has staged:
+`mesa/tests/perf/run-suite.sh old|new` runs on the CE5310 board, after the host has staged:
 - the Debian root and our Mesa (`mesa/tests/x11/README.md`);
 - `/root/m3` (`mc-oldnew.sh`, `x11-up.sh`, `memdump`);
 - the microbenchmark in `/root/perf/bin`;
@@ -63,12 +63,12 @@ in.
 ### Measurements
 
 - **Minecraft, same JVM** (uapi-stream: i386 gl4es + 32-bit Zulu 8 on both
-  GLES2 drivers, EA1 normal boot, medians of 3): DDK 10.7/13.2 FPS
+  GLES2 drivers, CE5310 board normal boot, medians of 3): DDK 10.7/13.2 FPS
   standing/walking, ours 6.6/6.5. The gap is the driver, not the JVM. Ours
   gives the GPU ~300-335 k indices into 195-225 k vertices a frame. The DDK
   has the same 1.5 indices per vertex, batch 16 and vertices-per-task formula
   (ta3d-state's VDM capture), so it doesn't shade fewer duplicates.
-- **perfmicro** (`mesa/tests/perf/sgx_perfmicro.c`, EA1 normal boot, same
+- **perfmicro** (`mesa/tests/perf/sgx_perfmicro.c`, CE5310 board normal boot, same
   source on both; frames a second):
 
 | 1440x960 | DDK | ours | ours/DDK |
@@ -341,9 +341,9 @@ The stages:
 | irq → done | the interrupt thread finding the job done, imports flushed again |
 | done → finished | the hardware fence's callback signaling drm_sched's finished fence, which userspace waits on |
 
-### Baselines (EA3, 2026-11-08)
+### Baselines (CE5300 board, 2026-11-08)
 
-RAM boot of 46c8212 (ea3-v2). Each job type was traced back to back, so the device
+RAM boot of 46c8212 (ce5300-v2). Each job type was traced back to back, so the device
 stays powered: no runtime-PM resume is in these numbers. A render is the frame
 test's 256x256 clear and triangle, and a blit is the blit test's 64x64 copy. No
 imports are mapped, so no flushes are counted. Medians in microseconds, p90 in

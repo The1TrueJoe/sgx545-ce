@@ -1,6 +1,6 @@
-"""Draw test frames with tools/gen/frame on the EA3 and check them against the DDK.
+"""Draw test frames with tools/gen/frame on the CE5300 board and check them against the DDK.
 
-    EA3SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
+    BOARD_SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
 
 For each case the box runs the DDK's probe (tools/probe/probe.c, i386 blob) for
 every triangle on its own, and tools/gen/frame for the whole case. The
@@ -11,7 +11,7 @@ triangle. A single-probe case compares with the probe directly. Writes
 OUTDIR/<case>.bin (frame's render target), <case>-<n>.rgba (the probes),
 <case>.png and results.json; exit status 1 if any case differs.
 
-EA3SH is a command that runs its arguments on the EA3 as root (a shell
+BOARD_SH is a command that runs its arguments on the CE5300 board as root (a shell
 script around ssh); /tmp/gen/frame must be there already. The probe is
 /opt/sgx-i386/bin/probe-st run through /opt/sgx-i386/run.sh.
 """
@@ -65,8 +65,8 @@ CASES = {
 
 
 def sh(cmd, out=None):
-    ea3 = os.environ["EA3SH"]
-    r = subprocess.run([ea3, cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    board = os.environ["BOARD_SH"]
+    r = subprocess.run([board, cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if out is not None:
         with open(out, "wb") as f:
             f.write(r.stdout)

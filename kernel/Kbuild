@@ -30,7 +30,7 @@ ccflags-y += \
 
 # Core selection -- and this follows the MICROKERNEL, not the silicon.
 #
-# The EA-3's SGX reports core revision 1.0.14 (read it with tools/ddk/sgxregs.sh).
+# A CE5300 board's SGX reports core revision 1.0.14 (read it with tools/ddk/sgxregs.sh).
 # The obvious thing is therefore SGX_CORE_REV=1014, and that is wrong.
 #
 # SGX_CORE_REV controls two different things through sgxerrata.h:
@@ -63,7 +63,7 @@ ccflags-y += -DSGX545 -DSUPPORT_SGX545 -DSGX_CORE_REV=$(SGX_CORE_REV)
 # This is the name the kernel registers with DRM and the name userspace passes
 # to drmOpen(). It MUST match the userspace blob set you intend to pair with:
 #
-#   pvrsrvkm  -- Control4's DDK 1.12 blobs, as found on a stock EA-3. Their
+#   pvrsrvkm  -- the vendor's DDK 1.12 blobs, as found on a stock CE5300 board. Their
 #                libsrv_um.so carries this string literally.
 #   PowerVR   -- the DDK default, and what an unmodified 1.7 build registers.
 #

@@ -23,6 +23,6 @@ __pycache__/
 
 # HW-run scratch (never commit; keep in the session scratchpad)
 hwruns/
-ea1-*.sh
-ea1-*.out
+ce5310-*.sh
+ce5310-*.out
 /tools/ddk/regsample

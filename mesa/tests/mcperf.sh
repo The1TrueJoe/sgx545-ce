@@ -1,5 +1,5 @@
 #!/bin/sh
-# EA1: profile WHO in the bench world: perf on the game's java for 20 s, ~85 s after the menu
+# CE5310 board: profile WHO in the bench world: perf on the game's java for 20 s, ~85 s after the menu
 WHO=${1:-sgx}
 R=/opt/minecraft/rootfs
 rm -f $R/ctest/out/mc-$WHO.log $R/ctest/perf-$WHO.data

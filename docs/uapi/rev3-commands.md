@@ -385,7 +385,7 @@ wrong.
    - SUBMIT_JOBS moves to 0x0e (0x0b and 0x0d empty), the DRM minor becomes 3, and
      DEV_QUERY_COMMANDS_GET plus the new limits fields are added;
    - the uAPI suite gets the command cases.
-5. Hardware: the RC suites on the EA3 (dEQP, ff piglit, the hang test, the uAPI
+5. Hardware: the RC suites on the CE5300 board (dEQP, ff piglit, the hang test, the uAPI
    suite) against rev 1's numbers.
 6. **D6 cache ranges (decided, Joseph, 2026-11-12).** Done: the header, `layout.inc`,
    UAPI.md and this section 8, on `wip/uapi-r3-d6` (the kernel builds again once m2's
@@ -403,7 +403,7 @@ wrong.
 Cache maintenance of imports becomes per-job ranges, and sync becomes explicit only (M5).
 The BO list and its reservation fences go.
 
-**Why.** B3 (EA1, 720x480, X down):
+**Why.** B3 (CE5310 board, 720x480, X down):
 
 - simpledrm's DIRTYFB runs at 4.2 ms/MB from its own cached dumb buffer, and at 199 ms/MB
   from our imported write-combined buffer: a flat 5 MB/s of uncached reads.

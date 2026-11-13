@@ -38,7 +38,7 @@ over the render's sync list) is the last completion piece; the DDK walks
 several sync categories from the per-render structure with a counted inner
 loop, and reproducing it needs that structure's field offsets traced. After
 that: the completion-event *waits* (cache-invalidate / DPM-load — ours pulses
-without waiting), then the `srvinit --ours` loader. Only then the EA3, which
+without waiting), then the `srvinit --ours` loader. Only then the CE5300 board, which
 the user has shared for this, step by step (bring-up, replayed frame, es2gears,
 recovery), coordinated with the box's other sessions and recovered with the
-Bench plug. No hardware has been touched.
+remote power switch. No hardware has been touched.

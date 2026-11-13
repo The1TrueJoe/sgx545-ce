@@ -23,7 +23,7 @@
 
 /*
  * System configuration layer for the PowerVR SGX545 in the Intel Atom CE5300
- * family (CE5310 as fitted to the Control4 EA-3).
+ * family (CE5310 silicon).
  *
  * Derived from Intel's Cedarview layer (services4/system/unified) with three
  * structural changes:

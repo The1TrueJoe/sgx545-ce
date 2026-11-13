@@ -1,4 +1,4 @@
-# EVENT_TIMER keeps the EDM alive: frame 1 goes from lockup to render (EA3)
+# EVENT_TIMER keeps the EDM alive: frame 1 goes from lockup to render (CE5300 board)
 
 The terminate lockup_ta is the host watchdog (SGXOSTimer) HWRing the quiescent EDM
 in the TA1->terminate gap: our EDM is purely event-driven, so between the two kicks
@@ -15,7 +15,7 @@ task keeps the EDM running across the inter-kick gap, so the watchdog sees progr
 and does not false-recover. srvinit's init script sets 0xacc=0; our init runs after
 it (and after every HWR/power-up, which zeroes ui32InitStatus) and re-enables it.
 
-## HW result (EA3): frame 1 fixed
+## HW result (CE5300 board): frame 1 fixed
 
 With the fix, frame 1 renders on every boot tried (3/3 in the single-frame diagnostic,
 3/3 in the 10-frame run), whereas the baseline collected frame-1 lockups readily. So
@@ -31,6 +31,6 @@ through to `ba kick` and scans the kernel CCB every tick, racing the doorbell ta
 scan. The fix is to have the timer-only path ack bit 29 and END (never scan the CCB),
 matching the DDK (its timer path only samples AP/lockup). Also k_power POWEROFF/IDLE
 should set 0xacc=0 so SGXPrePowerState's clock-gating poll can complete. Those are the
-next iteration, to be HW-proven on the EA1 (the EA3 is now audio-priority). The gated
+next iteration, to be HW-proven on the CE5310 board (the CE5300 board is now audio-priority). The gated
 UK_TMRLOG diagnostic (hostctl[6], 0xacc read-back, timer-tick counter, 0xb14^0xb20 at
 init and the terminate) ships with this commit as tooling (default binary unchanged).

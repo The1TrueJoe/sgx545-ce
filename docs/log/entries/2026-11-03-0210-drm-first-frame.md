@@ -2,7 +2,7 @@
 
 ![first frame](../img/2026-11-03-0210-drm-first-frame.png)
 
-The first real TA/3D frames through the new DRM driver. EA1 (CE5310, core rev 1.0.14),
+The first real TA/3D frames through the new DRM driver. CE5310 board (CE5310, core rev 1.0.14),
 2026-11-03 ~02:10 UTC, RAM-booted `7.1.8-m2drm` (driver de42b2f), DDK microkernel with the
 kernel heaps shared into the VM (`share_kernel_heaps`, see
 `2026-11-03-0135-drm-first-ta`), nothing flashed, no power-cycle.

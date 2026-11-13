@@ -1,5 +1,5 @@
 #!/bin/sh
-# discard A/B on the EA-1: the DDK (i386 probe, as sgx_varyab.sh runs it) against ours (x86_64 build),
+# discard A/B on the CE5310 board: the DDK (i386 probe, as sgx_varyab.sh runs it) against ours (x86_64 build),
 # a triangle whose right half is discarded (tools/isa/discard's scene), with
 # the depth test and blending around it
 cd /tmp/mesa

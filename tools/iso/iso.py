@@ -10,7 +10,7 @@ each, under `flock /tmp/gpu.lock`, with a watchdog. The batch stops at the first
 times out or makes the kernel log anything about recovery or faults, because the next
 result would mean nothing; the wedge itself is the finding.
 
-Environment: EA3 (host, default 10.0.0.113).
+Environment: BOARD (host).
 """
 import argparse
 import io
@@ -94,7 +94,7 @@ done
 
 
 def ssh(cmd, inp=None, timeout=None):
-    host = os.environ.get("EA3", "10.0.0.113")
+    host = os.environ.get("BOARD", "")
     return subprocess.run(["sshpass", "-p", os.environ["BOX_PASS"], "ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
                            "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", f"root@{host}", cmd],
                           input=inp, capture_output=True, timeout=timeout, check=False)

@@ -15,7 +15,7 @@ command-sourced registers and their word indices are in docs/UKERNEL.md §3.
 
 The transfer was blocked because no capture snapshots a populated TRANSFERCMD.
 It is unblocked now without a capture: `blitest` (tools/tex) builds every
-transfer word from `sgxtex` and was proven on the EA3 pixel-for-pixel, so a
+transfer word from `sgxtex` and was proven on the CE5300 board pixel-for-pixel, so a
 `blitest` run is a faithful transfer. Built it as a **native arm64 binary**
 (like the native `frame-fake`) and gave `libpvr` a snapshot before each
 `SGX_SUBMITTRANSFER` and a UBuf trace of the transfer-context registration, so

@@ -12,7 +12,7 @@
  * the caller places in its own TA state blocks, vertex streams and USSE code
  * (mesa/src/gallium/winsys/sgx does that for draws and clears).  Every
  * value is tagged as docs/STATE.md tags it: [C] proven by a blob-free replay
- * on an EA3, [D] from DDK captures or code, [G] a guess.
+ * on a CE5300 board, [D] from DDK captures or code, [G] a guess.
  */
 
 #ifndef SGXSTATE_H

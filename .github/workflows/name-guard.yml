@@ -1,0 +1,21 @@
+name: name-guard
+on: [push, pull_request]
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: No non-generic hardware references
+        env:
+          PATTERN: ${{ vars.NAME_GUARD_PATTERN }}
+        run: |
+          if [ -z "$PATTERN" ]; then
+            echo "NAME_GUARD_PATTERN repository variable is not set"; exit 1
+          fi
+          # The build workflow may name the board-tree repo via BOARD_TREE_REPO.
+          hits=$(git grep -InE "$PATTERN" -- . ':!.github/workflows/powervr-sgx.yml' || true)
+          if [ -n "$hits" ]; then
+            echo "Non-generic hardware references found; describe the hardware generically:"
+            echo "$hits"; exit 1
+          fi
+          echo "clean"

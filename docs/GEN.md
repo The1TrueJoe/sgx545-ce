@@ -2,7 +2,7 @@
 
 `tools/gen` builds a whole SGX545 frame from GL-level parameters and submits it
 through the native x86_64 services bridge. Nothing is read from a capture,
-and no Imagination library is loaded. On the EA3 (2026-10-28) it draws the
+and no Imagination library is loaded. On the CE5300 board (2026-10-28) it draws the
 probe's reference triangle **pixel for pixel**: the back buffer's md5 is
 `56f8466a…`, the same as the blob's frame. Nine variations also match the
 blob's own rendering of the same scene with 0 pixels different:
@@ -19,7 +19,7 @@ blob's own rendering of the same scene with 0 pixels different:
 | `mkusse.py` | the fixed USSE programs as assembly text, put through `tools/isa/hw.py`'s encoder into `usse_progs.h` at build time |
 | `frame.c` | `frame`: a command-line scene (clear, triangles, depth, viewport, cull) → one frame, dumped |
 | `fakepvr.c` | a stand-in for the kernel driver: `frame-fake` runs the generator on any x86_64 Linux and writes a trace, touching no GPU |
-| `vary.py` | runs `frame` and the blob probe on the EA3 for each test case and compares them |
+| `vary.py` | runs `frame` and the blob probe on the CE5300 board for each test case and compares them |
 | `cmpcap.py` | compares a generated frame's trace with a DDK capture structure by structure, addresses mapped |
 | `build.sh` | builds `frame` and `frame-fake` (static, musl, zig cc) |
 
@@ -31,10 +31,10 @@ capture of the DDK. `mkreplay.py` now reads x86_64 traces.
 ## Running it
 
     tools/gen/build.sh
-    scp tools/gen/frame ea3:/tmp/gen/
-    ea3$ /tmp/gen/frame -o bb.bin                       # the reference triangle
-    ea3$ /tmp/gen/frame -k 0.25,0,0,1 -T -0.8,-0.6,0.2,-0.8,-0.3,0.7:1,0.5,0,1 -o bb.bin
-    ea3$ /tmp/gen/frame -d 0x201 -T x0,y0,x1,y1,x2,y2,-0.5:1,0,0,1 -T ...,0.5:0,0,1,1 -o bb.bin
+    scp tools/gen/frame ce5300:/tmp/gen/
+    ce5300$ /tmp/gen/frame -o bb.bin                       # the reference triangle
+    ce5300$ /tmp/gen/frame -k 0.25,0,0,1 -T -0.8,-0.6,0.2,-0.8,-0.3,0.7:1,0.5,0,1 -o bb.bin
+    ce5300$ /tmp/gen/frame -d 0x201 -T x0,y0,x1,y1,x2,y2,-0.5:1,0,0,1 -T ...,0.5:0,0,1,1 -o bb.bin
     python3 tools/decode/cmpfb.py bb.bin ref.rgba          # BGRA top-first dump vs glReadPixels
 
 The `frame` options:
@@ -64,13 +64,13 @@ reference, and two- and three-frame runs in each of the modes above.
 
 Checking a frame without the GPU:
 
-    ea3$ /tmp/gen/frame-fake -n /dev/null -t fake.bin   # any x86_64 Linux; no GPU touched
+    ce5300$ /tmp/gen/frame-fake -n /dev/null -t fake.bin   # any x86_64 Linux; no GPU touched
     python3 tools/state/decode.py fake.bin --brief         # every state word, annotated
     python3 tools/pds/dis.py fake.bin                      # every PDS program
 
-The test suite (it needs a shell helper that runs commands on the EA3):
+The test suite (it needs a shell helper that runs commands on the CE5300 board):
 
-    EA3SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
+    BOARD_SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
 
 ## The API (what a gallium driver would sit on)
 
@@ -187,7 +187,7 @@ buffers. The generator covers what the frame reads:
 structure by structure: it follows the same pointers in both and maps the
 addresses. Every word is equal except address-bearing ones.
 
-## Hardware results (EA3, 2026-10-28)
+## Hardware results (CE5300 board, 2026-10-28)
 
 `vary.py`'s cases are each checked against the DDK probe (`probe-st`) on the
 same box. Each triangle is drawn by the blob on its own. The prediction
@@ -248,7 +248,7 @@ entry and render details. It reads them when the next client's TA starts.
   both proven since.
 - **The DDK's own cleanup doesn't work here.** It sends
   `SGX_FLUSH_HW_RENDER_TARGET` (cleanup type RT) when it removes a render
-  target. On this srvinit-started EA3 that request timed out ("Wait for
+  target. On this srvinit-started CE5300 board that request timed out ("Wait for
   uKernel to clean up (1) failed"), and the GPU locked up right after. It is
   off by default (`SGXGEN_FLUSH_RT=1` sends it, as does `mkreplay.py
   --flushrt`). Whether the blob-initialized microkernel handles it was not

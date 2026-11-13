@@ -1,6 +1,6 @@
 # The Mesa driver runs on powervr_sgx: dEQP-GLES2 identical to the M0 baseline
 
-M3. EA1 RAM boot of m2-drm c95e32d (CI run 41752797996), DDK microkernel, 2026-11-04
+M3. CE5310 board RAM boot of m2-drm c95e32d (CI run 41752797996), DDK microkernel, 2026-11-04
 01:37 to 02:37 UTC, nothing flashed, no power-cycle. Mesa 26.2.5 with the overlay at um-re
 bf0cd9c.
 

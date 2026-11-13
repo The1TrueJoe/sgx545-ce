@@ -1,6 +1,6 @@
 # Microkernel dropped secondary attributes (the init-stall fix, offline)
 
-Fixes the EA3 init stall (previous entry) offline. The microkernel no longer
+Fixes the CE5300 board init stall (previous entry) offline. The microkernel no longer
 uses secondary attributes at all: the event entry loads the loader-patched
 control-block base into a reserved temp `r17`, and every handler derives the
 host-control / CCB / kernel-CCB pointers from `*(r17+n)` instead of reading them
@@ -15,7 +15,7 @@ match the DDK — the core programming is unchanged, only the pointer plumbing.
 
 Open hardware question: the base now lives in `r17`, so the bare-`DOUTU` event
 context must allocate at least that many temps (the microkernel also uses r16
-and r23). A one-word sentinel on the next EA3 slot confirms it; if the context
+and r23). A one-word sentinel on the next CE5300 board slot confirms it; if the context
 is short on temps, bump the register count in `srvinit`'s `pds_ours` DOUTU.
 
 Note on the emulator guard: the earlier plan was to make the emulator refuse

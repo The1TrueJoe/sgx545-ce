@@ -14,7 +14,7 @@ Every field below carries one of these tags:
   dispatches to one encoder per instruction class) in a Ghidra decompile, and
   confirmed by running that same encoder: `oracle.py` executes it in an i386
   emulator (unicorn), bit-exact against 5045 instructions logged from real
-  compiles on the EA3. Each `check_<area>.py` sweeps the encoder over every
+  compiles on the CE5300 board. Each `check_<area>.py` sweeps the encoder over every
   field value of its forms and checks that `hw.py` decodes the result with
   no unexplained bit and re-encodes it from text. So an encoder field's
   *position and values* are facts; its *meaning* is only as good as the
@@ -23,7 +23,7 @@ Every field below carries one of these tags:
 - **corpus**: what the GLSL compiler emits for a one-feature shader
   (`gen.py`, `gen2.py`, `gen3.py`; corpora `corpus/c1..c3`), or what
   toggling that feature changes.
-- **hardware**: drawn on the EA3 (docs/NOTES.md, the replayer). Most of these come from
+- **hardware**: drawn on the CE5300 board (docs/NOTES.md, the replayer). Most of these come from
   `hwt.py`: a hand-assembled fragment program moves its result to `o0`, which
   the PBE stores unchanged, so one pixel of the back buffer is the 32-bit
   register. Each hardware tag names the test (`hwt_<suite>.py` / test name;
@@ -69,7 +69,7 @@ high word; an instruction is stored low word first.
 | `hw.py`, `hw_*.py` | the instruction forms (framework + one module per group of classes); `decode`, `encode`, `fmt`, `parse` |
 | `dis.py` | disassemble USP binaries (`python3 dis.py corpus/c3`) or hex words (`-x hi lo`) |
 | `asm.py` | assemble dis.py's text; `--check` runs `hwcheck.py`. Also accepts the older fields.json syntax (`asm_fz.py`) for existing callers |
-| `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the EA3 through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
+| `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the CE5300 board through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
 | `hwcheck.py` | every corpus word: has a form, no unexplained bit, text round-trips |
 | `check_float.py`, `check_pack.py`, `check_int.py`, `check_mem.py` | oracle sweeps per area (run from the scratchpad with `LIBUSC=` and the venv that has unicorn) |
 | `usp.py`, `smpblock.py` | the USP container and its texture-sample blocks |
@@ -298,9 +298,9 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
 - `syncend` is h23 and `xsyncend` h12, two separate bits. libusc's extended
   sync-end sets both.
 
-## Hardware checks (hwt.py, EA3, 2026-10-28)
+## Hardware checks (hwt.py, CE5300 board, 2026-10-28)
 
-    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, EA3SH set; see hwt.py)
+    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, BOARD_SH set; see hwt.py)
 
 Each test is a main pixel program poked into the probe frame's replay (main
 program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN
@@ -386,7 +386,7 @@ source's is bank 0 + extension. src0 can't be indexed.
 
 libusc's table of the hardware's special constants
 (`USEASM_NUM_HW_SPECIAL_CONSTS`, regpack.c; **encoder**), every entry read
-back on the EA3 (**hardware**, hwt_p3 `c0`..`c63`: `mov o0, cN`). The table
+back on the CE5300 board (**hardware**, hwt_p3 `c0`..`c63`: `mov o0, cN`). The table
 below is the hardware's; two rows differ from libusc's: **c46 and c47 are the
 F16 pair (1.0, 1.0) = 0x3c003c00 like c45** (libusc says 0.5 and 1.0), and
 c57-c63 exist (libusc stops at c56). c28-c44 are the correctly rounded f32
@@ -625,7 +625,7 @@ secondary computes into internal registers.
 A one-source secondary op reads sb; a two-source one sb and sc; mov reads
 msrc. All **encoder**.
 
-**hardware** (hwt_p12, EA3, 2026-11-08): 113 draws, every one ran with no
+**hardware** (hwt_p12, CE5300 board, 2026-11-08): 113 draws, every one ran with no
 recovery. Inputs were s0 = 2, s1 = 3, s2 = 5 and i0 = 7, i1 = 17, i2 = 19;
 the logs are in `hwt_out/hwt_p12.txt`. The encodings were already settled:
 every corpus fdual word assembles from its text to the same bits
@@ -1088,7 +1088,7 @@ Units:
 
 efo has no end bit (h18-19 is `i`), so it can't be a program's last instruction.
 
-**hardware** (hwt_p12, EA3, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
+**hardware** (hwt_p12, CE5300 board, 2026-11-08), with s0 = 2, s1 = 3, s2 = 5 and
 I0 = 7, I1 = 17 beforehand. The unit wiring in the table above holds:
 - every `m` mode: mode 2's m1 is `s2 * s2`, and mode 3 reads I0/I1 as they
   were before the word;
@@ -1573,7 +1573,7 @@ placeholder), DRC.
 | l7-13, l30-31 | off | any source kind, including #0-127 and indexed | encoder, corpus |
 | l0-6, l28-29 | range | without h6: the unused pattern | encoder |
 
-**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode, EA3
+**Address** (hardware, `tools/iso` sanity_st and p2_ld_ukcode, CE5300 board
 2026-11-02): `ld.a.d` and `st.a.d` with an immediate offset `#i` access the
 dword at base + 4·(i + 1). `st.a.d sa0, #0` wrote word 1 of the buffer whose
 address was in sa0, `#2` wrote word 3, and `ld.a.d #2` read word 3 back.
@@ -2316,7 +2316,7 @@ With feedback, ctx +0x7a0 = 1 (discard on triangles):
   1 p0, 2 p1, 3 !p0, as in depthf). libusc's encoder never sets it
   (`{?h10}` in dis.py); the driver's word has 2 = p1, the keep predicate the
   USP's `test` computed. A pixel whose atst8 predicate is false is killed.
-  **hardware** (EA3, `tools/isa/discard/`, the left half of a triangle kept
+  **hardware** (CE5300 board, `tools/isa/discard/`, the left half of a triangle kept
   by `if (q.x > 0.0) discard`): the stock driver keeps exactly the left
   half (21600 of 43200 pixels); with h9-10 patched to 0 nothing is killed;
   with p0 / !p0 about 83 % / 19 % survive, scattered over both halves (p0
@@ -2336,7 +2336,7 @@ the program**: the discard `nop` stays, and the slot at 0xbc is the temporary
 count returned by the blend builder, so the program's temp count becomes
 0xfb340404 (**driver**).
 
-On hardware (EA3, 2026-10-28; `tools/isa/discard/results.txt`):
+On hardware (CE5300 board, 2026-10-28; `tools/isa/discard/results.txt`):
 
 | draw | stock DDK 1.7 | `depthf_patch.py` | `pt_patch.py` |
 |---|---|---|---|
@@ -2493,7 +2493,7 @@ backed above; this section only collects it.
   keeps skipinv. `d` must not be a register `x` uses: the instances of a
   quad don't all read before any writes, so a neighbor can read the
   derivative instead of `x` (the DDK never overlaps them). **Hardware**
-  (EA3 piglit): with skipinv on everything, dFdx of an iterated value was
+  (CE5300 board piglit): with skipinv on everything, dFdx of an iterated value was
   right while dFdy of an `fmul` and either derivative of an `abs` were
   wrong. With the feeding math skipinv-clear, `glsl-fwidth` passes, and
   every remaining failure was a derivative whose `d` was `x` (`fdsy r4, r4,
@@ -2522,7 +2522,7 @@ backed above; this section only collects it.
 ### Fragment shaders
 
 - **gl_FrontFacing** comes from special register g16: bit 0 is set for a
-  primitive that is clockwise in memory (**capture**, EA-1, one draw shape,
+  primitive that is clockwise in memory (**capture**, CE5310 board, one draw shape,
   y-flipped window; other bits not examined). The DDK reads it with
   `test.and.ne p0, g16, #1` and a per-draw constant in sa9 (only 0 captured;
   nonzero presumably inverts). Our compiler: `xor r, g16, sa[front_sa]; and r,

@@ -1,13 +1,13 @@
 # mesa/: the SGX545 GL driver
 
 An open EGL + OpenGL ES 2.0 driver for the PowerVR SGX545 of the Intel CE5300
-(Control4 EA-1/EA-3). It is a Mesa gallium driver kept as an **overlay on a
+(Intel Atom CE5300/CE5310). It is a Mesa gallium driver kept as an **overlay on a
 pinned Mesa release**. The files here mirror Mesa's tree, so moving them into
 Mesa later is a copy. It needs no Intel or Imagination userspace: frames
 are built from `docs/STATE.md`, `docs/PDS.md` and `docs/ISA.md`, shaders by
 our compiler, and the GPU is started by `srvinit/`.
 
-Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
+Status (CE5300 board, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 
 - `eglinfo` lists `PowerVR SGX545`, OpenGL ES 2.0, Mesa 26.2.5.
 - Clear + triangle through GLES2 are byte-identical to the DDK.
@@ -25,7 +25,7 @@ Status (EA3, 2026-10-28; `docs/log/entries/2026-10-28-1020-mesa-driver.md`):
 | `src/gallium/winsys/sgx/drm/` | the winsys: `sgxws.h` (all the driver sees of it); `sgx_frame.c` (`tools/gen`'s sgxgen as a multi-frame library: rings, PDS programs, TA state, VDM) over a kernel backend, `sgx_powervr_sgx.c` (the powervr_sgx DRM driver) or `sgx_pvr.c` (pvrsrvkm through `libpvr/`, linked in by build.sh); `sgx_frame_test.c` exercises it without Mesa. `docs/WINSYS.md` says which runs when |
 | `src/sgx/compiler/` | the NIR → USSE compiler (`sgx_compiler.h`); its tools and checks are in `tools/usc` |
 | `src/egl/drivers/dri2/platform_fbdev.c` | EGL's `fbdev` platform: window = the framebuffer console |
-| `tests/` | `sgx_eglinfo`, `sgx_es2gears` (es2gears' shaders), `sgx_cpugears` (fixed programs only); `sgx_texab.sh` and `sgx_blendab.sh`, A/B against the DDK on the EA3 |
+| `tests/` | `sgx_eglinfo`, `sgx_es2gears` (es2gears' shaders), `sgx_cpugears` (fixed programs only); `sgx_texab.sh` and `sgx_blendab.sh`, A/B against the DDK on the CE5300 board |
 
 `build.sh` also links `kernel/src` into the tree as `include/sgx-kernel` (the
 bridge structures) and generates the fixed USSE programs from
@@ -73,7 +73,7 @@ LD_LIBRARY_PATH=/tmp/mesa/lib ./sgx_es2gears -n 600
 LD_LIBRARY_PATH=/tmp/mesa/lib PROBE_OUT=f.rgba ./probe       # tools/probe
 ```
 
-The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared EA3, wrap GPU runs in
+The GPU must be up (`srvinit/`, or the DDK's sgxinit). On the shared CE5300 board, wrap GPU runs in
 `flock /tmp/gpu.lock`.
 
 Debugging options follow Mesa's convention: flags in `SGX_DEBUG`
@@ -188,19 +188,19 @@ files carry over upstream:
   `ddk-*` for the DDK. Every entry gets a reason. Skips are only for tests
   that hang the GPU.
 
-## The gl4es ctest suite on the EA3 (milestone d)
+## The gl4es ctest suite on the CE5300 board (milestone d)
 
 gl4es' `tests/` are apitrace traces with reference images (`traces/`, `refs/`,
 the list in its `CMakeLists.txt`). `tests/gl4es-ctest-ab.sh` replays each one
-on the EA3, through the runtime's gl4es (unmodified), once on the DDK and once
+on the CE5300 board, through the runtime's gl4es (unmodified), once on the DDK and once
 on ours, and snapshots the call ctest checks; `tests/ctest_cmp.py` compares the
 two snapshots pixel for pixel and each with gl4es' reference as `tests/test.sh`
 does (`compare -metric AE -fuzz 20%` over its region, under its tolerance).
 
-The rig (the EA1's copy of it is off limits):
+The rig (the CE5310 board's copy of it is off limits):
 
 - An i386 Minecraft runtime (`runtime-i386.tar.xz`) in
-  an ext2 image on the EA3's USB disk (`/media/DISKTEST/mcroot-ext4.img`,
+  an ext2 image on the CE5300 board's USB disk (`/media/DISKTEST/mcroot-ext4.img`,
   loop-mounted at `/opt/minecraft`; the root filesystem has 250 MB free). The
   DDK goes to `/usr/lib/sgx` as `mc-session` puts it there, our i386 build to
   `/usr/lib/sgx`, apitrace's `glretrace` from Debian's `apitrace` package
@@ -214,7 +214,7 @@ The rig (the EA1's copy of it is off limits):
 - `tests/gpuwatch.sh` runs every replay under the GPU lock and kills it at its
   first SGX recovery. On this box one lockup, the DDK's or ours, often leaves
   the microkernel unable to re-initialise ("SGXInitialise failed (24)"), so a
-  suite run checks the GPU before every replay and power-cycles the EA3 when
+  suite run checks the GPU before every replay and power-cycles the CE5300 board when
   the reference scene no longer renders.
 - The GPU is brought up by the DDK's `sgxinit` (as `S95ohc-display` does at
   boot). On a GPU that srvinit started, a process's render-context cleanup
@@ -256,7 +256,7 @@ What the first runs found, all fixed in the driver:
    - drop `LD_PRELOAD=sgx-busidshim.so`, which only the DDK needs;
    - `LIBGL_DEEPBIND` can return to gl4es' default.
 
-   An A/B session runs the game on the EA3 once per stack, compares frames of
+   An A/B session runs the game on the CE5300 board once per stack, compares frames of
    the same saved world and camera, and measures FPS against the DDK's
    ~40-55.
 3. The i386 process talks to the x86_64 kernel through the compat bridge, as

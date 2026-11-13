@@ -25,19 +25,19 @@ gma500 auxiliary device first.
 | render contexts (HW render context, CCB, PB, free list), RT datasets, render jobs from `CMD_RENDER`/`CMD_TA_KICK` | written; **frames render** at 256x256 and 720x480, one-kick and two-kick scenes, any number of processes, and up to three render contexts in one VM sharing its PB (log `2026-11-03-0355-drm-shared-pb-restart`); the TA-flag 0x10 change was not shown to fix anything |
 | `DEV_QUERY` | written |
 | transfer jobs | written; **blits pixel-exact** (copy, upload and readback, box-filtered mip; 360 in a row, interleaved with another process's renders; log `2026-11-03-0405-drm-transfers`) |
-| shader validator (D9) | written; HW-verified on the EA3: every frame, blit and hang test runs its shaders from validated read-only code objects, and the PBE can't write into one (log `2026-11-03-0730-drm-d9-validator`) |
+| shader validator (D9) | written; HW-verified on the CE5300 board: every frame, blit and hang test runs its shaders from validated read-only code objects, and the PBE can't write into one (log `2026-11-03-0730-drm-d9-validator`) |
 | devcoredump on a hang | written; HW-verified (log `2026-11-03-0600-drm-rearm-bisect`) |
-| PRIME | export and import (shmem helpers); a dma-buf maps on the CPU only with `ALLOW_CPU_ACCESS`; imports flushed around the jobs that list them (the SGX doesn't snoop the CPU caches); HW-verified with simpledrm both ways (log `2026-11-04-0100-drm-prime-ea1`) |
+| PRIME | export and import (shmem helpers); a dma-buf maps on the CPU only with `ALLOW_CPU_ACCESS`; imports flushed around the jobs that list them (the SGX doesn't snoop the CPU caches); HW-verified with simpledrm both ways (log `2026-11-04-0100-drm-prime-ce5310`) |
 | open microkernel file (UKERNEL.md 4a), cleanup v2, secure mode | the loader works on hardware: frames render on the open microkernel (um-re e78a17c), with runtime PM, hang recovery and the RT/RC/PB cleanups. Transfers wait on its destination sync (log `2026-11-04-0330-drm-open-ukernel`). KUnit covers the file checks. secure mode HW-verified with the open microkernel f36ddd2: no firmware heap in any client VM, every test right (log `2026-11-08-1858-drm-secure-mode`); cleanup v2 written, no image declares it yet |
 | checkpatch `--strict`, sparse, kernel-doc, `Documentation/gpu/powervr_sgx` | clean, checked in CI |
 | Cedarview (GMA3600/3650) | written, untested on hardware: gma500 publishes the SGX as the auxiliary device `gma500_gfx.sgx` (drm/gma500/0001) and hands over its interrupt; powervr_sgx binds to it (`CONFIG_DRM_POWERVR_SGX_GMA500`). Any core but the CE5300's is refused before a register is written; `probe_only=1` reports the identity and stops |
-| runtime PM | on by default (`runtime_pm=0` turns it off); HW-verified on the EA3 and the EA1 (logs `2026-11-03-0630-drm-runtime-pm-ea3`, `2026-11-03-1700-drm-runtime-pm-ea1`); the first try froze the EA1 (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
+| runtime PM | on by default (`runtime_pm=0` turns it off); HW-verified on the CE5300 board and the CE5310 board (logs `2026-11-03-0630-drm-runtime-pm-ce5300`, `2026-11-03-1700-drm-runtime-pm-ce5310`); the first try froze the CE5310 board (log `2026-11-03-0610-drm-runtime-pm-wedge`) |
 
 First frames (2026-11-03, `docs/log/entries/2026-11-03-0210-drm-first-frame.md`): a clear and a
 triangle from client streams, pixels exact, 10 of 10 frames at 256x256, completion from the
 render-done interrupt.
 
-On the EA1 (2026-11-03, `docs/log/entries/2026-11-03-0100-drm-first-boot.md`): the driver
+On the CE5310 board (2026-11-03, `docs/log/entries/2026-11-03-0100-drm-first-boot.md`): the driver
 probes, starts the DDK microkernel from the kernel, passes the `GETMISCINFO` check, answers
 DEV_QUERY, runs NULL jobs with fences, unloads and reloads cleanly, and passes all 24 uAPI
 tests.
@@ -128,7 +128,7 @@ apart.
 kernel code, kernel data and sync heaps out of every client directory. That is the fix for
 P2 and P3 in `docs/UAPI.md` 7.2: a client task that loads from a firmware address, or a PDS
 program that names code base 15, faults inside its own VM instead of reaching the
-microkernel. **The DDK microkernel does not allow it** (EA1, 2026-11-03, log
+microkernel. **The DDK microkernel does not allow it** (CE5310 board, 2026-11-03, log
 `2026-11-03-0135-drm-first-ta`): on a TA kick it writes `BIF_BANK0 = 0x11`, which moves the
 EDM *and* the TA onto list 1, loads list 1 with the context's directory (HW render context
 word 2), and then fetches its own code at `0x3000b000` through it. With the kernel heaps
@@ -206,10 +206,10 @@ VM so far before it lets go of the pages.
   capability, so the PCI core leaves it in D0. Suspend is `pvrsgx_fw_stop` (the
   microkernel's power-off, the deinit script, the cores held in reset). Resume is the
   restart a reset does, minus its quiesce, because a register read of the gated core
-  froze the SoC (log `2026-11-03-0630-drm-runtime-pm-ea3`). Every restart bumps
+  froze the SoC (log `2026-11-03-0630-drm-runtime-pm-ce5300`). Every restart bumps
   `fw_gen`, so the PB is set up again after a resume as after a reset. While the core is
   stopped, nothing reads its registers: the shared-IRQ handler, debugfs `status` and the
-  devcoredump check `powered`. A render from suspended takes 13-17 ms on the EA3 and the EA1.
+  devcoredump check `powered`. A render from suspended takes 13-17 ms on the CE5300 board and the CE5310 board.
 - On a timeout the driver takes a devcoredump before the restart
   (`/sys/class/devcoredump/devcd<N>/data`, freed by writing to it). It holds the status
   and registers, the host control and TA3D control blocks, the kernel CCB, and the hung
@@ -284,7 +284,7 @@ upload code through the ioctl instead of writing a mapped buffer: a change for M
 
 | | question | test |
 |---|---|---|
-| E1 | Does a PTE with `READONLY` stop a client task's `st`, and a PBE write? | **Yes, both, by a page fault.** `st` (EA1, 2026-11-03): a fragment task's `st` to a page the DDK maps `READONLY` raised a BIF fault at that page, did not land, and the stalled requestor was recovered by HWR (log `2026-11-03-0115-e1-pte-readonly`). PBE (EA3, 2026-11-03, `powervr_sgx_hang -E`): a frame whose end-of-tile program points the PBE at a read-only code object faulted at its first page (`BIF_FAULT` 0x37021002), the job was reset, and all 16384 words of the object read back unchanged (log `2026-11-03-0730-drm-d9-validator`) |
+| E1 | Does a PTE with `READONLY` stop a client task's `st`, and a PBE write? | **Yes, both, by a page fault.** `st` (CE5310 board, 2026-11-03): a fragment task's `st` to a page the DDK maps `READONLY` raised a BIF fault at that page, did not land, and the stalled requestor was recovered by HWR (log `2026-11-03-0115-e1-pte-readonly`). PBE (CE5300 board, 2026-11-03, `powervr_sgx_hang -E`): a frame whose end-of-tile program points the PBE at a read-only code object faulted at its first page (`BIF_FAULT` 0x37021002), the job was reset, and all 16384 words of the object read back unchanged (log `2026-11-03-0730-drm-d9-validator`) |
 | E2 | Which requestor does a USSE instruction fetch use? | Point list 0 and the EDM's list at directories that differ only in the USSE heap, run a task, see which code ran |
 | E3 | Do `ldr`/`str` have other encodings (another class, a DRC form) that reach the register file? | ISA.md coverage of the special class; a hardware check that a fuzzed word outside the known forms cannot read `CORE_ID` |
 

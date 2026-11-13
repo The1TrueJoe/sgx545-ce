@@ -1,7 +1,7 @@
 # tools/usc: the SGX545 shader compiler's tooling
 
 The compiler itself (the part a driver links) is `mesa/src/sgx/compiler/`. This
-directory holds `sgxc`, the checks and the EA3 test harness.
+directory holds `sgxc`, the checks and the CE5300 board test harness.
 
 NIR in, USSE machine code out, with the constants, iterations, samples and branches a
 driver needs (`struct sgx_shader`). It is written in C against Mesa's NIR and is the
@@ -23,7 +23,7 @@ programs for the A/B harness; the compiler itself doesn't know the container.
 | `run_corpus.py`, `layout.py` | compile a `tools/isa/corpus` file |
 | `count.py` | instruction counts, issue slots and temporaries against libusc |
 | `glmark2_corpus.py` | glmark2's shaders as a corpus file (generated from a glmark2 checkout, not committed) |
-| `hw/glt.c`, `hw/uspsub.c`, `hw/hwcmp.py`, `hw/calib.py` | EA3: draw with the DDK's driver running our USPs, against the DDK's own |
+| `hw/glt.c`, `hw/uspsub.c`, `hw/hwcmp.py`, `hw/calib.py` | CE5300 board: draw with the DDK's driver running our USPs, against the DDK's own |
 | `tests/gl4es/` | gl4es's Minecraft 1.7.10 shaders (`fpegen.c` runs gl4es's generator) and `mc_run.py` |
 
 ## Building
@@ -49,7 +49,7 @@ sgxc [-v] [-p] [-u name=k] [-a name=slot] [-s name=unit] -o prefix a.vert b.frag
 `-p` compiles mediump in F16, the way the DDK does. `-u`, `-a` and `-s` pin the constant
 numbers, attribute slots and sampler numbers. The DDK's GLSL compiler chooses those itself
 and keeps them outside the USP, so a USP made to run under the DDK's driver must reproduce
-them. `hw/calib.py` measures them on the EA3, and `layout.py` guesses them. A name prefixed
+them. `hw/calib.py` measures them on the CE5300 board, and `layout.py` guesses them. A name prefixed
 `vert:` or `frag:` applies to one stage only.
 
 ## Checking
@@ -57,7 +57,7 @@ them. `hw/calib.py` measures them on the EA3, and `layout.py` guesses them. A na
 ```
 python3 -I tools/usc/check_enc.py [sgx_isa_test]   # isaspec == hw.py on 4154 corpus words (efo, fdual not assembled)
 LIBUSC=.../libusc.so.1.7.862890 venv/bin/python -I tools/usc/check_out.py OUTDIR
-python3 -I tools/usc/hw/hwcmp.py OUTDIR               # EA3: DDK's USP vs ours, same GL program
+python3 -I tools/usc/hw/hwcmp.py OUTDIR               # CE5300 board: DDK's USP vs ours, same GL program
 ```
 
 `hwcmp.py` runs each test program twice under the DDK's GLES driver. The first run uses

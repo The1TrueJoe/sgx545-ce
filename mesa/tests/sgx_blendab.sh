@@ -1,5 +1,5 @@
 #!/bin/sh
-# blend and colour-mask A/B on the EA-1: the DDK (i386 probe, as sgx_varyab.sh runs it) against ours (x86_64 build),
+# blend and colour-mask A/B on the CE5310 board: the DDK (i386 probe, as sgx_varyab.sh runs it) against ours (x86_64 build),
 # the probe's reference scene drawn with a half-transparent colour over the clear
 cd /tmp/mesa
 printf "#!/bin/sh\\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\\n" > ddk-probe.sh; chmod +x ddk-probe.sh

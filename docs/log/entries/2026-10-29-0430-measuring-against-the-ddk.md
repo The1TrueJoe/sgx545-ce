@@ -60,7 +60,7 @@ fixed (`9e34c55`). fog and c10scale are byte-identical to the DDK.
   so the next frame's TA can run while this frame's 3D does.
 - **Overlap is not safe to try blind.** The entry that renders is picked by a
   frame counter the CPU writes before each kick. Get it wrong and the 3D locks
-  up on the fourth frame, as it did on the EA3 on 2026-10-28.
+  up on the fourth frame, as it did on the CE5300 board on 2026-10-28.
 - **Next: the DDK's own kicks.** A trace of the DDK's game (pvrtrace, no
   snapshots) will show whether it kicks the next frame before the last one is
   done, and how.

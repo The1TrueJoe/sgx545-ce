@@ -1,4 +1,4 @@
-# PWRLOG: the top-6 power-up CRs are all fine at cold frame-1 — power-up register loss not supported (EA3)
+# PWRLOG: the top-6 power-up CRs are all fine at cold frame-1 — power-up register loss not supported (CE5300 board)
 
 ta3d-state's power-up lead: after srvinit ours goes idle -> ACTIVE_POWER -> the
 core powers off; frame 1's kick powers it up via SGXReset's soft-reset-only branch,
@@ -36,4 +36,4 @@ counters 0x724/0x72c, the free-list state 0x618/0x61c/0x628, dir-list 0xc84/0xc3
 0x804, and CLKGATESTATUS 0x8 — a TA hang with valid commands is classically a
 DPM/parameter-buffer or free-list problem, not a config register. Handed to
 ta3d-state to pick the next set / reinterpret. Evidence:
-`scratchpad/ea3-pwrlog.out`, `docs/log/data/2026-11-03-1500-ea3-pwrlog.log`.
+`scratchpad/ce5300-pwrlog.out`, `docs/log/data/2026-11-03-1500-ce5300-pwrlog.log`.

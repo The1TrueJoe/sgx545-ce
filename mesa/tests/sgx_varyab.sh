@@ -1,5 +1,5 @@
 #!/bin/sh
-# varyings A/B on the EA1: the DDK (i386 probe, tools/probe built with zig cc -target x86-linux-gnu.2.17) against ours (x86_64), varyings st packs into shared slots
+# varyings A/B on the CE5310 board: the DDK (i386 probe, tools/probe built with zig cc -target x86-linux-gnu.2.17) against ours (x86_64), varyings st packs into shared slots
 cd /tmp/mesa
 export PROBE_ATTRS=1
 printf "#!/bin/sh\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\n" > ddk-probe.sh; chmod +x ddk-probe.sh

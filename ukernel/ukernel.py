@@ -76,7 +76,7 @@ DPM_LOG = os.environ.get("UK_DPMLOG") == "1"
 # SGXUpdateTimingInfo didn't populate it (write a real period instead); nonzero =>
 # the timer fires but a bare event pass doesn't move 0xb14 (needs a real handler).
 TMR_LOG = os.environ.get("UK_TMRLOG") == "1"
-# Wait-site / hang-stage log (ta3d-state): on the EA1 a render hangs silently (the
+# Wait-site / hang-stage log (ta3d-state): on the CE5310 board a render hangs silently (the
 # ticking EDM hides it) and ~2.2 s later one of our self.wait() poll loops spins
 # forever on a done bit, freezing the EDM — that is the HWR the watchdog catches.
 # Find WHICH wait and WHICH stage. Words: 0x35 = the live wait-site id (nonzero = a
@@ -106,7 +106,7 @@ SA_KCCB = 0x16       # kernel CCB base, control block +0x58. This is the DDK's
                      # keeps it there (tools/ukernel/sgxsim.py, +0x58). (It read
                      # word 16 = +0x40 before — an unset slot — so the kick read
                      # the command from a garbage address and wedged the core;
-                     # EA1 HW-confirmed 2026-11-02.)
+                     # CE5310 board HW-confirmed 2026-11-02.)
 # our one-context scratch (control block words we own; written to memory so the
 # next task's DMA brings them back)
 SC_CTX = 0x30
@@ -144,12 +144,12 @@ SC_XFER = 0x15       # control block +0x54: the transfer context in flight (0 =
 SC_TAFLIGHT = 0x36   # control block +0xd8: 1 while a TA is in flight. Serialises
                      # host kicks. Must be a word srvinit never writes: +0x64
                      # (word 0x19) is clobbered by srvinit's control-block setup on
-                     # the EA3 (k_ta then deferred the very FIRST kick, do_ta never
+                     # the CE5300 board (k_ta then deferred the very FIRST kick, do_ta never
                      # ran, all T3C markers 0). 0x36 is in the microkernel's private
                      # region (0 on every prior dump), next to the sentinel words.
                      # host kicks: a TA kick arriving while this is set is left in
                      # the kernel CCB and re-launched from ta_finished (the DDK
-                     # pattern). Without it a fast host (EA3 p1) delivers kick 2
+                     # pattern). Without it a fast host (CE5300 board p1) delivers kick 2
                      # while TA 1 runs, re-kicking the TA mid-run (lockup_TA) and
                      # making ta_finished act on the wrong command (ta3d-state race).
 PB_TA_LOADED = 0x2e  # control block +0xb8 (the DDK's loaded-PB marker, ta3d+0xb8): the PB
@@ -297,7 +297,7 @@ INV_DONE_3D = 0x4B           # 0x138 bits for the 3D-side invalidate
 SW_EVENT = 0x4000
 DCU_INVALID = 0x400          # EUR_CR_EVENT_STATUS2: a data-cache-unit invalidate
                              # completion. Pending after the kernel's SysFinalise
-                             # on the EA1; the event program must acknowledge it
+                             # on the CE5310 board; the event program must acknowledge it
                              # or it re-triggers forever (docs/UKERNEL.md §2).
 
 # ---- register-programming tables (reg byte-offset, base word index) --------
@@ -487,7 +487,7 @@ class Asm:
         self.wait(0x138, done_mask, CR_EVENT_HOST_CLEAR_0x140)
         self.wait(CR_EVENT_STATUS, 0x04000000, CR_EVENT_HOST_CLEAR)   # MADD done
         # NOTE: the DDK also runs op0xff #side (USE/EDM cache op) here after the MADD
-        # ack. Tried op0xff #0 on the TA side (EA3 2026-11-03): no improvement (10/30
+        # ack. Tried op0xff #0 on the TA side (CE5300 board 2026-11-03): no improvement (10/30
         # frames, still intermittent lockup_TA) — the TA-cache invalidate is not the
         # terminate-kick cause. See the op0x100 flush at ta_finished's tail instead.
 
@@ -497,7 +497,7 @@ class Asm:
         (0x684) or 3D (0x680) load register, and wait for the done event in
         EUR_CR_EVENT_STATUS2 (TA bit 0, 3D bit 1). Without this the free list is
         empty, the parameter buffer's pages-in-use stays 0 and the TA never runs
-        — EA1 HW-confirmed 2026-11-02 (docs/UKERNEL.md §6 "Load the free-list")."""
+        — CE5310 board HW-confirmed 2026-11-02 (docs/UKERNEL.md §6 "Load the free-list")."""
         self.i(f"limm r5, #{mode}")
         self.i(f"str #{CR_DPM_FL_MODE // 4}, r5")
         self.i("limm r5, #1")
@@ -533,7 +533,7 @@ def build(a):
     a.phas()
     # (A `lock #1`/`release #1` task mutex was tried here + in a.end() to serialise
     # concurrent event tasks. It is offline-perfect (race_interleave 358/358) but
-    # HW-NEUTRAL — the EA3 lockup_TA is unchanged with it, so the two-task
+    # HW-NEUTRAL — the CE5300 board lockup_TA is unchanged with it, so the two-task
     # interleave is not what fails on hardware. Held out: a lock held across an
     # HWR reset is an unknown risk, for no measured benefit. See the handover.)
     a.patch(17, "ctlblk")                          # r17 = control block base, reserved for the
@@ -541,7 +541,7 @@ def build(a):
                                                    # attributes, but only after the emit-triggered
                                                    # pds1 DMA sets sa up; this event program is a
                                                    # bare DOUTU with no such DMA, so sa is empty on
-                                                   # entry (writing it here wedges init, EA3 HW-
+                                                   # entry (writing it here wedges init, CE5300 board HW-
                                                    # confirmed 2026-11-02). The handlers therefore
                                                    # derive host-control / CCB pointers from r17.
     # init not done yet (ui32InitStatus == 0) -> init. host control = *(ctlblk + 1).
@@ -559,7 +559,7 @@ def build(a):
     # §2); an earlier version only dispatched STATUS bits, so the invalidate-done the
     # kernel leaves set after SysFinalise re-triggered the event program
     # forever — a storm that starved the SW_EVENT host kick and locked the
-    # core (EA1 HW-confirmed 2026-11-02: STATUS2=0x400, event re-entered 16+
+    # core (CE5310 board HW-confirmed 2026-11-02: STATUS2=0x400, event re-entered 16+
     # times, the kick never serviced). Clearing a bit that is not set is a
     # no-op, so the acknowledge is unconditional and no handler reads it.
     a.i(f"limm r3, #{DCU_INVALID}")
@@ -569,7 +569,7 @@ def build(a):
     # dispatch() below only tests the r2 snapshot and branches, it never clears
     # the serviced bit, and neither did the handlers — so the TA-finish event
     # re-triggered ta_finished forever, starving the next host kick (kick 2's
-    # render) so do_3d was never reached, and the watchdog stormed. EA1 HW-
+    # render) so do_3d was never reached, and the watchdog stormed. CE5310 board HW-
     # confirmed 2026-11-03: ta_finish stuck set at every lockup dump, do_ta +
     # ta_finished markers present but do_3d absent. The DDK acks these in its
     # handlers (str 0x134 = 0x2000 at TA finish, = 0x40000 at 3D end). Clearing an
@@ -590,7 +590,7 @@ def build(a):
     # 0x1 arrives coincident with 0x40000, dispatch runs pixel_done (clears WAIT_3D, ends
     # as WAIT_FREE is still set); leaving 0x1 un-acked lets it re-raise so free_done still
     # runs and completes (else the render would never complete and a deferred cleanup
-    # would stick, EA1 deadlock 2026-11-04).
+    # would stick, CE5310 board deadlock 2026-11-04).
     a.i(f"limm r3, #{0x2000 | 0x40000 | 0x800000 | EVENT_TIMER}")
     a.i("and r3, r2, r3")                          # ack only what the snapshot saw
     a.i(f"str #{CR_EVENT_HOST_CLEAR // 4}, r3")
@@ -600,14 +600,14 @@ def build(a):
     a.dispatch(0x1, "free_done")                   # DPM 3D memory free: rendezvous half 2
     # A timer-only event (bit 29 set, no TA/3D bit above) must NOT scan the kernel
     # CCB: at 1 kHz a CCB scan every tick races the doorbell task's dispatch /
-    # read-offset advance (the two-task RO race — frames 2+ HWR; EA3 2026-11-03).
+    # read-offset advance (the two-task RO race — frames 2+ HWR; CE5300 board 2026-11-03).
     # The DDK's timer path only samples AP/lockup, never the CCB. So a timer event
     # ends via kick_end, which checks idle and re-raises ACTIVE_POWER but dispatches
     # nothing. Real host kicks arrive as their own EUR_CR_EVENT_KICK doorbell events
     # (sgxutils.c SGXScheduleCCBCommand) which leave NO EVENT_STATUS bit, so they
     # fall through (no bit 29) to `kick` and are serviced there. Gating `kick` on
     # SW_EVENT (0x4000) was wrong: that bit is the microkernel->host signal, not an
-    # incoming event (EA1 2026-11-02: GETMISCINFO sat unconsumed, core looping HWR).
+    # incoming event (CE5310 board 2026-11-02: GETMISCINFO sat unconsumed, core looping HWR).
     a.i("limm r4, #0x20000000")
     a.i("test.and.ne p0, r2, r4")                  # timer event (bit 29)?
     if TMR_LOG or WAIT_LOG:
@@ -632,7 +632,7 @@ def build(a):
     # this tick: a doorbell leaves NO EVENT_STATUS bit, so when it lands on the same
     # pass the snapshot shows only bit 29. Ending here without looking strands the
     # command in the kernel CCB until the NEXT doorbell -- which then runs the stale
-    # kick against a context being torn down and FAULTS the EDM (the EA1 WAIT_LOG freeze
+    # kick against a context being torn down and FAULTS the EDM (the CE5310 board WAIT_LOG freeze
     # with waitsite=0, ta3d-state 2026-11-03). So read the kernel CCB: a command waiting
     # (WO != RO) -> `kick` services it; empty -> end directly (NOT via kick_end, whose
     # idle ACTIVE_POWER raise would fire a host IRQ every 1 kHz tick).
@@ -687,7 +687,7 @@ def build(a):
     # quiescent TA1->terminate gap. Our purely event-driven EDM otherwise goes idle
     # between the two kicks, 0xb14 freezes, the watchdog HWRs mid-scene, SGXReset
     # wipes the TA DPM, and the terminate kicks into a wiped free-list -> lockup_ta
-    # (EA3 DPMLOG 2026-11-03: 25 pages live at TA1 finish, 0 at the terminate, with
+    # (CE5300 board DPMLOG 2026-11-03: 25 pages live at TA1 finish, 0 at the terminate, with
     # no power event on 3/5 lockups). srvinit's init script writes 0xacc=0 (line 474);
     # our init runs after it (and after every HWR) and re-enables it. The timer stays
     # on through the whole active window; k_power will gate it on POWEROFF/IDLE as a
@@ -914,7 +914,7 @@ def build(a):
     # advanced (ba kick_end); the timer tick re-dispatches it (WO != RO), and once
     # render_done clears SC_INFLIGHT we complete. The DDK defers its ctx cleanup the same
     # way (ta3d-state pc 0x039d). BOUND the defer so a lost event can never stick the box
-    # (EA1 deadlock 2026-11-04): after CLEANUP_DEFER_MAX ticks, force-complete + log.
+    # (CE5310 board deadlock 2026-11-04): after CLEANUP_DEFER_MAX ticks, force-complete + log.
     a.i(f"ld.a.d r2, r17, #{SC_INFLIGHT} [moe]")
     a.i("wdf")
     a.i("test.and.eq p0, r2, r2")              # no render in flight -> complete now
@@ -1037,7 +1037,7 @@ def build(a):
     # flight, tell the host the microkernel is idle so it can power the core
     # down. Without this the host never powers down a quiescent GPU and its
     # watchdog (SGXOSTimer, which reads 0xb14^0xb20) HWRs the halted, event-
-    # driven EDM — EA1 HW-confirmed 2026-11-02. ui32InterruptFlags is host-
+    # driven EDM — CE5310 board HW-confirmed 2026-11-02. ui32InterruptFlags is host-
     # control word 8; the host gates its power-down on ui32InterruptClearFlags,
     # so re-raising the bit is idempotent and never storms.
     a.i(f"ld.a.d r1, r17, #{SA_KCCBCTL} [moe]")
@@ -1099,7 +1099,7 @@ def build(a):
     # advance the client CCB read offset past this command so the NEXT kick reads
     # its own command, not this one again. The read offset (client CCB control
     # word 1, bytes) is the microkernel's to advance — the client advances the
-    # write offset. Without this, every TA kick re-read kick 1's command: EA1 HW
+    # write offset. Without this, every TA kick re-read kick 1's command: CE5310 board HW
     # 2026-11-03, do_ta ran twice but both reads landed on the 0x71 first kick
     # (T3C-D0 sentinel: count 2, flag 1), so kick 2's 0x62 terminate was never
     # seen, the TA locked up, and do_3d never ran. do_ta has already taken the
@@ -1117,7 +1117,7 @@ def build(a):
     # the full per-scene setup (TA soft reset, PB descriptor, DPM free-list + state
     # load, OTPM, RT region registers, client page directory); re-running any of
     # that on a later kick re-initialises the parameter buffer / free list
-    # mid-scene and HANGS the TA — EA1 HW 2026-11-03 (kick 2: lockup_ta, do_3d
+    # mid-scene and HANGS the TA — CE5310 board HW 2026-11-03 (kick 2: lockup_ta, do_3d
     # unreached). The DDK does only a minimal kick there (ddk-ref "TA kick 2":
     # TE/MTE, invalidate, RD, flags, kick). r13 = 1 on the first kick, 0 on a
     # render kick; each setup block below is gated on it.
@@ -1376,7 +1376,7 @@ def build(a):
     # load is first kick only: it loads the scene's DPM state, and re-running it
     # mid-scene disturbs the in-flight parameter state (the DDK skips it on the
     # render kick). Done before the TE registers, dpm_load's 0x240 done event
-    # never fired and do_ta stalled — EA1 HW sentinels 2026-11-02 — so it stays
+    # never fired and do_ta stalled — CE5310 board HW sentinels 2026-11-02 — so it stays
     # after them (ddk-ref-frame-registers.txt lines 106-131).
     a.invalidate(CR_PDS_INV0, INV_DONE_TA)
     a.i("test.and.eq p0, r13, r13")             # render kick? skip DPM state load
@@ -1482,7 +1482,7 @@ def build(a):
     # bLastInScene / render kick and 0x71 for a first/stream kick (bit 1 set only
     # on 0x62). Command word 0 is the command SIZE (0x2c0, STATE.md §1), not a
     # flags word — testing its bit 0 is always 0, so do_3d never ran on hardware
-    # (EA1 2026-11-03: ta_finished reached, do_3d marker absent). run_ours injects
+    # (CE5310 board 2026-11-03: ta_finished reached, do_3d marker absent). run_ours injects
     # the 3D phase, so it could not catch this.
     a.i(f"ld.a.d r1, r17, #{SC_CMD} [moe]")   # TA command base
     a.i("wdf")
@@ -1498,7 +1498,7 @@ def build(a):
     # DDK re-launches the kick task from its TA-finished handler). If none is
     # pending the dispatch falls through to kick_end and the event ends.
     # NOTE: the DDK runs op0x100 #3 (USE/EDM data-cache flush) in the shared task-end
-    # tail (pc 0x1974) here. Tried it (EA3 2026-11-03): no improvement (10/30 frames,
+    # tail (pc 0x1974) here. Tried it (CE5300 board 2026-11-03): no improvement (10/30 frames,
     # same as op0xff) — the cache ops are not the terminate-kick cause.
     a.i("ba kick")
 
@@ -1525,7 +1525,7 @@ def build(a):
     # flush the tail-pointer cache before the 3D. The last TA's final control-
     # stream terminates and tail pointers sit in the TPC, not yet written back to
     # the parameter buffer; without the flush the ISP walks UNTERMINATED region
-    # streams through valid PB pages and hangs with BIF_FAULT=0 -- EA1 HW
+    # streams through valid PB pages and hangs with BIF_FAULT=0 -- CE5310 board HW
     # 2026-11-03 (lockup_3d, do_3d reached, render_done never). The DDK flushes it
     # first thing on the last-in-scene TA finish (ddk-ref "TA finished (2)"):
     # CR_TPC (0x224) = 0x40000000, wait EUR_CR_EVENT_STATUS bit 10 (0x400,
@@ -1790,7 +1790,7 @@ def build(a):
     # The OLD sync-1 took its address from rd+0x240, which is PAST the 0x1ec
     # render-details structure (STATE.md §6; 0x240 is a TA-command offset, not an
     # rd one) -- a stale/zero pointer the EDM (dir-list 15 = kernel PD) wrote 0
-    # through: a BIF page fault at a client general-heap page or NULL = the EA1
+    # through: a BIF page fault at a client general-heap page or NULL = the CE5310 board
     # render hang (DDK renders 10/10 without that bug; feb0de8). All the DDK's
     # targets are SYNCINFO-heap (0x2d00xxxx), which the kernel PD maps.
     a.i("ld.a.d r2, r0, #56 [moe]")                   # deps = *(rd+0xE0)

@@ -1,10 +1,10 @@
 # sgx545-ce
 
 PowerVR **SGX545** kernel driver (`pvrsrvkm`) for the Intel Atom CE5300/CE5310
-(as fitted to the Control4 EA-1 / EA-3) and Cedarview (GMA 3600/3650) — the same
+(as fitted to CE5300/CE5310 boards) and Cedarview (GMA 3600/3650) — the same
 SGX545 core. Ported to modern Linux from Intel's GPL DDK **1.7.862890**.
 
-> **Status:** runs on hardware. On a Control4 EA-1 the SGX545 renders through this
+> **Status:** runs on hardware. On a CE5310 board the SGX545 renders through this
 > driver to the panel — a GLES triangle, then a full WPE WebKit page — with the
 > i386 DDK userspace driving the x86_64 kernel over the compat layer below.
 
@@ -66,7 +66,7 @@ make KERNELDIR=/path/to/src
 make image && make shell   # dev container: debian + i686 cross gcc + linux 7.1.8
 ```
 
-**Knobs:** `SGX_CORE_REV` (default `1014`, an EA-3; Cedarview is `10131` — same
+**Knobs:** `SGX_CORE_REV` (default `1014`, a CE5300 board; Cedarview is `10131` — same
 errata) · `PVR_MODNAME` (default `pvrsrvkm`, the name userspace `drmOpen()`s).
 Module params: `sgx_core_clock`, `sgx_apm`, `need_sample_cache_workaround`.
 

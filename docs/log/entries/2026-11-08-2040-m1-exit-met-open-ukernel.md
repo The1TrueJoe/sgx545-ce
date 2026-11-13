@@ -1,6 +1,6 @@
 # M1 exit met: dEQP-GLES2 on the open microkernel, no regression
 
-CE5300 board (EA-3), RAM boot of m2-drm 3d0604b (CI run 42510583614), 2026-11-08 19:31 to
+CE5300 board (CE5300 board), RAM boot of m2-drm 3d0604b (CI run 42510583614), 2026-11-08 19:31 to
 20:34 UTC, nothing flashed, no power cycle. powervr_sgx loaded with the open microkernel
 f0dc24d (open-ukernel's "load the DPM free lists once per PB" fix, raw image md5 c87d5b90),
 wrapped with features 0. dmesg: "open microkernel ukernel-plgate-f0dc24d, interface 1.0,

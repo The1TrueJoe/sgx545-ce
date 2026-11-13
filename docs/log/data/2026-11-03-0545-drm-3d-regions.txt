@@ -1,4 +1,4 @@
-# powervr_sgx on the EA1 (DDK microkernel), RAM boot of e0bc846, 2026-11-03 ~05:42 UTC
+# powervr_sgx on the CE5310 board (DDK microkernel), RAM boot of e0bc846, 2026-11-03 ~05:42 UTC
 # insmod powervr_sgx.ko snapshot=1 snap_gap_ms=200; SGXGEN_DUMP_PROGS=1 powervr_sgx_frame -D -n 2 (both frames right)
 # as 0530, with the region headers (rgn0/rgn1, first 0x60 B), tail pointers and TA blocks in render_before/render.
 # render_before is taken as the last kick is written, 200 ms after the first kick: after the first kick's TA,

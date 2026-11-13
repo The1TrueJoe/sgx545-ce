@@ -16,7 +16,7 @@ D="$R/sys/bus/pci/devices/0000:01:02.0"
 mkdir -p "$D" "$R/bin"
 echo 0x8086 > "$D/vendor"
 echo 0x089b > "$D/device"
-# BAR0 0xdc000000-0xdcffffff (16 MB), as read off a stock EA-3.
+# BAR0 0xdc000000-0xdcffffff (16 MB), as read off a stock CE5300 board.
 printf '0x00000000dc000000 0x00000000dcffffff 0x0000000000040200\n' > "$D/resource"
 for _ in 1 2 3 4 5; do
     printf '0x0000000000000000 0x0000000000000000 0x0000000000000000\n' >> "$D/resource"
