@@ -700,9 +700,9 @@ static uint32_t eot_program(struct sgx_ctx *c, struct sgx_surface *s)
  * sgx_frame.c): in1 holds the event flags, in0 the tile position, in2 the word
  * DOUTA forwards.
  *   in1 & 8   -> the ptoff task, done;
- *   in1 & 2   -> with in1 & 0x100: DOUTA in2, then the end-of-tile task, its w1
- *                the tile position (in0 << 3 within 0x3ffff8) | b23 | b22 from
- *                in1 & 4; without: the emit task;
+ *   in1 & 2   -> without in1 & 0x100: DOUTA in2, then the end-of-tile task, its
+ *                w1 the tile position (in0 << 3 within 0x3ffff8) | b23 | b22
+ *                from in1 & 4; with it: the emit task;
  *   in1 & 4   -> the emit task;
  *   otherwise -> done. */
 static uint32_t pixel_event(struct sgx_ctx *c, uint32_t eot, uint32_t *rows)
@@ -729,24 +729,27 @@ static uint32_t pixel_event(struct sgx_ctx *c, uint32_t eot, uint32_t *rows)
 	/*  4 */ CODE(&p, HALT);
 	/*  5 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(3), U_DS1(0x30)));
 	/*  6 */ CODE(&p, TST2(S2_DS1(0x30)));
-	/*  7 */ CODE(&p, BRA_P0(20));
+	/*  7 */ CODE(&p, BRA_P0(22));
 	/*  8 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(5), U_DS1(0x30)));
 	/*  9 */ CODE(&p, TST2(S2_DS1(0x30)));
-	/* 10 */ CODE(&p, BRA_P0(23));
-	/* 11 */ CODE(&p, MOVS(MV, 0x21, 0, 0, 3, 0, 0, DOUTA));	/* in2, ds1[1] */
-	/* 12 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-	/* 13 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(4), S2_DS1(0x30), U_DS0(0x30)));
-	/* 14 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(6), U_DS0(0x30)));
-	/* 15 */ CODE(&p, SHL(U_IN(1), 20, U_DS1(0x30)));
-	/* 16 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)));
-	/* 17 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-	/* 18 */ CODE(&p, MOVS(MV, 0x18, 0, 2, 0, 0, 0, DOUTU));	/* ds1[0], ds0[0x30] */
-	/* 19 */ CODE(&p, HALT);
-	/* 20 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(4), U_DS1(0x30)));
-	/* 21 */ CODE(&p, TST2(S2_DS1(0x30)));
-	/* 22 */ CODE(&p, BRA_P0(24));
-	/* 23 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));	/* emit */
-	/* 24 */ CODE(&p, HALT);
+	/* 10 */ CODE(&p, BRA_P0(13));
+	/* 11 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));	/* emit */
+	/* 12 */ CODE(&p, HALT);
+	/* 13 */ CODE(&p, MOVS(MV, 0x21, 0, 0, 3, 0, 0, DOUTA));	/* in2, ds1[1] */
+	/* 14 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
+	/* 15 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(4), S2_DS1(0x30), U_DS0(0x30)));
+	/* 16 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(6), U_DS0(0x30)));
+	/* 17 */ CODE(&p, SHL(U_IN(1), 20, U_DS1(0x30)));
+	/* 18 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)));
+	/* 19 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
+	/* 20 */ CODE(&p, MOVS(MV, 0x18, 0, 2, 0, 0, 0, DOUTU));	/* ds1[0], ds0[0x30] */
+	/* 21 */ CODE(&p, HALT);
+	/* 22 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(4), U_DS1(0x30)));
+	/* 23 */ CODE(&p, TST2(S2_DS1(0x30)));
+	/* 24 */ CODE(&p, BRA_P0(27));
+	/* 25 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));	/* emit */
+	/* 26 */ CODE(&p, HALT);
+	/* 27 */ CODE(&p, HALT);
 	return pds_emit(&c->pds_pix, &p, rows);
 }
 
