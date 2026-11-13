@@ -198,7 +198,7 @@ struct sgx_ctx {
    unsigned n_sa_phys; /* SA slots used: kept slots, then the bases */
    unsigned mem_dwords;
    unsigned n_mem_bases;
-   uint8_t mem_base_sa[8]; /* SA slot holding block address + 512 * j */
+   uint8_t mem_base_sa[SGX_MAX_MEM_BASES]; /* SA slot: block address + 512 * j */
    uint32_t lit_bits[32];  /* driver_consts: literal slots' values */
    /* ... or, >= 0, the slot is constants k..k+3 packed to BGRA8 (0x12) */
    int lit_packed_k[32];

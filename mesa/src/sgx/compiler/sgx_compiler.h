@@ -178,10 +178,13 @@ struct sgx_varyings {
 
 /* where the driver puts what the program reads (the USP's lists, decoded) */
 #define SGX_SLOT_NONE     0xffff
-/* constant numbers: uniforms from 0, the driver's own above them; 1024 on
- * is the driver's block (docs/GL3.md) */
-#define SGX_MAX_CONST_K   1280
-#define SGX_MAX_CONST_MAP (SGX_MAX_CONST_K + 32) /* every constant and literal */
+/* constant numbers: uniforms from 0 (GL's 1024 components and st's 9 vec4
+ * fit under 1280), the driver's own above them; 1280 on is the driver's
+ * block (docs/GL3.md) */
+#define SGX_MAX_CONST_K    1536
+#define SGX_MAX_CONST_MAP  (SGX_MAX_CONST_K + 32) /* every constant and literal */
+/* memory block bases: 128 dwords each */
+#define SGX_MAX_MEM_BASES  ((SGX_MAX_CONST_MAP + 127) / 128)
 
 struct sgx_const_map {
    uint16_t k; /* constant number: uniform component (sgx_nir.c's numbering) */
@@ -300,7 +303,7 @@ struct sgx_shader {
     * 512 * j. 0: no block */
    unsigned mem_dwords;
    unsigned n_mem_bases;
-   uint8_t mem_base_slot[8];
+   uint8_t mem_base_slot[SGX_MAX_MEM_BASES];
    /* fragment: reads sa[front_sa], so it must be loaded */
    bool uses_front_face;
    uint64_t *code; /* main program, flat (branch targets resolved) */

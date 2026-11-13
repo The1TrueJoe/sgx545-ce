@@ -610,7 +610,7 @@ Agreed with the compiler (2026-11-11):
   lowers `load_vertex_id` to an extra vertex input it gathers itself, the
   original index plus the base vertex.
 - **textureSize, texelFetch:** driver constants in a block above the
-  compiler's 1024 user constants, the base level's width, height and depth
+  user constants, the base level's width, height and depth
   per unit; level sizes are computed in the shader. A texelFetch is a
   dependent sample at (i + 0.5) / size with its own texture state from the
   driver (NEAREST, no mips, clamp, the level's address), never the bound
@@ -621,7 +621,11 @@ Agreed with the compiler (2026-11-11):
   GPU address (`ubo_base_k` = 1080, up to 16); 1096 + u unit u's level
   count (textureQueryLevels); the rest of 1024-1279 reserved. 960 + 4s are the border colors. `SGX_K_TEXSIZE` (1000) and
   `SGX_K_INSTANCE` (1016) move into the block when the driver takes the
-  compiler's `native_integers`. Under `native_integers` the sizes and
+  compiler's `native_integers`. GL 3.x's 1024 uniform components (256 vec4,
+  265 in a vertex program with st's 9) need user constants up to 1059, so
+  the compiler takes numbers up to 1535 (`SGX_MAX_CONST_K` = 1536) and the
+  block is to move to 1280-1535, the border colors, `SGX_K_TEXSIZE` and
+  `SGX_K_INSTANCE` with it. Under `native_integers` the sizes and
   gl_InstanceID are raw integers, otherwise floats. The compiler's
   `sgx_lower_tex` runs first (textureGrad, offsets, rect, 1D, texelFetch); a
   texelFetch sample (`sgx_sample_info.fetch`) gets NEAREST, MIPMAP_NEAREST
