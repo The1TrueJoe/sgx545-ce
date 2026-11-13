@@ -26,7 +26,7 @@ the terminate kick.
 1. Free-list load works (A live), dpm_load preserves it (B live) — ①② excluded.
 2. TA1 allocates 25 pages and leaves them LIVE at its finish (C: 0x700=0x04210019,
    0x724=0x00190019) — TA1 does NOT close the scene, ③ excluded.
-3. 0x740 = 0 — the DDK's kick-1 slot-1 free step (pc 0x0a1d-0x0a4a) is a no-op on
+3. 0x740 = 0 — the DDK's kick-1 slot-1 free step is a no-op on
    this frame, ⑤ excluded.
 4. **The wipe happens AFTER TA1's finish, in our ta_finished→terminate path, and is
    NOT caused by power-off**: the lockup_ta fires with the power-event delta = 0 on
