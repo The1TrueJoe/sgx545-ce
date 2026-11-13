@@ -1268,66 +1268,66 @@ sgxws_hwt_eot(struct sgxws_ctx *c, const uint32_t *words, unsigned n)
       memcpy(c->eot_override, words, c->n_eot_override * 4);
 }
 
-/* The pixel event program (PDS.md "pixel-event program decoded"):
- *   in1 & 8 -> task ds0[0];  in1 & 2 -> (in1 ^ ds1[0]) & 0x100 ? DOUTA +
- * end-of-tile task : task ds0[2]; in1 & 4 -> task ds0[2]. */
+/* The pixel event program, written for the event word the 3D passes it
+ * (STATE.md "The pixel event program"): in1 holds the event flags, in0 the
+ * tile position, in2 the word DOUTA forwards.
+ *   in1 & 8      -> start the ptoff task, done;
+ *   in1 & 2      -> with in1 & 0x100: DOUTA in2 to attribute 0, then the
+ *                   end-of-tile task, its w1 carrying the tile position
+ *                   (in0 << 3 within 0x3ffff8), b23, and b22 from in1 & 4;
+ *                   without: the emit task;
+ *   in1 & 4      -> the emit task;
+ *   otherwise    -> done. */
 static uint32_t
 pixel_event(struct sgxws_ctx *c, uint32_t eot, uint32_t *rows)
 {
+   const struct sgx_pds_reg t1 = DS1(0x30), t0 = DS0(0x30);
    struct pds p = {0};
 
+   /* DS0: the two task DOUTUs as pairs, the end-of-tile w1's masks */
    pds_d0(&p, 0, doutu_w0(c, c->pe_ptoff, false, 0));
    pds_d0(&p, 1, 0);
-   pds_d1(&p, 0, 0);
-   pds_d1(&p, 1, doutu_w0(c, eot, false, 4));
    pds_d0(&p, 2, doutu_w0(c, c->pe_emit, false, 4));
    pds_d0(&p, 3,
           sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true, .b23 = true}));
+   pds_d0(&p, 4, 0x3ffff8); /* the tile position field */
+   pds_d0(&p, 5, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true}));
+   /* DS1: the end-of-tile w0, DOUTA's control, the in1 tests, b23 */
+   pds_d1(&p, 0, doutu_w0(c, eot, false, 4));
+   pds_d1(&p, 1, 0);
    pds_d1(&p, 2, 8);
    pds_d1(&p, 3, 2);
-   pds_d0(&p, 4, 0x100);
-   pds_d0(&p, 5, 0xff8);
    pds_d1(&p, 4, 4);
-   pds_d1(&p, 5, 0);
-   pds_d0(&p, 6, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b23 = true}));
-   pds_d0(&p, 7, 0x003ff000);
-   pds_d1(&p, 6, 0);
-   pds_d1(&p, 7, 0);
-   pds_d0(&p, 8, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b22 = true}));
-   pds_d0(&p, 9, 0);
-   pds_d1(&p, 8, 0);
-   pds_d1(&p, 9, 0);
-   /*  0 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(2), DS1(0x30)));
-   /*  1 */ CODE(&p, pds_tst(DS1(0x30)));
-   /*  2 */ CODE(&p, pds_bra_p0(5));
-   /*  3 */ CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTU));
+   pds_d1(&p, 5, 0x100);
+   pds_d1(&p, 6, sgx_pds_doutu_w1(&(struct sgx_pds_doutu){.b23 = true}));
+
+   enum { EOT_TEST = 5, EMIT_TEST = 20, EMIT = 23, DONE = 24 };
+   /*  0 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(2), t1));
+   /*  1 */ CODE(&p, pds_tst(t1));
+   /*  2 */ CODE(&p, pds_bra_p0(EOT_TEST));
+   /*  3 */ CODE(&p, pds_movs(MV, 0, 0, 0, 1, 0, 0, DOUTU)); /* ptoff */
    /*  4 */ CODE(&p, pds_halt());
-   /*  5 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(3), DS1(0x30)));
-   /*  6 */ CODE(&p, pds_tst(DS1(0x30)));
-   /*  7 */ CODE(&p, pds_bra_p0(24));
-   /*  8 */ CODE(&p, pds_alu(SGX_PDS_OPC_OP0XD_S1, IN(1), DS1(0), DS1(0x30)));
-   /*  9 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(4), DS1(0x30), DS1(0x30)));
-   /* 10 */ CODE(&p, pds_tst(DS1(0x30)));
-   /* 11 */ CODE(&p, pds_bra_p0(27));
-   /* 12 */ CODE(&p,
-                 pds_movs(MV, 0x21, 0, 0, 2, 0, 0, DOUTA)); /* (in2, ds1[0]) */
-   /* 13 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
-   /* 14 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(5), DS1(0x30), DS1(0x30)));
-   /* 15 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, DS0(6), DS1(0x30), DS0(0x30)));
-   /* 16 */ CODE(&p, pds_shl(IN(0), 3, DS1(0x30)));
-   /* 17 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(7), DS1(0x30), DS1(0x30)));
-   /* 18 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
-   /* 19 */ CODE(&p, pds_shl(IN(1), 20, DS1(0x30)));
-   /* 20 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(8), DS1(0x30), DS1(0x30)));
-   /* 21 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, DS0(0x30), DS1(0x30), DS0(0x30)));
-   /* 22 */ CODE(&p, pds_movs(MV, 0x18, 0, 3, 0, 0, 0,
-                              DOUTU)); /* (ds1[1], ds0[0x30], ...) */
-   /* 23 */ CODE(&p, pds_halt());
-   /* 24 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(4), DS1(0x30)));
-   /* 25 */ CODE(&p, pds_tst(DS1(0x30)));
-   /* 26 */ CODE(&p, pds_bra_p0(28));
-   /* 27 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU));
-   /* 28 */ CODE(&p, pds_halt());
+   /*  5 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(3), t1));
+   /*  6 */ CODE(&p, pds_tst(t1));
+   /*  7 */ CODE(&p, pds_bra_p0(EMIT_TEST));
+   /*  8 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(5), t1));
+   /*  9 */ CODE(&p, pds_tst(t1));
+   /* 10 */ CODE(&p, pds_bra_p0(EMIT));
+   /* 11 */ CODE(&p, pds_movs(MV, 0x21, 0, 0, 3, 0, 0, DOUTA)); /* in2, ds1[1] */
+   /* 12 */ CODE(&p, pds_shl(IN(0), 3, t1));
+   /* 13 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(4), t1, t0));
+   /* 14 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, t0, DS1(6), t0));
+   /* 15 */ CODE(&p, pds_shl(IN(1), 20, t1));
+   /* 16 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, DS0(5), t1, t1));
+   /* 17 */ CODE(&p, pds_alu(SGX_PDS_OPC_OR, t0, t1, t0));
+   /* 18 */ CODE(&p, pds_movs(MV, 0x18, 0, 2, 0, 0, 0, DOUTU)); /* ds1[0], t0 */
+   /* 19 */ CODE(&p, pds_halt());
+   /* 20 */ CODE(&p, pds_alu(SGX_PDS_OPC_AND, IN(1), DS1(4), t1));
+   /* 21 */ CODE(&p, pds_tst(t1));
+   /* 22 */ CODE(&p, pds_bra_p0(DONE));
+   /* 23 */ CODE(&p, pds_movs(MV, 1, 0, 0, 1, 0, 0, DOUTU)); /* emit */
+   /* 24 */ CODE(&p, pds_halt());
+   assert(p.nc == 25);
    return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -2694,43 +2694,87 @@ sgxws_blend_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
  * swap it reads r1, r0 (a reverse subtract).  With atrade the two alpha
  * products go to the other register (r0.a = dst.a * Fda, r1.a = src.a * Fsa),
  * after both whole-colour ones, so alpha subtracts the other way round. */
+/* A GL blend factor as one sopwm factor select (ISA.md "sopwm": 0 zero,
+ * 1 asat, 2 s1, 3 s1a, 6 s2, 7 s2a, and a complement bit) and the operand the
+ * instruction reads for it.  The dst-side product is src1 * 0 + o0 * Fd: src1 is
+ * the operand the factor reads, src2 (o0) the tile.  The src-side product is
+ * pa<c> * Fs + src2 * 0: src1 is the source colour, src2 the operand the factor
+ * reads.  So the source colour is s1 on both sides, the tile s2 on both, and
+ * the constant s1 on the dst side and s2 on the src side. */
+enum blend_reads { BLEND_READS_COLOUR, BLEND_READS_TILE, BLEND_READS_CONSTANT };
+
+struct blend_factor_sel {
+   enum blend_reads reads;
+   unsigned sel;
+   bool inv;
+};
+
+static struct blend_factor_sel
+blend_factor_sel(unsigned factor, bool dst_side)
+{
+   enum { ZERO = 0, ASAT = 1, S1 = 2, S1A = 3, S2 = 6, S2A = 7 };
+   const unsigned k = dst_side ? S1 : S2, ka = dst_side ? S1A : S2A;
+   bool inv = factor == SGXWS_BF_ONE || factor == SGXWS_BF_ONE_MINUS_SRC_COLOR ||
+              factor == SGXWS_BF_ONE_MINUS_SRC_ALPHA ||
+              factor == SGXWS_BF_ONE_MINUS_DST_COLOR ||
+              factor == SGXWS_BF_ONE_MINUS_DST_ALPHA ||
+              factor == SGXWS_BF_ONE_MINUS_CONSTANT_COLOR ||
+              factor == SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA;
+
+   switch (factor) {
+   case SGXWS_BF_SRC_COLOR:
+   case SGXWS_BF_ONE_MINUS_SRC_COLOR:
+      return (struct blend_factor_sel){BLEND_READS_COLOUR, S1, inv};
+   case SGXWS_BF_SRC_ALPHA:
+   case SGXWS_BF_ONE_MINUS_SRC_ALPHA:
+      return (struct blend_factor_sel){BLEND_READS_COLOUR, S1A, inv};
+   case SGXWS_BF_DST_COLOR:
+   case SGXWS_BF_ONE_MINUS_DST_COLOR:
+      return (struct blend_factor_sel){BLEND_READS_TILE, S2, inv};
+   case SGXWS_BF_DST_ALPHA:
+   case SGXWS_BF_ONE_MINUS_DST_ALPHA:
+      return (struct blend_factor_sel){BLEND_READS_TILE, S2A, inv};
+   case SGXWS_BF_SRC_ALPHA_SATURATE:
+      /* min(src1.a, 1 - src2.a) = min(As, 1 - Ad) on the src side, the only
+       * side GLES allows it on */
+      return (struct blend_factor_sel){BLEND_READS_TILE, ASAT, false};
+   case SGXWS_BF_CONSTANT_COLOR:
+   case SGXWS_BF_ONE_MINUS_CONSTANT_COLOR:
+      return (struct blend_factor_sel){BLEND_READS_CONSTANT, k, inv};
+   case SGXWS_BF_CONSTANT_ALPHA:
+   case SGXWS_BF_ONE_MINUS_CONSTANT_ALPHA:
+      return (struct blend_factor_sel){BLEND_READS_CONSTANT, ka, inv};
+   default: /* ZERO, and ONE as its complement */
+      return (struct blend_factor_sel){BLEND_READS_COLOUR, ZERO, inv};
+   }
+}
+
 #define BLEND_CONST_INSTS 5
 
 static void
 blend_const_words(const struct sgxws_blend *b, unsigned color_pa, bool end,
                   uint32_t w[BLEND_CONST_INSTS][2])
 {
-   /* per factor: src1 of the dst side and its selectors; src2 of the src side
-    * and its */
-   enum { COLOUR, TILE, CONSTANT };
-   static const uint8_t reads[15] = {
-      COLOUR, COLOUR, COLOUR, COLOUR,   COLOUR,   COLOUR,   TILE,    TILE,
-      TILE,   TILE,   TILE,   CONSTANT, CONSTANT, CONSTANT, CONSTANT};
-   static const uint32_t d_hi[15] = {0,      0x8000, 0x10,   0x8010, 0x18,
-                                     0x8018, 0x38,   0x8038, 0x30,   0x8030,
-                                     0x8,    0x10,   0x8010, 0x18,   0x8018};
-   static const uint32_t s_hi[15] = {0,         0x1000000, 0x80,     0x1000080,
-                                     0xc0,      0x10000c0, 0x1c0,    0x10001c0,
-                                     0x180,     0x1000180, 0x40,     0x180,
-                                     0x1000180, 0x1c0,     0x10001c0};
    const unsigned f[4] = {b->fd, b->fda, b->fs, b->fsa};
 
    for (unsigned i = 0; i < 4; i++) {
-      unsigned k = f[i] < 15 ? f[i] : 0;
+      struct blend_factor_sel fs = blend_factor_sel(f[i] < 15 ? f[i] : 0, i < 2);
       uint32_t lo, hi;
 
       if (i < 2) { /* src1 at l7-13, bank l30-31: pa 2, o 1, sa 3 */
-         lo = reads[k] == COLOUR ? 0x80000000u | color_pa << 7
-              : reads[k] == TILE ? 0x40000000u
-                                 : 0xc0000000u | SGXWS_BLEND_CONST_SA << 7;
+         lo = fs.reads == BLEND_READS_COLOUR ? 0x80000000u | color_pa << 7
+              : fs.reads == BLEND_READS_TILE ? 0x40000000u
+                                             : 0xc0000000u | SGXWS_BLEND_CONST_SA << 7;
          lo |= 0x10200000; /* r1, src2 o0 */
-         hi = d_hi[k] | (i ? 0x90800800 : 0x90807800);
+         /* the factor is c2: h3-5, complement h15 */
+         hi = fs.sel << 3 | (fs.inv ? 1u << 15 : 0) | (i ? 0x90800800 : 0x90807800);
       } else { /* src2 at l0-6, bank l28-29: pa 2, o 1, sa 3 */
-         lo = reads[k] == COLOUR ? 0x20000000u | color_pa
-              : reads[k] == TILE ? 0x10000000u
-                                 : 0x30000000u | SGXWS_BLEND_CONST_SA;
+         lo = fs.reads == BLEND_READS_COLOUR ? 0x20000000u | color_pa
+              : fs.reads == BLEND_READS_TILE ? 0x10000000u
+                                             : 0x30000000u | SGXWS_BLEND_CONST_SA;
          lo |= color_pa << 7 | 0x80000000; /* r0, src1 pa<c> */
-         hi = s_hi[k] | (i == 3 ? 0x90800800 : 0x90807800);
+         /* the factor is c1: h6-8, complement h24 */
+         hi = fs.sel << 6 | (fs.inv ? 1u << 24 : 0) | (i == 3 ? 0x90800800 : 0x90807800);
       }
       if (b->atrade && (i & 1))
          lo ^= 1u << 21; /* r1 <-> r0 */
