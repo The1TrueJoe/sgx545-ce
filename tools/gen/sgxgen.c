@@ -488,7 +488,7 @@ void sgx_dev_close(struct sgx_dev *d)
 /* ------------------------------------------------------------------ context */
 
 #ifndef SGXGEN_DRM
-/* The parameter buffer (FUN_0001e980; STATE.md section 6). */
+/* The parameter buffer (STATE.md section 6). */
 static void ctx_pb(struct sgx_ctx *c, uint32_t bytes)
 {
 	struct sgx_dev *d = c->dev;
@@ -604,7 +604,7 @@ struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 
 	/* VDM state programs that every frame ends with */
 	c->empty_state = pds_secondary(&c->pds_vtx, 0, 0, doutu_w0(c, c->empty_v, 1, 0), 0, NULL);
-	/* TA terminate (VDM type 6, FUN_0001fd60): DOUTA (0x2000, 0), 3 x (0x16000e, 0x100), then
+	/* TA terminate (VDM type 6): DOUTA (0x2000, 0), 3 x (0x16000e, 0x100), then
 	 * a state-emit task for the two attributes [D; the values' meaning G] */
 	c->state_emit[2] = usse_load(c, &usse_state_emit_2, 1);
 	pds_d0(&t, 0, 0x2000);
@@ -670,7 +670,7 @@ static void rt_numbers(struct sgx_rt_numbers *r, uint32_t w, uint32_t h)
 	r->tailptr_bytes = big * big * 4;
 }
 
-/* The end-of-tile program (FUN_000301d0): LIMM r0-r3 = the four PBE words, EMITPIX them,
+/* The end-of-tile program: LIMM r0-r3 = the four PBE words, EMITPIX them,
  * EMITPIX the sideband word (STATE.md section 4) */
 static uint32_t eot_program(struct sgx_ctx *c, struct sgx_surface *s)
 {
@@ -695,62 +695,58 @@ static uint32_t eot_program(struct sgx_ctx *c, struct sgx_surface *s)
 	return p.va;
 }
 
-/* The pixel event program (libsrv_um's static template, PDS.md "pixel-event program decoded"):
- *   in1 & 8 -> task ds0[0];  in1 & 2 -> (in1 ^ ds1[0]) & 0x100 ? DOUTA + end-of-tile task : task ds0[2];
- *   in1 & 4 -> task ds0[2]. */
+/* The pixel event program, written for the event word the 3D passes it
+ * (STATE.md "The pixel event program"; the same program as the Mesa winsys's
+ * sgx_frame.c): in1 holds the event flags, in0 the tile position, in2 the word
+ * DOUTA forwards.
+ *   in1 & 8   -> the ptoff task, done;
+ *   in1 & 2   -> with in1 & 0x100: DOUTA in2, then the end-of-tile task, its w1
+ *                the tile position (in0 << 3 within 0x3ffff8) | b23 | b22 from
+ *                in1 & 4; without: the emit task;
+ *   in1 & 4   -> the emit task;
+ *   otherwise -> done. */
 static uint32_t pixel_event(struct sgx_ctx *c, uint32_t eot, uint32_t *rows)
 {
 	struct pds p = { 0 };
 
-	pds_d0(&p, 0, doutu_w0(c, c->pe_ptoff, 0, 0));
+	pds_d0(&p, 0, doutu_w0(c, c->pe_ptoff, 0, 0));	/* the ptoff task */
 	pds_d0(&p, 1, 0);
-	pds_d1(&p, 0, 0);
-	pds_d1(&p, 1, doutu_w0(c, eot, 0, 4));
-	pds_d0(&p, 2, doutu_w0(c, c->pe_emit, 0, 4));
+	pds_d0(&p, 2, doutu_w0(c, c->pe_emit, 0, 4));	/* the emit task, w1 b22 | b23 */
 	pds_d0(&p, 3, 0x00c00000);
+	pds_d0(&p, 4, 0x003ffff8);			/* the tile position field */
+	pds_d0(&p, 5, 0x00400000);			/* b22 */
+	pds_d1(&p, 0, doutu_w0(c, eot, 0, 4));		/* the end-of-tile task's w0 */
+	pds_d1(&p, 1, 0);				/* DOUTA's control */
 	pds_d1(&p, 2, 8);
 	pds_d1(&p, 3, 2);
-	pds_d0(&p, 4, 0x100);
-	pds_d0(&p, 5, 0xff8);
 	pds_d1(&p, 4, 4);
-	pds_d1(&p, 5, 0);
-	pds_d0(&p, 6, 0x00800000);
-	pds_d0(&p, 7, 0x003ff000);
-	pds_d1(&p, 6, 0);
-	pds_d1(&p, 7, 0);
-	pds_d0(&p, 8, 0x00400000);
-	pds_d0(&p, 9, 0);
-	pds_d1(&p, 8, 0);
-	pds_d1(&p, 9, 0);
+	pds_d1(&p, 5, 0x100);
+	pds_d1(&p, 6, 0x00800000);			/* b23 */
 	/*  0 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(2), U_DS1(0x30)));
 	/*  1 */ CODE(&p, TST2(S2_DS1(0x30)));
 	/*  2 */ CODE(&p, BRA_P0(5));
-	/*  3 */ CODE(&p, MOVS(MV, 0, 0, 0, 1, 0, 0, DOUTU));
+	/*  3 */ CODE(&p, MOVS(MV, 0, 0, 0, 1, 0, 0, DOUTU));	/* ptoff */
 	/*  4 */ CODE(&p, HALT);
 	/*  5 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(3), U_DS1(0x30)));
 	/*  6 */ CODE(&p, TST2(S2_DS1(0x30)));
-	/*  7 */ CODE(&p, BRA_P0(24));
-	/*  8 */ CODE(&p, ALU(OP_XOR, 1, S1_IN(1), S2_DS1(0), U_DS1(0x30)));
-	/*  9 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(4), S2_DS1(0x30), U_DS1(0x30)));
-	/* 10 */ CODE(&p, TST2(S2_DS1(0x30)));
-	/* 11 */ CODE(&p, BRA_P0(27));
-	/* 12 */ CODE(&p, MOVS(MV, 0x21, 0, 0, 2, 0, 0, DOUTA));	/* (in2, ds1[0]) */
-	/* 13 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-	/* 14 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)));
-	/* 15 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(6), S2_DS1(0x30), U_DS0(0x30)));
-	/* 16 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
-	/* 17 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(7), S2_DS1(0x30), U_DS1(0x30)));
-	/* 18 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-	/* 19 */ CODE(&p, SHL(U_IN(1), 20, U_DS1(0x30)));
-	/* 20 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(8), S2_DS1(0x30), U_DS1(0x30)));
-	/* 21 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
-	/* 22 */ CODE(&p, MOVS(MV, 0x18, 0, 3, 0, 0, 0, DOUTU));	/* (ds1[1], ds0[0x30], ...) */
-	/* 23 */ CODE(&p, HALT);
-	/* 24 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(4), U_DS1(0x30)));
-	/* 25 */ CODE(&p, TST2(S2_DS1(0x30)));
-	/* 26 */ CODE(&p, BRA_P0(28));
-	/* 27 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));
-	/* 28 */ CODE(&p, HALT);
+	/*  7 */ CODE(&p, BRA_P0(20));
+	/*  8 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(5), U_DS1(0x30)));
+	/*  9 */ CODE(&p, TST2(S2_DS1(0x30)));
+	/* 10 */ CODE(&p, BRA_P0(23));
+	/* 11 */ CODE(&p, MOVS(MV, 0x21, 0, 0, 3, 0, 0, DOUTA));	/* in2, ds1[1] */
+	/* 12 */ CODE(&p, SHL(U_IN(0), 3, U_DS1(0x30)));
+	/* 13 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(4), S2_DS1(0x30), U_DS0(0x30)));
+	/* 14 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(6), U_DS0(0x30)));
+	/* 15 */ CODE(&p, SHL(U_IN(1), 20, U_DS1(0x30)));
+	/* 16 */ CODE(&p, ALU(OP_ANDOR, 1, S1_DS0(5), S2_DS1(0x30), U_DS1(0x30)));
+	/* 17 */ CODE(&p, ALU(OP_ANDOR, 0, S1_DS0(0x30), S2_DS1(0x30), U_DS0(0x30)));
+	/* 18 */ CODE(&p, MOVS(MV, 0x18, 0, 2, 0, 0, 0, DOUTU));	/* ds1[0], ds0[0x30] */
+	/* 19 */ CODE(&p, HALT);
+	/* 20 */ CODE(&p, ALU(OP_ANDOR, 1, S1_IN(1), S2_DS1(4), U_DS1(0x30)));
+	/* 21 */ CODE(&p, TST2(S2_DS1(0x30)));
+	/* 22 */ CODE(&p, BRA_P0(24));
+	/* 23 */ CODE(&p, MOVS(MV, 1, 0, 0, 1, 0, 0, DOUTU));	/* emit */
+	/* 24 */ CODE(&p, HALT);
 	return pds_emit(&c->pds_pix, &p, rows);
 }
 
@@ -787,7 +783,7 @@ static void background(struct sgx_ctx *c, struct sgx_surface *s)
 #ifdef SGXGEN_DRM
 	(void)b;	/* the kernel fills the block (CREATE_RT_DATASET) */
 #else
-	/* the background object's vertices in the PB (FUN_0001f990): fixed point, offset 0x1000 */
+	/* the background object's vertices in the PB: fixed point, offset 0x1000 */
 	b[5] = f32(1.0f);
 	b[8] = f32(1.0f);
 	b[10] = 0x202;
@@ -1060,12 +1056,12 @@ static void state_block(struct sgx_ctx *c, const uint32_t *blk, uint32_t n, uint
 	CODE(&p, HALT);
 	va = pds_emit(&c->pds_vtx, &p, &rows);
 	vdm(c, 0x40000000 | va >> 4);
-	/* info (libGLESv2 0x397f0): rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
+	/* info: rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
 	vdm(c, rows << 26 | ((c->vdm_counter + 0x2000) | 0x2020400 | ((n + 3) >> 2)));
 	c->vdm_counter = (c->vdm_counter + 1) & 3;
 }
 
-/* Vertices per USSE task and index batch (libGLESv2 FUN_00017c20 limits them by the
+/* Vertices per USSE task and index batch (the GL driver limits them by the
  * USSE attribute space; the two values here fit every draw seen [G]). */
 static uint32_t vertices_per_task(uint32_t out_dwords)
 {
