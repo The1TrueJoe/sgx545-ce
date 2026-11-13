@@ -8,7 +8,7 @@ bytes.
 | file | what |
 |---|---|
 | `ukernel.py` | the microkernel in USSE assembly (entries as labels; register-programming tables = docs/UKERNEL.md §7) |
-| `build.py` | assembles it with `tools/isa/asm.py` into the binary srvinit loads, plus a JSON manifest of entry byte-offsets |
+| `build.py` | assembles it with `sgx-asm` (built from `sgx.xml` by `sgx-asm.sh`; `SGX_ASM` points at it) into the firmware image, plus a JSON manifest of entry byte-offsets |
 | `test_emu.py` | drives each entry through the offline emulator (`tools/ukernel/`) and asserts docs/UKERNEL.md's behaviour; no GPU, no trace |
 | `run_ours.py` | runs ours through a whole frame and **diffs the core registers it programs against the DDK's**, per phase |
 | `build.sh` | build + test |
@@ -82,7 +82,7 @@ or just the assemble step:
 
     python3 ukernel/build.py [OUT.bin] [MANIFEST.json]
 
-The build is **reproducible**: the assembler is pure Python with no timestamps,
+The build is **reproducible**: `sgx-asm` and the label resolution write no timestamps,
 host paths or randomness, so the same source produces byte-identical `.bin` and
 `.json` on any machine and any supported Python. `UK_BUILD_ID` sets the manifest
 `build_id` (default `dev`); set it to the commit for a release. The outputs

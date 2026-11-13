@@ -84,7 +84,7 @@ jobs:
           [ -z "$RELEASE" ] || v=v$RELEASE
           mkdir -p fw
           # Shipped firmware is assembled through sgx-asm (built from sgx.xml), the
-          # clean-room path, not the asm.py oracle. Reuse the mesa tree the Build
+          # clean-room path. Reuse the mesa tree the Build
           # step unpacked (it carries our mesa/src overlays).
           . mesa/VERSION
           mesa/tests/isa-standalone/standalone.sh "$PWD/build/mesa/mesa-$MESA_VERSION" "$PWD/isa-build"

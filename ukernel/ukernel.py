@@ -152,10 +152,8 @@ class Asm:
         self.lines.append(("i", text))
 
     def raw(self, hi, lo):
-        """emit a raw instruction word (hi/lo 32-bit halves) the text assembler
-        can't encode -- the USE/EDM cache ops op0xff/op0x100 (ISA.md undecoded,
-        the DDK's data-cache flush/invalidate). hw.py decodes them; asm.py can't
-        emit them yet, so we inject the exact words read from the DDK."""
+        """emit a pre-encoded instruction word (hi/lo 32-bit halves) the text
+        assembler can't encode. Nothing in the image uses it."""
         self.lines.append(("raw", (hi, lo)))
 
     def patch(self, reg, name):
