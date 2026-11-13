@@ -2,8 +2,9 @@
 
     python3 tools/gen/mkusse.py > tools/gen/usse_progs.h
 
-Every program is source text in tools/isa's syntax (what isa/dis.py prints), put
-through isa/hw.py's encoder: no instruction word is copied from a capture.
+Every program is source text in the USSE notation (mesa/src/sgx/isa/README.md),
+put through sgx-asm (tools/isa/asm.py; set SGX_ASM): no instruction word is
+copied from a capture.
 `name:` starts a label; `@name` as the first operand of `phas.i` is that
 label's instruction index from the program start. The C side adds the
 program's offset from its code heap (in instructions) to those words, which
@@ -19,7 +20,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "isa"))
-import hw  # noqa: E402
+import asm  # noqa: E402
 
 # The prologue every vertex/state task the DDK builds starts with. test.and.ne
 # of #0 and #0 never sets p0, so the predicated load never runs; kept because
@@ -154,15 +155,20 @@ def assemble(lines):
             labels[ln[:-1]] = len(insts)
         else:
             insts.append(ln)
-    words, reloc = [], []
+    text, reloc = [], []
     for i, ln in enumerate(insts):
         if "@" in ln:
             lab = ln.split("@", 1)[1].split(",", 1)[0].strip()
             ln = ln.replace("@" + lab, f"#{labels[lab]}")
             reloc.append(i)
-        lo, hi = hw.encode(hw.parse(ln))
-        x = hw.decode(lo, hi)
-        if x is None or x.unknown:
+        text.append(ln)
+    try:
+        enc = asm.assemble_lines(text)
+    except ValueError as e:
+        sys.exit(f"mkusse: {e}")
+    words = []
+    for ln, (lo, hi), back in zip(text, enc, asm.disasm(enc)):
+        if not asm.ok(back):
             sys.exit(f"mkusse: {ln!r} does not round-trip")
         words += [lo, hi]
     return words, reloc
