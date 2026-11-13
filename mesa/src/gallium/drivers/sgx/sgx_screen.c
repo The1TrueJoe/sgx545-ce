@@ -52,6 +52,14 @@ static const struct debug_named_value sgx_drv_debug_options[] = {
     "a sample is merged only into the previous iteration of its own set, not of another"},
    {"nozls", SGX_DEBUG_NO_ZLS,
     "depth and stencil not kept across renders (no ZLS load or store)"},
+   {"glsl130", SGX_DEBUG_GLSL130,
+    "GLSL 1.30 and native integers, and so EXT_texture_integer (RG32 and RGBA32 sample wrong until the compiler fetches them word by word): for the GL 3.0 work's tests"},
+   {"nomrt", SGX_DEBUG_NO_MRT,
+    "one colour buffer, as before MRT (a draw a pass a buffer, H1: a second PBE emit hangs the GPU)"},
+   {"ubo", SGX_DEBUG_UBO,
+    "uniform blocks, 12 a stage of 64 KiB, each copied into the frame for a draw (ARB_uniform_buffer_object; with glsl130 only, as their offsets are integers): until that passes on a board"},
+   {"zlsdump", SGX_DEBUG_ZLS_DUMP,
+    "after every flushed render with a depth buffer, wait for it and write its ZLS buffer to /tmp/sgx-zls-<n>-<w>x<h>-<format>-s<samples>.bin (the layout test, docs/TEX.md section 7)"},
    {"flushrt", SGX_DEBUG_FLUSH_RT,
     "send SGX_FLUSH_HW_RENDER_TARGET at a target's destruction (hangs a srvinit microkernel)"},
    DEBUG_NAMED_VALUE_END};
@@ -103,6 +111,14 @@ sgx_get_screen_fd(struct pipe_screen *pscreen)
    return sgx_screen(pscreen)->fd;
 }
 
+/* uniform blocks: SGX_DEBUG=ubo, and only with the native integers */
+static bool
+sgx_ubos(void)
+{
+   return (sgx_drv_debug & (SGX_DEBUG_UBO | SGX_DEBUG_GLSL130)) ==
+          (SGX_DEBUG_UBO | SGX_DEBUG_GLSL130);
+}
+
 static void
 sgx_init_shader_caps(struct pipe_screen *pscreen)
 {
@@ -123,7 +139,11 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
       caps->max_control_flow_depth = 32;
       /* ISA.md: 16 attributes, 10 texture coordinate sets on the SGX545 */
       caps->max_inputs = s == MESA_SHADER_VERTEX ? f->vs_inputs : f->fs_inputs;
-      caps->max_outputs = s == MESA_SHADER_VERTEX ? f->vs_outputs : 1;
+      /* fragment: one output a pass, so as many as colour buffers (MRT a
+       * pass a buffer) */
+      caps->max_outputs = s == MESA_SHADER_VERTEX     ? f->vs_outputs
+                          : sgx_drv_debug & SGX_DEBUG_NO_MRT ? 1
+                                                             : 4;
       /* Constants live in SA registers, sa9 (sa10 in a vertex program) to
        * sa127.  How many uniforms that holds depends on the program: only
        * the constants it uses go there, and mediump ones two to a register
@@ -135,11 +155,18 @@ sgx_init_shader_caps(struct pipe_screen *pscreen)
        * size on top, which leaves GL's 512 components to the application */
       caps->max_const_buffer0_size =
          (s == MESA_SHADER_VERTEX ? 128 + 9 : 128) * 4 * sizeof(float);
-      caps->max_const_buffers = 1;
+      /* and 12 uniform blocks (SGX_DEBUG=ubo, with the native integers: the
+       * float path makes a block offset a float): the compiler's ld.a.d
+       * from the address the driver puts in constant SGX_K_UBO + n, of a
+       * copy the winsys makes in the frame (sgxws_ubo) */
+      caps->max_const_buffers = sgx_ubos() ? 1 + SGX_MAX_UBOS : 1;
       /* u[i]: indexed from SA, or from the block when the array doesn't fit
        * (without it GLSL selects over the whole array, a load per element) */
       caps->indirect_const_addr = true;
       caps->max_temps = f->gl_max_temps;
+      /* GLSL 1.30's integers (the compiler's native_integers): only with
+       * SGX_DEBUG=glsl130 until the GL 3.0 work passes on a board */
+      caps->integers = !!(sgx_drv_debug & SGX_DEBUG_GLSL130);
       if (s == MESA_SHADER_FRAGMENT) {
          caps->max_texture_samplers = caps->max_sampler_views = f->samplers;
          /* mediump and lowp in 16 bits (F16 iteration, fmad16, F16/C10
@@ -184,9 +211,20 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
            screen->info->rt_max_height);
    caps->max_texture_cube_levels = f->max_cube_levels;
    caps->max_texture_3d_levels = 0;
-   caps->max_render_targets = 1;
-   caps->glsl_feature_level = 120;
-   caps->glsl_feature_level_compatibility = 120;
+   /* uniform blocks (SGX_DEBUG=ubo): 64 KiB, as most drivers have (GL 3.1
+    * asks 16 KiB, and st takes ARB_uniform_buffer_object at no less; piglit's
+    * generated blocks reach 32 KiB). Each is copied into the frame
+    * (sgx_draw.c record_ubo) and read by ld.a.d from any offset, so the
+    * size costs nothing a program doesn't bind, and any offset will do */
+   if (sgx_ubos())
+      caps->max_constant_buffer_size = SGX_UBO_BYTES;
+   caps->constant_buffer_offset_alignment = 16;
+   /* a pass a colour buffer (sgx_draw_vbo); SGX_DEBUG=nomrt for one */
+   caps->max_render_targets = sgx_drv_debug & SGX_DEBUG_NO_MRT ? 1 : 4;
+   /* 1.30 with SGX_DEBUG=glsl130 (native integers, EXT_texture_integer),
+    * for the GL 3.0 work's tests on a board */
+   caps->glsl_feature_level = caps->glsl_feature_level_compatibility =
+      sgx_drv_debug & SGX_DEBUG_GLSL130 ? 130 : 120;
    caps->essl_feature_level = 100;
    caps->max_viewports = 1;
    caps->vendor_id = screen->info->pci_vendor;
@@ -216,6 +254,17 @@ sgx_init_screen_caps(struct pipe_screen *pscreen)
     * needn't be copied into upload buffers first (u_vbuf's copy would be a
     * second memcpy of every client-array draw) */
    caps->user_vertex_buffers = true;
+   /* one draw per instance, gl_InstanceID in a vertex constant, instanced
+    * elements fetched per instance from their first one on (sgx_draw_vbo) */
+   caps->vs_instanceid = caps->vertex_element_instance_divisor =
+      caps->start_instance = true;
+   /* split at the restart index on the CPU (sgx_draw_vbo) */
+   caps->primitive_restart = caps->primitive_restart_fixed_index = true;
+   /* attachments of different sizes: a render is their intersection, and a
+    * depth buffer's ZLS buffer is loaded only at the size that stored it
+    * (begin_frame); st turns ARB_framebuffer_object on with it, and with it
+    * GL_RENDERBUFFER_SAMPLES (docs/GL3.md) */
+   caps->mixed_framebuffer_sizes = true;
    /* linear render targets, over powervr_sgx */
    if (sgxws_dev_has_dmabuf(sgx_screen(pscreen)->dev))
       caps->dmabuf = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
@@ -226,9 +275,19 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
                         enum pipe_texture_target target, unsigned sample_count,
                         unsigned storage_sample_count, unsigned usage)
 {
-   if (sample_count > 1 ||
-       MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+   if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
       return false;
+   /* 4x: 2x2 samples a pixel, resolved by the PBE as each tile is stored
+    * (STATE.md "Multisampling (4x)"), when the kernel makes 4x targets.  A
+    * colour or depth/stencil renderbuffer only: its samples don't outlive
+    * the render, so nothing samples or displays them */
+   if (sample_count > 1) {
+      if (sample_count != 4 ||
+          sgx_screen(pscreen)->info->rt_max_samples < 4 ||
+          target != PIPE_TEXTURE_2D ||
+          (usage & ~(PIPE_BIND_RENDER_TARGET | PIPE_BIND_DEPTH_STENCIL)))
+         return false;
+   }
 
    if (usage &
        (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {
@@ -248,7 +307,24 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           /* stored as RGBA8, drawn into with R (and G) written alone
            * (sgx_tex_bpp): GL_ARB_texture_rg, which X's glamor needs on GLES
            * for its 8-bit pixmaps (glyphs, masks) */
-          format != PIPE_FORMAT_R8_UNORM && format != PIPE_FORMAT_R8G8_UNORM)
+          format != PIPE_FORMAT_R8_UNORM && format != PIPE_FORMAT_R8G8_UNORM &&
+          /* integer, of 32 bits or less: the program packs the word
+           * (rt_packed); reachable once EXT_texture_integer is */
+          format != PIPE_FORMAT_R8G8B8A8_UINT &&
+          format != PIPE_FORMAT_R8G8B8A8_SINT &&
+          format != PIPE_FORMAT_R8_UINT && format != PIPE_FORMAT_R8_SINT &&
+          format != PIPE_FORMAT_R8G8_UINT && format != PIPE_FORMAT_R8G8_SINT &&
+          format != PIPE_FORMAT_R32_UINT && format != PIPE_FORMAT_R32_SINT &&
+          /* RG32 and RGBA32: a pass a channel into their planes; under
+           * SGX_DEBUG=glsl130 until that passes on a board */
+          !((sgx_drv_debug & SGX_DEBUG_GLSL130) &&
+            (format == PIPE_FORMAT_R32G32B32A32_UINT ||
+             format == PIPE_FORMAT_R32G32B32A32_SINT ||
+             format == PIPE_FORMAT_R32G32_UINT ||
+             format == PIPE_FORMAT_R32G32_SINT)))
+         return false;
+      /* integer render targets aren't multisampled */
+      if (sample_count > 1 && util_format_is_pure_integer(format))
          return false;
    }
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
@@ -277,6 +353,15 @@ sgx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
     * sampled in place through the strided layout */
    if ((usage & PIPE_BIND_SAMPLER_VIEW) && !sgx_tex_format(format) &&
        !(usage & PIPE_BIND_RENDER_TARGET))
+      return false;
+   /* RG32 and RGBA32 are stored for the compiler's word-by-word fetches
+    * (sgx_tex_raw32), which it doesn't do yet: not sampled until it does */
+   if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) > 1 &&
+       !(sgx_drv_debug & SGX_DEBUG_GLSL130))
+      return false;
+   /* a raw 32-bit format is sampled NEAREST only, the one level */
+   if ((usage & PIPE_BIND_SAMPLER_VIEW) && sgx_tex_raw32(format) &&
+       target == PIPE_TEXTURE_CUBE)
       return false;
    switch (target) {
    case PIPE_BUFFER:

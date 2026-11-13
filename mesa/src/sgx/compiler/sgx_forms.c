@@ -42,7 +42,7 @@
 #define S1T {SGX_ROLE_SRC1, SRC_FILES, false, false, true}
 #define S2T {SGX_ROLE_SRC2, SRC_FILES, false, false, true}
 #define PD  {SGX_ROLE_PDST, SGX_FILE_BIT(SGX_FILE_PRED)}
-/* ima16's src2 negate */
+/* ima16's and ima32's src2 negate (an integer negate) */
 #define S2N {SGX_ROLE_SRC2, SRC_FILES, true}
 /* efo: no extension bit on dst and src1; i<n> in dst, src0 and
  * src1 is r(124 + n); negates on all three sources, no format select */
@@ -106,16 +106,23 @@ static const struct sgx_form_info {
    PCK(C10, F32),
    PCK(C10, C10),
    PCK(F32, S16),
+   PCK(F32, U16),
+   PCK(U16, F32),
+   PCK(F32, F32),
    [SGX_OP_TEST] = {"TEST", SGX_ISA_OPC_TEST, 3, {PD, S1T, S2T}},
    [SGX_OP_TESTMASK] = {"TESTMASK", SGX_ISA_OPC_TESTMASK, 3, {D, S1T, S2T}},
    [SGX_OP_AND] = {"AND", SGX_ISA_OPC_AND, 3, {D, S1, S2}},
    [SGX_OP_OR] = {"OR", SGX_ISA_OPC_OR, 3, {D, S1, S2}},
    [SGX_OP_XOR] = {"XOR", SGX_ISA_OPC_XOR, 3, {D, S1, S2}},
+   [SGX_OP_SHL] = {"SHL", SGX_ISA_OPC_SHL, 3, {D, S1, S2}},
+   [SGX_OP_SHR] = {"SHR", SGX_ISA_OPC_SHR, 3, {D, S1, S2}},
+   [SGX_OP_ASR] = {"ASR", SGX_ISA_OPC_ASR, 3, {D, S1, S2}},
    [SGX_OP_SOPWM] = {"SOPWM", SGX_ISA_OPC_SOPWM, 3, {D, S1, S2}},
    [SGX_OP_SOP3] = {"SOP3", SGX_ISA_OPC_SOP3, 4, {D, S0, S1, S2}},
    [SGX_OP_SOP3L] = {"SOP3L", SGX_ISA_OPC_SOP3L, 4, {D, S0, S1, S2}},
    [SGX_OP_IMA16] = {"IMA16", SGX_ISA_OPC_IMA16, 4, {D, S0, S1, S2N}},
    [SGX_OP_IMAE] = {"IMAE", SGX_ISA_OPC_IMAE, 4, {D, S0, S1, S2}},
+   [SGX_OP_IMA32] = {"IMA32", SGX_ISA_OPC_IMA32, 4, {D, S0X, S1, S2N}},
    [SGX_OP_SMP] = {"SMP", SGX_ISA_OPC_SMP, 4, {D1, S0X, S1, S2}},
    [SGX_OP_LD] = {"LD", SGX_ISA_OPC_LD, 3, {D1, S0X, S1}},
    [SGX_OP_LIMM] = {"LIMM", SGX_ISA_OPC_LIMM, 2, {D, IMM}},
@@ -328,6 +335,18 @@ sgx_form_set(struct sgx_isa_instr *instr, unsigned form, unsigned id, int32_t v)
       break;
    case SGX_FLD_MSRC:
       instr->msrc = v;
+      break;
+   case SGX_FLD_INV:
+      instr->inv = v;
+      break;
+   case SGX_FLD_ROT:
+      instr->rot = v;
+      break;
+   case SGX_FLD_HI:
+      instr->hi = v;
+      break;
+   case SGX_FLD_RND:
+      instr->rnd = v;
       break;
    default:
       UNREACHABLE("unknown field");

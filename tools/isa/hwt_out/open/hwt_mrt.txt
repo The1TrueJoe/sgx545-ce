@@ -1,0 +1,25 @@
+eot_own                  0x11111111  ok rt2 00000000
+eot_twice_k0_f0          error flush -110
+eot_twice_k1_f0          NO RESULT
+eot_twice_k2_f0          NO RESULT
+eot_twice_k4_f0          NO RESULT
+eot_twice_k8_f0          NO RESULT
+eot_twice_k16_f0         NO RESULT
+eot_twice_k32_f0         NO RESULT
+eot_twice_k0_f1          NO RESULT
+eot_twice_k1_f1          NO RESULT
+eot_twice_k2_f1          NO RESULT
+eot_twice_k4_f1          NO RESULT
+eot_twice_k8_f1          NO RESULT
+eot_twice_k16_f1         NO RESULT
+eot_twice_k32_f1         NO RESULT
+eot_twice_k0_f3          NO RESULT
+eot_twice_k1_f3          NO RESULT
+eot_twice_k2_f3          NO RESULT
+eot_twice_k4_f3          NO RESULT
+eot_twice_k8_f3          NO RESULT
+eot_twice_k16_f3         NO RESULT
+eot_twice_k32_f3         NO RESULT
+eot_rt2_only             0x00000000   rt2 11111111
+eot_rt_twice             error flush -110
+eot_twice_phas           error flush -110

@@ -1113,12 +1113,22 @@ rt_numbers(struct sgxws_rt_numbers *r, uint32_t w, uint32_t h)
 struct sgxws_rt *
 sgxws_rt_create(struct sgxws_ctx *c, uint32_t w, uint32_t h)
 {
-   struct sgxws_rt *s = calloc(1, sizeof(*s));
+   return sgxws_rt_create_samples(c, w, h, 1);
+}
 
-   if (!s)
+struct sgxws_rt *
+sgxws_rt_create_samples(struct sgxws_ctx *c, uint32_t w, uint32_t h,
+                        unsigned samples)
+{
+   struct sgxws_rt *s;
+
+   if ((samples != 1 && samples != 4) || samples > c->dev->info.rt_max_samples)
+      return NULL;
+   if (!(s = calloc(1, sizeof(*s))))
       return NULL;
    s->w = w;
    s->h = h;
+   s->samples = samples;
    rt_numbers(&s->n, w, h);
    if (c->dev->kif->rt_init(c, s)) {
       free(s);
@@ -1162,17 +1172,20 @@ eot_program(struct sgxws_ctx *c)
    uint32_t pbe[4], side;
    struct sgxws_ptr p;
 
-   for (unsigned i = 0; i < c->n_eot; i++) {
+   for (unsigned i = 0; i < c->n_eot && !c->n_eot_override; i++) {
       const struct sgxws_eot *e = &c->eot[i];
 
       if (e->va == t->va && e->stride == t->stride && e->w == s->w &&
           e->h == s->h && e->pbe_format == t->pbe_format &&
-          e->t1_layout == t->t1_layout) {
+          e->t1_layout == t->t1_layout && e->samples == MAX2(t->samples, 1) &&
+          e->raw == t->raw) {
          pool->last_seq = sgxws_next_seq(c);
          return e->code;
       }
    }
-   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < 7 * 8 + USSE_ALIGN) {
+   unsigned bytes = c->n_eot_override ? c->n_eot_override * 4 : 7 * 8;
+
+   if (c->n_eot == SGXWS_EOT_CACHE || ring_room(pool) < bytes + USSE_ALIGN) {
       /* the other pool, emptied once the last render that ran code from it is
        * done */
       unsigned other = !c->eot_cur;
@@ -1191,6 +1204,13 @@ eot_program(struct sgxws_ctx *c)
       c->n_eot = 0;
    }
 
+   if (c->n_eot_override) {
+      /* a hardware test's, not cached: the next test brings its own */
+      p = ring_alloc(pool, c->n_eot_override * 4, USSE_ALIGN);
+      memcpy(p.p, c->eot_override, c->n_eot_override * 4);
+      pool->last_seq = sgxws_next_seq(c);
+      return p.va;
+   }
    p = ring_alloc(pool, 7 * 8, USSE_ALIGN);
    sgx_pack(&pbe[0], PBE_STATE_WORD0, w0)
    { /* clip min [D] */
@@ -1203,13 +1223,18 @@ eot_program(struct sgxws_ctx *c)
       w1.y_max = s->h - 1;
    }
    sgx_pack(&pbe[2], PBE_STATE_WORD2, w2) /* b15 [D] */
-      w2.pitch = (t->stride - 1) >> 1;    /* [C] */
+   {
+      w2.pitch = (t->stride - 1) >> 1; /* [C] */
+      /* 4x: the 2x2 samples resolved into the pixel (STATE.md
+       * "Multisampling (4x)", ms4: 016f8000 -> 416f8000) */
+      w2.downscale = t->samples > 1 ? 1 : 0;
+   }
    sgx_pack(&pbe[3], PBE_STATE_WORD3, w3) /* [D] */
       w3.address = SGX_DEV_ADDR(t->va);
    sgx_pack(&side, PBE_SIDEBAND, sb)
    {
       sb.format = t->pbe_format;
-      sb.dither = true;
+      sb.dither = !t->raw;
       sb.twiddled = t->t1_layout == SGX_TEXSTATE_LAYOUT_TWIDDLED;
    }
    p.p[0] = 0; /* phas.i #0, #0 [wait=7] */
@@ -1227,10 +1252,20 @@ eot_program(struct sgxws_ctx *c)
       .h = s->h,
       .pbe_format = t->pbe_format,
       .t1_layout = t->t1_layout,
+      .samples = MAX2(t->samples, 1),
+      .raw = t->raw,
       .code = p.va,
    };
    pool->last_seq = sgxws_next_seq(c);
    return p.va;
+}
+
+void
+sgxws_hwt_eot(struct sgxws_ctx *c, const uint32_t *words, unsigned n)
+{
+   c->n_eot_override = words ? MIN2(n, SGXWS_EOT_OVERRIDE_WORDS) : 0;
+   if (words)
+      memcpy(c->eot_override, words, c->n_eot_override * 4);
 }
 
 /* The pixel event program (PDS.md "pixel-event program decoded"):
@@ -1398,6 +1433,7 @@ sgxws_begin(struct sgxws_ctx *c, struct sgxws_rt *rt,
    c->draws = 0;
    c->ta_kicks = c->seg_draws = 0;
    c->last_blk_n = c->last_u_va = 0;
+   c->n_ubo_copy = c->ubo_copy_next = 0;
    c->n_use = 0;
    c->bias_set = false;
    c->bias_units = 0;
@@ -1863,6 +1899,46 @@ mte_ctrl(const struct sgxws_state *st)
 
 static int kick_ta(struct sgxws_ctx *c);
 
+/* uniform block i of a draw in this frame's general ring: a copy of its own,
+ * or the one an earlier draw of the frame made of the same key (sgxws_ubo);
+ * sgxws_draw has made the room (mem_bytes). Its address */
+static uint32_t
+ubo_copy(struct sgxws_ctx *c, const struct sgxws_draw *d, unsigned i,
+         const uint32_t *done)
+{
+   const struct sgxws_ubo *b = &d->ubos[i];
+   struct sgxws_ptr p;
+
+   /* the vertex and fragment programs reading one block */
+   for (unsigned j = 0; j < i; j++)
+      if (d->ubos[j].data == b->data && d->ubos[j].bytes == b->bytes &&
+          d->ubos[j].key == b->key)
+         return done[j];
+   if (b->key)
+      for (unsigned j = 0; j < c->n_ubo_copy; j++)
+         if (c->ubo_copy[j].key == b->key && c->ubo_copy[j].data == b->data &&
+             c->ubo_copy[j].bytes == b->bytes)
+            return c->ubo_copy[j].va;
+   /* whole vec4s, a block cut short padded with zeros (the compiler's loads
+    * read vec4s) */
+   uint32_t room = (b->bytes + 15) & ~15u;
+
+   p = ring_alloc(&c->gen, room ? room : 16, 16);
+   memset(p.p, 0, room ? room : 16);
+   memcpy(p.p, b->data, b->bytes);
+   if (b->key) {
+      unsigned j = c->ubo_copy_next;
+
+      c->ubo_copy_next = (j + 1) % 16;
+      c->n_ubo_copy = MAX2(c->n_ubo_copy, j + 1);
+      c->ubo_copy[j].key = b->key;
+      c->ubo_copy[j].data = b->data;
+      c->ubo_copy[j].bytes = b->bytes;
+      c->ubo_copy[j].va = p.va;
+   }
+   return p.va;
+}
+
 int
 sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
 {
@@ -1874,9 +1950,17 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
    uint32_t mem_bytes = ((d->vs_mem.dwords * 4 + 15) & ~15u) +
                         ((d->fs_mem.dwords * 4 + 15) & ~15u);
    struct sgxws_ptr v = {0}, u, vsec, vmem = {0}, fmem = {0};
+   uint32_t ubo_va[SGXWS_MAX_UBOS];
+   bool fs_ubos = false;
    struct sgxws_fetch fetch[SGXWS_MAX_FETCH];
    int e;
 
+   if (d->n_ubos > SGXWS_MAX_UBOS)
+      return -E2BIG;
+   for (unsigned i = 0; i < d->n_ubos; i++) {
+      mem_bytes += (d->ubos[i].bytes + 15) & ~15u;
+      fs_ubos |= d->ubos[i].fs && d->ubos[i].sa >= 0;
+   }
    if ((e = depth_bias(c, st)))
       return e;
    if (d->n_fetch) {
@@ -1974,13 +2058,26 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       fmem = ring_alloc(&c->gen, d->fs_mem.dwords * 4, 16);
       memcpy(fmem.p, d->fs_mem.words, d->fs_mem.dwords * 4);
    }
+   /* the uniform blocks, after any submit make_room made (a copy names
+    * this frame's memory), then their addresses in the memory blocks */
+   for (unsigned i = 0; i < d->n_ubos; i++)
+      ubo_va[i] = ubo_copy(c, d, i, ubo_va);
+   for (unsigned i = 0; i < d->n_ubos; i++) {
+      const struct sgxws_ubo *b = &d->ubos[i];
+      struct sgxws_ptr *m = b->fs ? &fmem : &vmem;
+
+      if (b->mem && m->p &&
+          b->mem < (b->fs ? d->fs_mem.dwords : d->vs_mem.dwords))
+         m->p[b->mem] = ubo_va[i];
+   }
 
    /* fragment: the constants and the secondary program that DMAs them, then
     * the primary program that runs the shader */
    if (fs->sec_dwords) {
       /* the frame's last block again when the constants are (a memory
        * block's address is new each draw) */
-      if (!d->fs_mem.dwords && c->last_u_va && !c->dev->state_always &&
+      if (!d->fs_mem.dwords && !fs_ubos && c->last_u_va &&
+          !c->dev->state_always &&
           c->last_u_dwords == fs->sec_dwords &&
           !memcmp(c->last_u, d->fs_consts, fs->sec_dwords * 4)) {
          u.va = c->last_u_va;
@@ -1989,8 +2086,12 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
          memcpy(u.p, d->fs_consts, fs->sec_dwords * 4);
          for (unsigned j = 0; j < d->fs_mem.n_bases && d->fs_mem.dwords; j++)
             u.p[d->fs_mem.base[j]] = fmem.va + 512 * j;
+         for (unsigned i = 0; i < d->n_ubos; i++)
+            if (d->ubos[i].fs && d->ubos[i].sa >= 0 &&
+                (unsigned)d->ubos[i].sa < fs->sec_dwords)
+               u.p[d->ubos[i].sa] = ubo_va[i];
          c->last_u_va = 0;
-         if (!d->fs_mem.dwords) {
+         if (!d->fs_mem.dwords && !fs_ubos) {
             if (c->last_u_cap < fs->sec_dwords) {
                uint32_t *m = realloc(c->last_u, fs->sec_dwords * 4);
 
@@ -2133,6 +2234,10 @@ sgxws_draw(struct sgxws_ctx *c, const struct sgxws_draw *d)
       memcpy(vsec.p + 10, d->vs_consts, vs->const_dwords * 4);
    for (unsigned j = 0; j < d->vs_mem.n_bases && d->vs_mem.dwords; j++)
       vsec.p[10 + d->vs_mem.base[j]] = vmem.va + 512 * j;
+   for (unsigned i = 0; i < d->n_ubos; i++)
+      if (!d->ubos[i].fs && d->ubos[i].sa >= 0 &&
+          (unsigned)d->ubos[i].sa < vs->const_dwords)
+         vsec.p[10 + d->ubos[i].sa] = ubo_va[i];
    sec = pds_dma_task(c, &c->pds_vtx, vsec.va, vsec_dwords,
                       doutu_w0(c, c->empty_v, true, 0), 0, &vrows);
    vdm_state(c, SGX_VDMCTRL_BLOCK_TYPE_PDS_STATE, sec, vrows,
@@ -2680,32 +2785,33 @@ wmask_words(unsigned m, unsigned color_pa, uint32_t w[2])
 static uint32_t
 upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
           const uint64_t *code1, unsigned count1, unsigned color_pa,
-          const struct sgxws_blend *blend, int discard_pa, unsigned temps);
+          const struct sgxws_blend *blend, const struct sgxws_fs_feedback *fb,
+          unsigned temps);
 
 uint32_t
 sgxws_upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
                 unsigned color_pa, const struct sgxws_blend *blend,
-                int discard_pa, unsigned temps)
+                const struct sgxws_fs_feedback *fb, unsigned temps)
 {
-   return upload_fs(c, code, count, NULL, 0, color_pa, blend, discard_pa,
-                    temps);
+   return upload_fs(c, code, count, NULL, 0, color_pa, blend, fb, temps);
 }
 
 uint32_t
 sgxws_upload_fs_split(struct sgxws_ctx *c, const uint64_t *code, unsigned n,
                       const uint64_t *code1, unsigned n1, unsigned color_pa1,
-                      const struct sgxws_blend *blend, int discard_pa,
-                      unsigned temps)
+                      const struct sgxws_blend *blend,
+                      const struct sgxws_fs_feedback *fb, unsigned temps)
 {
-   return upload_fs(c, code, n, code1, n1, color_pa1, blend, discard_pa,
-                    temps);
+   return upload_fs(c, code, n, code1, n1, color_pa1, blend, fb, temps);
 }
 
 static uint32_t
 upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
           const uint64_t *code1, unsigned count1, unsigned color_pa,
-          const struct sgxws_blend *blend, int discard_pa, unsigned temps)
+          const struct sgxws_blend *blend, const struct sgxws_fs_feedback *fb,
+          unsigned temps)
 {
+   int discard_pa = fb ? fb->discard_pa : -1, depth_pa = fb ? fb->depth_pa : -1;
    uint32_t *w = malloc((count + count1 + 12) * 8), va, b[2];
    bool masked = blend && blend->wmask != 0xf;
    unsigned n = 0;
@@ -2715,7 +2821,7 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
    /* a constant-colour blend works in r0, r1 */
    if (blend && blend->blend && blend->constant && temps < 2)
       temps = 2;
-   if (discard_pa >= 0) {
+   if (discard_pa >= 0 || depth_pa >= 0) {
       /*
        * A program that discards runs in two phases (ISA.md "Phases, visibility
        * feedback and discard"):
@@ -2724,18 +2830,30 @@ upload_fs(struct sgxws_ctx *c, const uint64_t *code, unsigned count,
        * p1, and atst8 [end] in place of the compiler's feedback nop (its last
        * instruction); phase 1, on an even instruction, = the colour out
        * without end, then phas.i #0, #0 [end].
+       * A gl_FragDepth write puts depthf pa<depth_pa>, sa3, sa4 [end] there
+       * instead ((p1) depthf with a discard), and without a discard a no-op
+       * in pcoeff's slot (sgxws_fs_feedback).
        */
       uint8_t reloc[1] = {0};
 
       put(w, &n, 0,
           0xfa440100u | ((temps + 3) / 4)); /* phas.i #phase1, #t [wait=1] */
-      put(w, &n,
-          0xb0000004u | (uint32_t)discard_pa << 14 |
-             (uint32_t)(discard_pa + 1) << 7,
-          0xf8300004u); /* pcoeff pa<n>, pa<n+1>, sa4 */
+      if (discard_pa >= 0)
+         put(w, &n,
+             0xb0000004u | (uint32_t)discard_pa << 14 |
+                (uint32_t)(discard_pa + 1) << 7,
+             0xf8300004u); /* pcoeff pa<n>, pa<n+1>, sa4 */
+      else
+         put(w, &n, 0xa0000000u, 0x28a10002u); /* mov pa0, pa0 [skipinv rcnt] */
       put_code(w, &n, code, count - 1);
-      put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14,
-          0xf9340406u); /* atst8 [end] */
+      if (depth_pa >= 0)
+         /* (p1) depthf pa<d>, sa3, sa4 [end]: h9-10 = 2 (p1) with a discard,
+          * 0 (every pixel) without (ISA.md, gl_FragDepth, H10) */
+         put(w, &n, 0xf0000184u | (uint32_t)depth_pa << 14,
+             discard_pa >= 0 ? 0xfb340404u : 0xfb340004u);
+      else
+         put(w, &n, 0xf0000184u | color_pa << 21 | color_pa << 14,
+             0xf9340406u); /* atst8 [end] */
       if (n & 1)
          put(w, &n, 0, 0xf8000140u); /* nop: phase 1 on 16 bytes */
       w[0] = n;                      /* relocated to an absolute pc */

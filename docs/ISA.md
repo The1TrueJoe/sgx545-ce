@@ -324,6 +324,7 @@ reproduced all 650 recorded values exactly; open-stack logs are in `hwt_out/open
 | hwt_p11 | a repeat over an F16 operand | moe / inc step it by one half |
 | hwt_p13 | pck.u8.u8 lane picks per dmask (3, 12, 6, 9) and RGBA8 -> BGRA8 in two; and / or of 0 and 0xffffffff test masks; test.and.eq into p0 on a mask | an 8-bit source's lane picks its byte, the first source filling the lowest dmask lane; and / or are bitwise on masks; test.and.eq is true for a zero mask, false for 0xffffffff (2026-11-09, all 11 ok) |
 | hwt_gaps (open stack) | ld.a.d/w/b offsets and sizes; i0 across loads and a wdf, with and without nosched; test with a dest and with mask=15; fddp's i<n>; ima32 hi | see "hw 1d: ld", "Dual issue", "test vs testmask", fddp, ima32 (2026-11-11, `tools/isa/hwt_open.py` through `sgx_hwt`: powervr_sgx and the open microkernel, nothing from the vendor stack) |
+| hwt_int (open stack) | ima32 add/sub/multiply low words, immediates, `-a` as `a * c56`, high words unsigned and `.sgn`; testmask.xor eq/ne and testmask.or neg/pos/gt/le dwords; test.xor / test.and into p0; and.inv with a register src2, xor.inv #0, asr / shl by a register; pck.f32.s16/u16 lanes, pck.u16.f32 pairs and clamping; frcp | all 50 expected words (the integer forms the compiler's native_integers path emits: COMPILER-GL3.md); frcp exactly rounded on 3, 7, 1000003, 4294967040, 1.5 (2026-11-11, pvrsrvkm normal boot, `sgx_hwt` services backend) |
 | hwt_p12 | efo's m/a/i/d modes, wi, negates, chaining; fdual's every secondary and primary, i0s0, slot sharing, negates, rpt=2, same-word timing | all units as tabled; secondary sources settled (sd = 1st, sb, sc); sec 3 is fsubflr; neg1/neg2 primary only; same-word read of an internal register being written is a **race** (efo d, fdual primary) |
 
 hwt_p7-p9's `test` lines with `.f16` / `.c10` were drawn before the assembler
@@ -779,6 +780,11 @@ Notes:
   src2; dmask 9 -> byte 0 src1, byte 3 src2; dmask 15 -> bytes 0/2 src1,
   1/3 src2; a single enabled byte takes src1). Disabled bytes keep the old
   value. `pck.s16.f32 d, a, b` puts a in bits 0-15, b in 16-31.
+- 16-bit integer halves, **hardware** (hwt_int): `pck.f32.s16 d, r.l2, #0`
+  converts r's signed high half (0xfffe0003 -> -2.0), `.l0` the low one;
+  `pck.f32.u16` the same unsigned (low 3.0, high 65534.0). `pck.u16.f32 d,
+  a, b` puts a in bits 0-15 and b in 16-31, each rounded and clamped to
+  0-65535 (-5.0 -> 0, 70000.0 -> 0xffff; `#0` as b leaves 0).
 - Conversions, **hardware** (hwt_p4): f32 -> u8 `scale` is x*255 rounded to
   nearest and clamped to 0-255 (-0.1 -> 0, 1.5 -> 255, 0.7 -> 178, 1/510 ->
   1), whatever rnd says. f32 -> s16 rounds to nearest-even (2.5 -> 2, 1.7 ->
@@ -839,7 +845,7 @@ test sources (oracle); a subtract is the `fsub` ALU op.
 | 0x20-0x26 | 2 | 0-6 | `i8op0`..`i8op6` | oracle; outside a test i8op0-i8op3 encode as ima8 (add, or swapped-negated sub); i8op4 and i8op6 exist only as tests. Names unknown |
 | 0x27 | 2 | 7 | `fpadd8` | oracle (test only, takes C10 operands); name **guess** |
 | 0x28 | 2 | 8 | `fpsub8` | corpus: every lowp compare (fl_*_l) is fpsub8 with C10 sources; hardware (hwt_p10); name **guess** |
-| 0x30-0x35, 0x37 | 3 | 0-5, 7 | `and or xor shl shr rol asr` | oracle; corpus (`test.and.ne p0, #0, #0` clears p0; `test.shl.pos/neg p2, x, #31` in step_l); hardware (hwt_p13 `test.and.eq` on a mask) |
+| 0x30-0x35, 0x37 | 3 | 0-5, 7 | `and or xor shl shr rol asr` | oracle; corpus (`test.and.ne p0, #0, #0` clears p0; `test.shl.pos/neg p2, x, #31` in step_l); hardware (hwt_p13 `test.and.eq` on a mask; hwt_int: `testmask.xor.eq/ne.dword`, `testmask.or.neg/pos/gt/le.dword` on the whole 32-bit result, its sign bit 31, register and `#0` sources; `test.xor.ne` into p0) |
 
 Other values print as `alu<hex>`; the vendor assembler never produces them.
 
@@ -906,7 +912,9 @@ writes 0xffffffff when the test passes and 0 when it fails.
 xor, shl, shr (logical), asr (arithmetic), rol by an immediate, shr by a
 register, `and #0xff00 [rot=16]` = & 0xff000000 and `and.inv #1` = &
 ~1 all give the expected words; a register shift by 33 gives 0 (the count
-is not taken mod 32).
+is not taken mod 32). hwt_int adds asr and shl by a register (0x80000010
+asr 4 = 0xf8000001, 0x11 shl 31 = 0x80000000) and `and #0x3f80 [rot=16]`
+on ~0 = 0x3f800000.
 
 All **oracle**; no corpus instance (the vendor compiler uses these ALU ops
 only under test). Mnemonic names are ours and match the test ALU codes;
@@ -915,7 +923,7 @@ rol and asr are **hardware** (above), rlp's semantics a **guess**.
 | bits | field | values | tag |
 |---|---|---|---|
 | h27-31, h3 | opcode, sub-op | table above | oracle |
-| h11 | inv (`.inv`) | src2 inverted (src1 takes no modifier) | oracle; hardware (hwt_p7 `and.inv #1`) |
+| h11 | inv (`.inv`) | src2 inverted (src1 takes no modifier) | oracle; hardware (hwt_p7 `and.inv #1`; hwt_int `and.inv` with a register src2, `xor.inv #0` = not) |
 | h2 | partial | stops the immediate compression | oracle; "16-bit/partial operation" meaning **guess** |
 | h6-10 | rot | immediate rotate-left count. The field exists whatever src2 is; with a register src2, the vendor assembler leaves it 0 | oracle; hardware (hwt_p7 `and #0xff00 [rot=16]`) |
 | l0-6, l14-20, h4-5 | src2 immediate | when src2's bank is `#` (l28-29 = 2, h16): a 16-bit value, bits 0-6 / 7-13 / 14-15 | oracle |
@@ -1297,6 +1305,15 @@ Operand slots: the generic dst, src0 (bank h2, no extension), src1 and src2 unle
 - cin h10-11: carry-in from i0-i2: 0 none, 1 i0, 2 i1, 3 i2.
 - negp h8 = src0 neg xor src1 neg.
 - src2 neg h7.
+- **hardware** (hwt_int, open stack, 2026-11-11): the destination is the
+  low 32 bits of `src0 * src1 + src2`, wrapping (0x7fffffff + 1 =
+  0x80000000, 0xffffffff + 2 = 1, 0x12345678 * 0x9abcdef = 0xe242d208,
+  -3 * 5 = -15); src2 negate subtracts (`ima32 d, a, #1, -b`: 5 - 7 = -2,
+  0x80000000 - 1 = 0x7fffffff), on an immediate too (`-#7`); a 7-bit
+  immediate without `.sgn` is unsigned (`#100`); `a * c56` (~0) is -a.
+  The high word in i1 is the unsigned product's (0xffffffff² gives
+  0xfffffffe) and, with `.sgn`, the signed one's (-1 * -1 gives 0, -2 * 3
+  gives 0xffffffff).
 - src0 r/pa/o/sa via ext h15.
 - The assembler writes isub32 (signed or unsigned) as `a*#1 + -b`.
 
@@ -2374,14 +2391,35 @@ backed above; this section only collects it.
   pa<z> the iterated z (above; with it in place, points discard on
   hardware). Our compiler leaves
   gl_FragDepth, clamped to [0, 1], in a pa register at the feedback nop for
-  a `depthf` there, pass type 5. **Guess**: that depthf's src0 is the depth
-  written; sa3/sa4 not traced. Needs hardware.
+  a `depthf` there, pass type 5. **depthf's src0 is the depth written**
+  (**hardware**, test H10, 2026-11-12, below); what sa3/sa4 mean beyond
+  carrying the depth test words is not traced.
   - The words for it: lo `0xf0000184 | depth_pa << 14` (src0 = pa<depth_pa>
     in l14-20, src1/src2 = sa3/sa4 as in atst8), hi `0xfb340404` for
     `(p1) depthf` (h9-10 = 2). In a program without a discard the compiler
     computes no p1, so `(p1)` would test whatever p1 holds: such a program
-    needs h9-10 = 0, hi `0xfb340004` (**guess**: an atst8 with h9-10 = 0
-    kills nothing, hardware, so depthf with 0 should keep every pixel).
+    uses h9-10 = 0, hi `0xfb340004`, and every pixel is kept (**hardware**,
+    H10).
+  - The program around it (the open driver's, `upload_fs` in the winsys):
+    phase 0 = `phas.i #phase1, #t [wait=1]`, then `pcoeff` when the program
+    also discards, otherwise `mov pa0, pa0 [skipinv rcnt]` in its place (as
+    the vendor driver's points path); the shader up to the feedback nop;
+    `depthf` [end] there; phase 1 = the colour out and `phas.i #0, #0 [end]`.
+    The draw's ISPA pass type is 5 for triangles too; sa3/sa4 hold the same
+    depth words as a discard's atst8 (STATE.md "Alpha test (ES1)").
+  - **H10** (a CE5300 board, `mesa/tests/sgx_fragdepth.c`): a 128×64 FBO
+    with 24-bit depth; a full quad at depth 0.5 writes gl_FragDepth =
+    x / 128 (from gl_FragCoord, or from a varying), depth test ALWAYS,
+    green; a second quad at 0.5 with LESS, red. Read back colour and depth
+    (ZLS). Without depthf every pixel stores 0.5 and the red quad covers
+    nothing. With it all three cases are exact, 8064 of 8064 pixels each
+    (the middle two columns left out), worst depth error 0: the ramp left of
+    the middle, 0.5 under the red right half; with a discard of the top 16
+    rows (`(p1) depthf`), those rows keep the clear and then take the red
+    quad. piglit's `glsl-1.10-fragdepth`, `glsl-bug-22603`, `drawpix-z`,
+    `early-z` and the `depthstencil-default_fb-copypixels` and
+    `-drawpixels-float-and-ushort` tests at 1, 2 and 4 samples all pass
+    (they failed without it); no GPU resets.
   - The clamp runs before the colour is written: the colour may be packed
     over an input the depth reads (pa0), so depth_pa is past every register
     the colour can take, `max(inputs, 1) + 1`.
