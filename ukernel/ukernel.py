@@ -179,6 +179,13 @@ class Asm:
     def phas(self):
         self.i("phas.i #0, #0 [wait=7]")
 
+    def inc32(self, reg, tmp):
+        """reg += 1 over all 32 bits. imae truncates its multiplicands to 16 bits, so
+        `imae r, r, #1, #1` wraps at 0x10000; the 32-bit value must be the addend.
+        tmp is clobbered."""
+        self.i(f"limm r{tmp}, #1")
+        self.i(f"imae r{reg}, r{tmp}, #1, r{reg} [t2=u32]")
+
     def dispatch(self, bit, label):
         """if EUR_CR_EVENT_STATUS (in r2) has `bit` set, branch to `label`"""
         self.i(f"limm r3, #{bit}")
@@ -677,7 +684,7 @@ def build(a):
     # completion or, if the CCB is now empty, the idle/active-power raise in kick_end.
     a.i(f"ld.a.d r0, r17, #{SC_COMPLETED} [moe]")
     a.i("wdf")
-    a.i("imae r0, r0, #1, #1 [t2=u32]")         # seqno += 1
+    a.inc32(0, 1)                               # seqno += 1 (kick_adv reloads r1)
     a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")
     a.i("idf")
     a.i("wdf")
@@ -2352,7 +2359,7 @@ def build(a):
     a.i("wdf")
     a.i("test.and.eq p0, r5, r5")                     # no complete address -> skip
     a.i("(p0) ba rd_wops")
-    a.i("imae r4, r4, #1, #1 [t2=u32]")               # pending + 1
+    a.inc32(4, 3)                                     # pending + 1 (rd_wops reloads r3)
     a.i("st.a.d r5, #0, r4 [moe]")                    # *complete = pending + 1
     a.i("idf")
     a.i("wdf")
@@ -2416,7 +2423,7 @@ def build(a):
         a.i(f"st.a.d r17, #{PENDING_3D}, r3 [moe]")       # dequeue
         a.i(f"ld.a.d r0, r17, #{SC_COMPLETED} [moe]")     # queued 3D starts next, so bump the seqno inline
         a.i("wdf")
-        a.i("imae r0, r0, #1, #1 [t2=u32]")
+        a.inc32(0, 3)                                 # seqno += 1 (do_3d reloads r3)
         a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")
         a.i("idf")
         a.i("wdf")
@@ -2470,7 +2477,7 @@ def build(a):
     a.i("wdf")
     a.i("test.and.eq p0, r10, r10")                      # no complete addr -> skip
     a.i("(p0) ba xfer_dstsync_done")
-    a.i("imae r9, r9, #1, #1 [t2=u32]")                  # pending + 1
+    a.inc32(9, 4)                                        # pending + 1 (r4 reloaded below)
     a.i("st.a.d r10, #0, r9 [moe]")                      # *write-ops-complete = pending + 1
     a.i("idf")
     a.i("wdf")
@@ -2493,7 +2500,7 @@ def build(a):
     # by the idf/wdf at each caller before this.
     a.i(f"ld.a.d r0, r17, #{SC_COMPLETED} [moe]")
     a.i("wdf")
-    a.i("imae r0, r0, #1, #1 [t2=u32]")            # seqno += 1
+    a.inc32(0, 5)                                  # seqno += 1 (r5 reloaded below)
     a.i(f"st.a.d r17, #{SC_COMPLETED}, r0 [moe]")
     a.i("idf")
     a.i("wdf")
