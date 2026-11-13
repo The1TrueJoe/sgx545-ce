@@ -113,10 +113,17 @@ struct sgx_iter {
    unsigned sampler;
 };
 
+/* nir_tex_instr.backend_flags: a texelFetch lowered to txl */
+#define SGX_TEX_FETCH 1
+#define SGX_TEX_PLANAR 2 /* a plane of a tex_r32x4 / x2 unit: always dependent */
+#define SGX_TEX_PLANE_SHIFT 2
+
 struct sgx_sample {
    unsigned id;
    unsigned sampler;
    bool dependent, proj;
+   bool fetch; /* a texelFetch (SGX_TEX_FETCH) */
+   unsigned plane; /* SGX_TEX_PLANAR: its plane */
    unsigned dim; /* 2 = 2D, 3 = cube */
    unsigned set; /* non-dependent: the coordinate's texture coordinate set */
    int coord_pa; /* ... and its plain iteration, -1 none */
@@ -146,6 +153,8 @@ struct sgx_ctx {
    /* register per I/O component: [location * 4 + component] (VARYING_SLOT_* /
     * VERT_ATTRIB_*), -1 none */
    int in_reg[512], out_reg[512];
+   /* a split (integer) varying's high halves, per component; -1 none */
+   int in_hi[512], out_hi[512];
 #define SGX_IN_HALF                                                            \
    0x10000 /* in_reg: an F16-iterated component, low bits = its half */
 #define SGX_IN_U8                                                              \
@@ -166,16 +175,16 @@ struct sgx_ctx {
    unsigned n_labels;
 
    /* uniforms */
-   uint8_t const_used[1024];
+   uint8_t const_used[SGX_MAX_CONST_K];
    /* 1 f32 (list C kind 1), 2 f16 (kind 2), 3 c10 (kind 3) */
-   uint8_t const_fmt[1024];
-   int const_slot[1024];
+   uint8_t const_fmt[SGX_MAX_CONST_K];
+   int const_slot[SGX_MAX_CONST_K];
    /* bit offset in the slot (f16 0/16, c10 0/10/20) */
-   uint8_t const_shift[1024];
+   uint8_t const_shift[SGX_MAX_CONST_K];
    /* the first of a lowp vec4 uniform (C10 candidate) */
-   uint8_t const_lowp[1024];
+   uint8_t const_lowp[SGX_MAX_CONST_K];
    /* GLSL precision of the uniform behind constant k (0 unknown) */
-   uint8_t const_prec[1024];
+   uint8_t const_prec[SGX_MAX_CONST_K];
    /* dynamically indexed arrays: first constant, constants it spans */
    struct {
       uint16_t k, range;
@@ -185,7 +194,7 @@ struct sgx_ctx {
    unsigned sa_base;
    /* where the slots live (place_constants): SA slot from sa_base, -1 memory
     * only; with mem_dwords every slot is also block word slot + 1 */
-   int slot_sa[1024 + 32];
+   int slot_sa[SGX_MAX_CONST_MAP];
    unsigned n_sa_phys; /* SA slots used: kept slots, then the bases */
    unsigned mem_dwords;
    unsigned n_mem_bases;

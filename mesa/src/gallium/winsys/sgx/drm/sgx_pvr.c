@@ -370,6 +370,12 @@ pvr_rt_init(struct sgxws_ctx *c, struct sgxws_rt *rt)
    if (!s)
       return -ENOMEM;
 
+   /* the services path builds one-sample render targets only */
+   if (rt->samples > 1) {
+      free(s);
+      return -EINVAL;
+   }
+
    /* SGXAddRenderTarget: three render-details sets as the DDK makes them (the
     * third renders: this keeps the DDK's kernel-data addresses), RT data (2
     * entries), tail pointers, region headers (double buffered), TA data

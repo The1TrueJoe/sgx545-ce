@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -10,6 +11,7 @@
 #include "util/os_time.h"
 #include "util/u_debug.h"
 #include "util/u_debug_cb.h"
+#include "util/format/u_format.h"
 #include "util/u_framebuffer.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
@@ -63,6 +65,32 @@ sgx_recording(struct sgx_context *ctx)
    return ctx->recording;
 }
 
+/* SGX_DEBUG=zlsdump: the ZLS buffer the render just flushed stored into,
+ * once it is done, as it lies in memory (5 bytes per padded pixel and
+ * sample: the depths, then the stencils).  Called with the lock held. */
+static void
+dump_zls(struct sgx_context *ctx)
+{
+   static unsigned n;
+   struct sgx_resource *zs = ctx->recording_zs;
+   char name[128];
+   FILE *f;
+
+   if (!zs || !sgxws_bo_valid(&zs->zls) || !zs->zls.map)
+      return;
+   sgxws_wait_idle(ctx->hw, 2000);
+   snprintf(name, sizeof(name), "/tmp/sgx-zls-%03u-%ux%u-%s-s%u.bin", n++,
+            zs->zls_w, zs->zls_h, util_format_short_name(zs->base.format),
+            MAX2(zs->base.nr_samples, 1));
+   f = fopen(name, "wb");
+   if (!f)
+      return;
+   fwrite(zs->zls.map, 1, zs->zls_bytes, f);
+   fclose(f);
+   fprintf(stderr, "sgx: ZLS buffer (%u bytes) written to %s\n", zs->zls_bytes,
+           name);
+}
+
 void
 sgx_flush_frame(struct sgx_context *ctx)
 {
@@ -79,6 +107,8 @@ sgx_flush_frame(struct sgx_context *ctx)
     * overlapped) */
    e = sgxws_flush(ctx->hw, (sgx_drv_debug & SGX_DEBUG_SERIAL) ? 2000 : 0);
    sgx_check_reset(ctx);
+   if (sgx_drv_debug & SGX_DEBUG_ZLS_DUMP)
+      dump_zls(ctx);
    simple_mtx_unlock(&screen->lock);
    if (ctx->stats.on) {
       ctx->stats.flush_ns += os_time_get_nano() - t;
@@ -239,18 +269,26 @@ sgx_context_destroy(struct pipe_context *pctx)
    util_unreference_framebuffer_state(&ctx->framebuffer);
    for (unsigned i = 0; i < ctx->num_vertex_buffers; i++)
       pipe_vertex_buffer_unreference(&ctx->vertex_buffers[i]);
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       pipe_resource_reference(&ctx->constants[i].buffer, NULL);
+      for (unsigned n = 0; n < SGX_MAX_UBOS; n++)
+         pipe_resource_reference(&ctx->ubos[i][n].buffer, NULL);
+   }
    for (unsigned i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++)
       pipe_sampler_view_reference(&ctx->views[i], NULL);
    if (pctx->stream_uploader)
       u_upload_destroy(pctx->stream_uploader);
 
+   pipe_resource_reference(&ctx->dummy_cb, NULL);
    simple_mtx_lock(&screen->lock);
    if (ctx->hw) {
       for (unsigned i = 0; i < ctx->num_rts; i++)
          sgxws_rt_destroy(ctx->hw,
                           ctx->rts[i]); /* flushes this context's frame */
+      if (sgxws_bo_valid(&ctx->ms_zls)) {
+         sgxws_wait_idle(ctx->hw, 2000);
+         sgxws_bo_free(screen->dev, &ctx->ms_zls);
+      }
    }
    simple_mtx_unlock(&screen->lock);
 

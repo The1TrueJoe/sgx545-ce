@@ -25,11 +25,17 @@
  *                       a line is its address
  *   texpat              optional: the same heap with dword i = 0x5a5a0000 | i,
  *                       so a texel read back names the dword it came from
+ *   eot limm r0, #RT    optional: the frame's end-of-tile program instead of
+ *   eot raw HI LO       the target's (docs/GL3.md, test H1), the same text;
+ *                       RT and RT2 in it are the two render targets'
+ *                       addresses (RT2 is a second 720x480 BGRA target,
+ *                       cleared to 0 before the test)
  *   ...
  *   end
  *
  * Prints, per test, "NAME <word>" (all checked pixels equal) or
- * "NAME mixed <first> <other>", then " buf <dwords>" when it had one.
+ * "NAME mixed <first> <other>", then " buf <dwords>" when it had one, then
+ * " rt2 <word>" (RT2's middle pixel) when it had an end-of-tile program.
  */
 
 #include <fcntl.h>
@@ -37,6 +43,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "util/macros.h"
 
 #include "sgx_frame.h"
 #include "sgx_isa.h"
@@ -58,18 +66,13 @@ subst(char *out, size_t size, const char *in, const char *tok, uint32_t va)
       snprintf(out, size, "%s", in);
 }
 
-static int
-run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
-    struct sgxws_bo *buf, struct sgxws_bo *tex, const char *name,
-    char lines[][160], unsigned n, const uint32_t *init, unsigned n_init,
-    int has_texel, uint32_t texel, const uint32_t *pixels, uint32_t w,
-    uint32_t h, uint32_t stride)
+/* the test's lines as instructions; false: one doesn't assemble (said) */
+static bool
+assemble(const char *name, char lines[][160], unsigned n, uint64_t *code,
+         const uint32_t *va /* BUF TEX RT RT2 */)
 {
-   static const float verts[6] = {-0.9f, -0.9f, 0.9f, -0.9f, 0.0f, 0.9f};
-   uint64_t code[MAX_INSTS];
+   static const char *const tok[4] = {"BUF", "TEX", "RT2", "RT"};
    struct sgx_isa_fc fc = SGX_ISA_FC_START;
-   struct sgxws_prog vs, fs = {0};
-   struct sgxws_state st = {0};
    char err[128], text[200];
 
    for (unsigned i = 0; i < n; i++) {
@@ -81,11 +84,14 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
          code[i] = (uint64_t)hi << 32 | lo;
          continue;
       }
-      subst(t1, sizeof(t1), lines[i], "BUF", buf->va);
-      subst(text, sizeof(text), t1, "TEX", tex->va);
+      snprintf(text, sizeof(text), "%s", lines[i]);
+      for (unsigned k = 0; k < 4; k++) {
+         subst(t1, sizeof(t1), text, tok[k], va[k]);
+         snprintf(text, sizeof(text), "%s", t1);
+      }
       if (!sgx_isa_asm_line(text, &I, err, sizeof(err))) {
          printf("%s error %s: %s\n", name, text, err);
-         return 0;
+         return false;
       }
       code[i] = sgx_isa_encode(&I, &fc);
       if (I.opc == SGX_ISA_OPC_SETFC) {
@@ -93,6 +99,34 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
          fc.c10 = I.a[1];
       }
    }
+   return true;
+}
+
+static int
+run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
+    struct sgxws_bo *buf, struct sgxws_bo *tex, struct sgxws_bo *rt2,
+    const char *name, char lines[][160], unsigned n, char eot[][160],
+    unsigned n_eot, const uint32_t *init, unsigned n_init, int has_texel,
+    uint32_t texel, const uint32_t *pixels, uint32_t w, uint32_t h,
+    uint32_t stride)
+{
+   static const float verts[6] = {-0.9f, -0.9f, 0.9f, -0.9f, 0.0f, 0.9f};
+   const uint32_t va[4] = {buf->va, tex->va, rt2->va, t->va};
+   uint64_t code[MAX_INSTS], eot_code[SGXWS_EOT_OVERRIDE_WORDS / 2];
+   uint32_t eot_words[SGXWS_EOT_OVERRIDE_WORDS];
+   struct sgxws_prog vs, fs = {0};
+   struct sgxws_state st = {0};
+
+   if (!assemble(name, lines, n, code, va) ||
+       !assemble(name, eot, n_eot, eot_code, va))
+      return 0;
+   /* an instruction is the low word, then the high one */
+   for (unsigned i = 0; i < n_eot; i++) {
+      eot_words[2 * i] = (uint32_t)eot_code[i];
+      eot_words[2 * i + 1] = (uint32_t)(eot_code[i] >> 32);
+   }
+   if (n_eot)
+      memset(rt2->map, 0, (size_t)stride * h * 4);
    memset(buf->map, 0, BUF_DWORDS * 4);
    memcpy(buf->map, init, n_init * 4);
    for (unsigned i = 0; i < TEX_DWORDS; i++)
@@ -102,7 +136,7 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
    /* the uniform-colour program's setup (its secondary loads sa9, which the
     * test doesn't read), the test as the main program */
    sgxws_prog_builtin(c, SGXWS_FS_UNIFORM, &fs);
-   fs.code = sgxws_upload_fs(c, code, n, 0, NULL, -1, 16);
+   fs.code = sgxws_upload_fs(c, code, n, 0, NULL, NULL, 16);
    fs.temps = 16;
    if (!fs.code) {
       printf("%s error upload\n", name);
@@ -129,13 +163,18 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
       .state = &st,
    };
    int e;
+   sgxws_hwt_eot(c, n_eot ? eot_words : NULL, 2 * n_eot);
    if (sgxws_begin(c, rt, t) || sgxws_clear(c, clear, 1.0f, false, 0xf, -1))
       return 1;
+   if (n_eot)
+      sgxws_use_bo(c, rt2, true);
    sgxws_use_bo(c, buf, true);
    sgxws_use_bo(c, tex, false);
    if (sgxws_draw(c, &d))
       return 1;
-   if ((e = sgxws_flush(c, 2000))) {
+   e = sgxws_flush(c, 2000);
+   sgxws_hwt_eot(c, NULL, 0);
+   if (e) {
       printf("%s error flush %d\n", name, e);
       return 1; /* the GPU may need a reset: stop */
    }
@@ -156,6 +195,8 @@ run(struct sgxws_ctx *c, struct sgxws_rt *rt, struct sgxws_target *t,
       for (unsigned i = 0; i < n_init; i++)
          printf(" %08x", buf->map[i]);
    }
+   if (n_eot)
+      printf(" rt2 %08x", rt2->map[(size_t)(h / 2) * stride + w / 2]);
    printf("\n");
    fflush(stdout);
    return 0;
@@ -199,9 +240,11 @@ main(int argc, char **argv)
    }
    struct sgxws_ctx *c = sgxws_ctx_create(dev, 0);
    struct sgxws_rt *rt = c ? sgxws_rt_create(c, w, h) : NULL;
-   struct sgxws_bo color, buf, tex;
+   struct sgxws_bo color, color2, buf, tex;
    if (!rt ||
        sgxws_bo_alloc(dev, &color, SGXWS_MEM_RENDER_TARGET, stride * h * 4,
+                      0x1000) ||
+       sgxws_bo_alloc(dev, &color2, SGXWS_MEM_RENDER_TARGET, stride * h * 4,
                       0x1000) ||
        sgxws_bo_alloc(dev, &buf, SGXWS_MEM_VERTEX, BUF_DWORDS * 4, 0x1000) ||
        /* sampling outside the texture heap hangs (sgx_core) */
@@ -211,10 +254,10 @@ main(int argc, char **argv)
    struct sgxws_target t = {.va = color.va, .stride = stride, .bo = &color,
                             .t1_format = 0x0c, .t1_layout = 6};
 
-   static char lines[MAX_INSTS][160];
+   static char lines[MAX_INSTS][160], eot[SGXWS_EOT_OVERRIDE_WORDS / 2][160];
    char ln[256], name[64] = "";
    uint32_t init[BUF_DWORDS], texel = 0;
-   unsigned n = 0, n_init = 0;
+   unsigned n = 0, n_eot = 0, n_init = 0;
    int has_texel = 0;
    int status = 0;
    while (fgets(ln, sizeof(ln), f)) {
@@ -224,7 +267,7 @@ main(int argc, char **argv)
          continue;
       if (!strncmp(s, "test ", 5)) {
          snprintf(name, sizeof(name), "%s", s + 5);
-         n = n_init = 0;
+         n = n_eot = n_init = 0;
          has_texel = 0;
       } else if (!strcmp(s, "texpat")) {
          has_texel = 2;
@@ -240,9 +283,12 @@ main(int argc, char **argv)
             n_init++;
             p = e;
          }
+      } else if (!strncmp(s, "eot ", 4)) {
+         if (n_eot < ARRAY_SIZE(eot))
+            snprintf(eot[n_eot++], sizeof(eot[0]), "%s", s + 4);
       } else if (!strcmp(s, "end")) {
-         if (run(c, rt, &t, &buf, &tex, name, lines, n, init, n_init,
-                 has_texel, texel, color.map, w, h, stride)) {
+         if (run(c, rt, &t, &buf, &tex, &color2, name, lines, n, eot, n_eot,
+                 init, n_init, has_texel, texel, color.map, w, h, stride)) {
             status = 1;
             break;
          }
@@ -261,6 +307,7 @@ main(int argc, char **argv)
    sgxws_bo_free(dev, &buf);
    sgxws_bo_free(dev, &tex);
    sgxws_bo_free(dev, &color);
+   sgxws_bo_free(dev, &color2);
    sgxws_rt_destroy(c, rt);
    sgxws_ctx_destroy(c);
    sgxws_dev_destroy(dev);

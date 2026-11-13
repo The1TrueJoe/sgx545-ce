@@ -20,6 +20,7 @@
 #include "util/u_transfer.h"
 
 #include "sgx_context.h"
+#include "sgx_csb.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
 #include "sgx_texture.h"
@@ -233,15 +234,17 @@ sgx_resource_create(struct pipe_screen *pscreen,
        * start, for a texture rendered into before anything is uploaded */
       if (!util_format_has_alpha(templ->format) &&
           util_format_get_blocksize(templ->format) == 4 &&
-          !sgx_tex_depth(templ->format))
+          !sgx_tex_word32(templ->format))
          memset(res->bo.map, 0xff, sgx_tex_size(prsc));
       /* R8 and RG8 as RGBA8 (sgx_tex_bpp): (0, 0, 0, 255) until written, the
        * B and A a render into them leaves alone */
       if (sgx_tex_bpp(templ->format) !=
              util_format_get_blocksize(templ->format) &&
-          !sgx_tex_depth(templ->format))
+          !sgx_tex_word32(templ->format))
          for (size_t i = 0; i < sgx_tex_size(prsc) / 4; i++)
-            res->bo.map[i] = 0xff000000;
+            res->bo.map[i] = util_format_is_pure_integer(templ->format)
+                                ? 0x01000000
+                                : 0xff000000;
    }
    return prsc;
 
@@ -574,18 +577,56 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
       t->t1_format =
          0x0d; /* swaps R and B against 0x0c: the PBE's order back */
       break;
+   /* integer: the program packs the word (rt_packed, sgx_program.c
+    * pack_int_outputs), B, G, R, A bytes, which format 1 stores R, G, B, A;
+    * written unchanged (no dither) */
+   case PIPE_FORMAT_R8G8B8A8_UINT:
+   case PIPE_FORMAT_R8G8B8A8_SINT:
+   case PIPE_FORMAT_R8_UINT:
+   case PIPE_FORMAT_R8_SINT:
+   case PIPE_FORMAT_R8G8_UINT:
+   case PIPE_FORMAT_R8G8_SINT:
+      t->pbe_format = 1;
+      t->t1_format = 0x0d;
+      t->raw = true;
+      break;
+   /* R32: the program's word is the value, which format 0 stores as it is;
+    * RG32 and RGBA32 a plane a pass (the draw's rt_plane, begin_frame) */
+   case PIPE_FORMAT_R32_UINT:
+   case PIPE_FORMAT_R32_SINT:
+   case PIPE_FORMAT_R32G32_UINT:
+   case PIPE_FORMAT_R32G32_SINT:
+   case PIPE_FORMAT_R32G32B32A32_UINT:
+   case PIPE_FORMAT_R32G32B32A32_SINT:
+      t->pbe_format = 0;
+      t->t1_format = SGX_TEXSTATE_FORMAT_F32;
+      t->raw = true;
+      break;
    default:
       return false;
    }
    if (res->texture) {
       unsigned w = u_minify(res->base.width0, level),
                h = u_minify(res->base.height0, level);
-      bool twiddled =
-         util_is_power_of_two_nonzero(w) && util_is_power_of_two_nonzero(h);
+      /* A twiddled level one texel high (a 1D texture) is a plain row in
+       * the sampler's layout (TEX.md section 1: the tiles are min(w, h)
+       * square), but the PBE twiddles a destination by its clip width
+       * (section 10) and would spread the row over a 16-high tile: it is
+       * rendered linear instead, the same bytes for one row.  Other levels
+       * with a side below 16 can't be rendered in the sampler's layout
+       * either way (docs/GL3.md). */
+      bool twiddled = util_is_power_of_two_nonzero(w) &&
+                      util_is_power_of_two_nonzero(h) && h > 1;
 
       t->va = res->bo.va + sgx_tex_offset(&res->base, level, layer);
       t->stride = twiddled ? w : align(w, 8);
       t->t1_layout = twiddled ? 0 : 3;
+      /* F32 words (an R32 texture): rows of 32, strided, as it's sampled
+       * (sgx_tex_words) */
+      if (sgx_tex_word32(res->base.format)) {
+         t->stride = align(w, 32);
+         t->t1_layout = SGX_TEXSTATE_LAYOUT_STRIDED;
+      }
       sgxws_bo_prepare_target(screen->dev,
                               &res->bo); /* (the caller holds the lock) */
       res->rendered |= 1u << level;
@@ -604,6 +645,163 @@ sgx_resource_target(struct sgx_screen *screen, struct sgx_resource *res,
 }
 
 /* ---------------------------------------------------------------- transfers */
+
+/* Depth and stencil between the ZLS buffer, where renders keep them, and the
+ * CPU copy, which maps, copies and blits see (docs/TEX.md section 7, "The
+ * order of the stored depth").
+ *
+ * zls_index: where sample s of pixel (x, y) (the render's rows, top first)
+ * of a render of w x h keeps its float32 depth, in words from the buffer's
+ * start.  Tiles of 32 x 16 words, row-major over the padded width.  At 1
+ * sample a tile is 32 x 16 pixels, word bits y0 x0 y1 x1 y2 x2 y3 x3 x4.  At
+ * 4 the samples form one surface twice as wide and high (X = 2x + sx,
+ * Y = 2y + sy, 2 * align(w, 32) wide), with tile bits y0 x1 y1 x2 y2 x3 y3
+ * x0 x4.  Its stencil byte is at the same index, after the last depth
+ * (sgxws_zls_pixels(w, h) * samples * 4 bytes in); FBOs and 16-bit depth
+ * (stored as float32) use the same order (TEX.md section 7, H9). */
+static uint32_t
+zls_index(uint32_t w, uint32_t h, unsigned samples, uint32_t x, uint32_t y,
+          unsigned s)
+{
+   uint32_t X = x, Y = y, across = align(w, 32) / 32, t;
+
+   (void)h;
+   if (samples > 1) {
+      X = 2 * x + (s & 1);
+      Y = 2 * y + (s >> 1);
+      across *= 2;
+   }
+   t = ((Y >> 4) * across + (X >> 5)) * 512;
+   uint32_t ix = X & 31, iy = Y & 15;
+   uint32_t xlo = samples > 1 ? (ix >> 1 & 1) | (ix >> 2 & 1) << 1 |
+                                   (ix >> 3 & 1) << 2
+                              : (ix & 1) | (ix >> 1 & 1) << 1 |
+                                   (ix >> 2 & 1) << 2;
+   uint32_t x3 = samples > 1 ? ix & 1 : ix >> 3 & 1;
+
+   return t | (iy & 1) | (xlo & 1) << 1 | (iy >> 1 & 1) << 2 |
+          (xlo >> 1 & 1) << 3 | (iy >> 2 & 1) << 4 | (xlo >> 2 & 1) << 5 |
+          (iy >> 3 & 1) << 6 | x3 << 7 | (ix >> 4 & 1) << 8;
+}
+
+/* the CPU copy of level 0 from the ZLS buffer, sample 0 (a 4x buffer's
+ * resolve: GL lets a depth/stencil resolve take any one sample) */
+static void
+zls_read(struct sgx_resource *res)
+{
+   enum pipe_format f = res->base.format;
+   const struct util_format_description *d = util_format_description(f);
+   unsigned samples = MAX2(res->base.nr_samples, 1);
+   uint32_t w = MIN2(res->zls_w, res->base.width0),
+            h = MIN2(res->zls_h, res->base.height0);
+   const float *depth = (const float *)res->zls.map;
+   const uint8_t *st = (const uint8_t *)res->zls.map +
+                       sgxws_zls_pixels(res->zls_w, res->zls_h) * samples * 4;
+   float *zr = malloc(sizeof(float) * w);
+   uint8_t *sr = malloc(w);
+
+   for (uint32_t y = 0; y < h && zr && sr; y++) {
+      uint8_t *row = (uint8_t *)res->data + y * res->stride;
+
+      for (uint32_t x = 0; x < w; x++) {
+         uint32_t i = zls_index(res->zls_w, res->zls_h, samples, x, y, 0);
+
+         zr[x] = depth[i];
+         sr[x] = st[i];
+      }
+      if (util_format_has_depth(d))
+         util_format_pack_z_float(f, row, zr, w);
+      if (util_format_has_stencil(d))
+         util_format_pack_s_8uint(f, row, sr, w);
+   }
+   free(zr);
+   free(sr);
+}
+
+/* the ZLS buffer from the CPU copy of level 0, every sample, laid out for a
+ * render of the resource's size, which then loads it (zls_target) */
+static int
+zls_write(struct sgx_context *ctx, struct sgx_resource *res)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+   enum pipe_format f = res->base.format;
+   const struct util_format_description *d = util_format_description(f);
+   unsigned samples = MAX2(res->base.nr_samples, 1);
+   uint32_t w = res->base.width0, h = res->base.height0;
+   uint32_t bytes = align(sgxws_zls_pixels(w, h) * 5 * samples, 4096);
+
+   simple_mtx_lock(&screen->lock);
+   /* the renders that load or store it are done first */
+   if (screen->hw && res->use_seq == sgxws_next_seq(screen->hw))
+      sgxws_flush(screen->hw, 0);
+   if (screen->hw)
+      sgxws_wait_idle(screen->hw, 2000);
+   if (sgxws_bo_valid(&res->zls) && res->zls_bytes < bytes)
+      sgxws_bo_free(screen->dev, &res->zls);
+   if (!sgxws_bo_valid(&res->zls)) {
+      if (sgxws_bo_alloc(screen->dev, &res->zls, SGXWS_MEM_ZLS, bytes,
+                         0x1000)) {
+         simple_mtx_unlock(&screen->lock);
+         return -ENOMEM;
+      }
+      res->zls_bytes = bytes;
+   }
+   simple_mtx_unlock(&screen->lock);
+
+   float *depth = (float *)res->zls.map;
+   uint8_t *st = (uint8_t *)res->zls.map + sgxws_zls_pixels(w, h) * samples * 4;
+   float *zr = malloc(sizeof(float) * w);
+   uint8_t *sr = malloc(w);
+
+   for (uint32_t y = 0; y < h && zr && sr; y++) {
+      const uint8_t *row = (const uint8_t *)res->data + y * res->stride;
+
+      if (util_format_has_depth(d))
+         util_format_unpack_z_float(f, zr, row, w);
+      else
+         for (uint32_t x = 0; x < w; x++)
+            zr[x] = 1.0f;
+      if (util_format_has_stencil(d))
+         util_format_unpack_s_8uint(f, sr, row, w);
+      else
+         memset(sr, 0, w);
+      for (unsigned s = 0; s < samples; s++)
+         for (uint32_t x = 0; x < w; x++) {
+            uint32_t i = zls_index(w, h, samples, x, y, s);
+
+            depth[i] = zr[x];
+            st[i] = sr[x];
+         }
+   }
+   free(zr);
+   free(sr);
+   res->zls_w = w;
+   res->zls_h = h;
+   res->zls_stored = false;
+   return 0;
+}
+
+/* before a map of a depth/stencil buffer: what renders stored is brought
+ * into the CPU copy */
+static void
+zls_sync_for_map(struct sgx_context *ctx, struct sgx_resource *res)
+{
+   struct sgx_screen *screen = sgx_screen(ctx->base.screen);
+
+   if (!res->zls_stored || !res->zls.map || !res->data || !res->zls_w)
+      return;
+   if (ctx->recording_zs == res && sgx_recording(ctx))
+      sgx_flush_frame(ctx);
+   simple_mtx_lock(&screen->lock);
+   if (screen->hw && res->use_seq == sgxws_next_seq(screen->hw))
+      sgxws_flush(screen->hw, 0);
+   if (screen->hw)
+      sgxws_wait_idle(screen->hw, 2000);
+   simple_mtx_unlock(&screen->lock);
+   zls_read(res);
+   res->zls_stored = false;
+   res->zls_unsampled = res->texture;
+}
 
 static void *
 sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
@@ -649,9 +847,21 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
             util_format_short_name(prsc->format), prsc->width0, prsc->height0,
             usage, box->x, box->y, box->width, box->height);
       sgx_flush_resource_writes(ctx, res);
-      if (sgxws_bo_wait(&res->bo, 2000))
-         fprintf(stderr,
-                 "sgx: a render into a mapped texture did not finish\n");
+      {
+         uint64_t w0 = (sgx_drv_debug & SGX_DEBUG_SYNC) ? os_time_get_nano() : 0;
+         int we = sgxws_bo_wait(&res->bo, 2000);
+
+         if (we)
+            fprintf(stderr,
+                    "sgx: a render into a mapped texture did not finish\n");
+         SGX_DBG(SYNC,
+                 "texture readback %s %ux%u level %u box %d,%d %dx%d: bo va %#x, rendered %#x, recording %s, waited %.3f ms (rc %d)\n",
+                 util_format_short_name(prsc->format), prsc->width0,
+                 prsc->height0, level, box->x, box->y, box->width,
+                 box->height, (unsigned)res->bo.va, res->rendered,
+                 sgx_recording(ctx) == res ? "this" : "other",
+                 (os_time_get_nano() - w0) / 1e6, we);
+      }
       t = ctx->stats.on ? os_time_get_nano() : 0;
       if (usage & PIPE_MAP_WRITE) {
          u_foreach_bit (l, res->rendered) {
@@ -673,6 +883,12 @@ sgx_transfer_map(struct pipe_context *pctx, struct pipe_resource *prsc,
       if (ctx->stats.on)
          ctx->stats.rb_ns += os_time_get_nano() - t;
    }
+   /* A depth/stencil buffer's renders keep their results in its ZLS buffer:
+    * the CPU copy catches up from it (level 0 only: renders write no other) */
+   if (util_format_is_depth_or_stencil(prsc->format) && !level &&
+       prsc->target != PIPE_BUFFER && !(usage & PIPE_MAP_UNSYNCHRONIZED) &&
+       !(usage & PIPE_MAP_DISCARD_WHOLE_RESOURCE))
+      zls_sync_for_map(ctx, res);
    /* A texture write lands in the CPU copy; the unmap puts it on the device
     * copy, or on a second one when a render may still sample the first
     * (tex_write) */
@@ -855,6 +1071,22 @@ tex_write(struct sgx_context *ctx, struct sgx_resource *res, unsigned level,
       res->level0_gen++;
 }
 
+/* A depth texture a render stored into: the depth is in its ZLS buffer
+ * only, so before a draw samples it, the ZLS buffer is read into the CPU
+ * copy and level 0's sampled copy is rewritten from it (fbo-depthtex), also
+ * when a map (glReadPixels) already brought the CPU copy up. */
+void
+sgx_resource_zls_for_sampling(struct sgx_context *ctx, struct sgx_resource *res)
+{
+   if (!(res->zls_stored || res->zls_unsampled) || !res->zls.map ||
+       !res->data || !res->zls_w || !sgx_tex_depth(res->base.format) ||
+       res->base.target != PIPE_TEXTURE_2D || res->base.array_size > 1)
+      return;
+   zls_sync_for_map(ctx, res);
+   tex_write(ctx, res, 0, 0, 0, 0, ~0u, ~0u);
+   res->zls_unsampled = false;
+}
+
 bool
 sgx_resource_cube0(struct sgx_context *ctx, struct sgx_resource *res)
 {
@@ -937,6 +1169,12 @@ sgx_transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
       }
    }
 
+   /* and a write to a depth/stencil buffer goes into its ZLS buffer, which
+    * the next render of its size loads (DrawPixels, CopyPixels, blits) */
+   if (util_format_is_depth_or_stencil(ptrans->resource->format) &&
+       !ptrans->level && ptrans->resource->target != PIPE_BUFFER &&
+       (ptrans->usage & PIPE_MAP_WRITE) && res->data)
+      zls_write(ctx, res);
    /* the CPU wrote a buffer another device shares: the next job flushes it */
    if (res->shared && (ptrans->usage & PIPE_MAP_WRITE))
       sgxws_bo_cpu_written(&res->bo);

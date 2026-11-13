@@ -42,6 +42,14 @@ sgx_tex_format(enum pipe_format format)
    case PIPE_FORMAT_R8G8B8X8_SRGB:
    case PIPE_FORMAT_R8_UNORM: /* stored as RGBA8 (sgx_tex_bpp) */
    case PIPE_FORMAT_R8G8_UNORM:
+   /* integer bytes, NEAREST: the compiler unpacks them (zero- or
+    * sign-extended) from the RGBA8 texel */
+   case PIPE_FORMAT_R8G8B8A8_UINT:
+   case PIPE_FORMAT_R8G8B8A8_SINT:
+   case PIPE_FORMAT_R8_UINT:
+   case PIPE_FORMAT_R8_SINT:
+   case PIPE_FORMAT_R8G8_UINT:
+   case PIPE_FORMAT_R8G8_SINT:
       return 0x0d;
    case PIPE_FORMAT_B8G8R8A8_UNORM:
    case PIPE_FORMAT_B8G8R8X8_UNORM:
@@ -63,10 +71,59 @@ sgx_tex_format(enum pipe_format format)
    case PIPE_FORMAT_Z24X8_UNORM:
    case PIPE_FORMAT_Z24_UNORM_S8_UINT:
    case PIPE_FORMAT_Z32_FLOAT:
+   /* 32-bit words returned unchanged (docs/GL3.md, H2): R32 one a texel;
+    * RG32 and RGBA32 as an R32 plane a channel (sgx_tex_raw32), the
+    * compiler reading each */
+   case PIPE_FORMAT_R32_UINT:
+   case PIPE_FORMAT_R32_SINT:
+   case PIPE_FORMAT_R32_FLOAT:
+   case PIPE_FORMAT_R32G32_UINT:
+   case PIPE_FORMAT_R32G32_SINT:
+   case PIPE_FORMAT_R32G32B32A32_UINT:
+   case PIPE_FORMAT_R32G32B32A32_SINT:
       return 0x12;
    default:
       return 0;
    }
+}
+
+/* The 32-bit words of a texel of an R32, RG32 or RGBA32 format (1, 2, 4);
+ * RG32 and RGBA32 are stored planar, one R32 texture a channel at
+ * sgx_tex_plane_stride apart, so that a pass per channel can render into
+ * them (the PBE writes 32 bits a pixel) and a read per channel sample them;
+ * 0 for other formats */
+unsigned
+sgx_tex_raw32(enum pipe_format format)
+{
+   switch (format) {
+   case PIPE_FORMAT_R32_UINT:
+   case PIPE_FORMAT_R32_SINT:
+   case PIPE_FORMAT_R32_FLOAT:
+      return 1;
+   case PIPE_FORMAT_R32G32_UINT:
+   case PIPE_FORMAT_R32G32_SINT:
+      return 2;
+   case PIPE_FORMAT_R32G32B32A32_UINT:
+   case PIPE_FORMAT_R32G32B32A32_SINT:
+      return 4;
+   default:
+      return 0;
+   }
+}
+
+/* stored as F32 words, sampled as T1 0x12 (sgx_tex_depth, sgx_tex_raw32) */
+bool
+sgx_tex_word32(enum pipe_format format)
+{
+   return sgx_tex_format(format) == SGX_TEXSTATE_FORMAT_F32;
+}
+
+/* a level's width in device texels (a plane's, for a planar format) */
+static unsigned
+dev_width(enum pipe_format format, unsigned w)
+{
+   (void)format;
+   return w;
 }
 
 /* sampled B, G, R, A ordered (sgx_tex_format): the compiler unpacks zyxw */
@@ -84,7 +141,7 @@ sgx_tex_bgra(enum pipe_format format)
 bool
 sgx_tex_depth(enum pipe_format format)
 {
-   return sgx_tex_format(format) == SGX_TEXSTATE_FORMAT_F32;
+   return util_format_is_depth_or_stencil(format) && sgx_tex_word32(format);
 }
 
 static unsigned
@@ -93,15 +150,17 @@ depth_pitch(unsigned w)
    return align(w, 32);
 }
 
-/* Bytes per texel on the device.  R8 and RG8 are stored as RGBA8: R, G (or
- * 0), 0, 255, which the PBE can render into (it writes no 8- or 16-bit
- * format) and the TPU samples as GL's (r, g, 0, 1); the CPU copy keeps
- * their own format, and encode_box/decode_box convert. */
+/* Bytes per texel on the device.  R8 and RG8 (and their integer twins) are
+ * stored as RGBA8: R, G (or 0), 0, 255 (1 for an integer format), which
+ * the PBE can render into (it writes no 8- or 16-bit format) and the TPU
+ * samples as GL's (r, g, 0, 1); the CPU copy keeps their own format, and
+ * encode_box/decode_box convert. */
 unsigned
 sgx_tex_bpp(enum pipe_format format)
 {
-   if (format == PIPE_FORMAT_R8_UNORM || format == PIPE_FORMAT_R8G8_UNORM ||
-       sgx_tex_depth(format))
+   if ((sgx_tex_format(format) == 0x0d &&
+        util_format_get_blocksize(format) < 4) ||
+       sgx_tex_word32(format))
       return 4;
    return util_format_get_blocksize(format);
 }
@@ -123,13 +182,14 @@ static size_t
 chain_offset(const struct pipe_resource *prsc, unsigned level)
 {
    unsigned bpp = sgx_tex_bpp(prsc->format);
-   bool depth = sgx_tex_depth(prsc->format);
+   bool word32 = sgx_tex_word32(prsc->format);
    size_t off = 0;
 
    for (unsigned l = 0; l < level; l++) {
       unsigned w = u_minify(prsc->width0, l), h = u_minify(prsc->height0, l);
 
-      off += depth ? (size_t)depth_pitch(w) * h * 4 : level_bytes(w, h, bpp);
+      off += word32 ? (size_t)depth_pitch(dev_width(prsc->format, w)) * h * 4
+                    : level_bytes(w, h, bpp);
    }
    return off;
 }
@@ -179,26 +239,39 @@ sgx_tex_dev_last(const struct pipe_resource *prsc)
 {
    if (prsc->target != PIPE_TEXTURE_2D || prsc->array_size > 1 ||
        !prsc->last_level || !twiddled(prsc->width0, prsc->height0) ||
-       sgx_tex_depth(prsc->format))
+       sgx_tex_word32(prsc->format))
       return prsc->last_level;
    return util_logbase2(MAX2(prsc->width0, prsc->height0));
+}
+
+/* the bytes from one channel's plane of an RG32 or RGBA32 texture to the
+ * next (a whole R32 chain, on 4 KiB); 0 for other formats */
+size_t
+sgx_tex_plane_stride(const struct pipe_resource *prsc)
+{
+   if (sgx_tex_raw32(prsc->format) < 2)
+      return 0;
+   return align64(chain_offset(prsc, sgx_tex_dev_last(prsc) + 1), 4096);
 }
 
 size_t
 sgx_tex_size(const struct pipe_resource *prsc)
 {
+   if (sgx_tex_raw32(prsc->format) > 1)
+      return sgx_tex_raw32(prsc->format) * sgx_tex_plane_stride(prsc);
    return prsc->array_size > 1 ? prsc->array_size * face_stride(prsc)
                                : chain_offset(prsc, sgx_tex_dev_last(prsc) + 1);
 }
 
-/* an R8 or RG8 texel (cbpp bytes) as the device stores it */
+/* an R8 or RG8 texel (cbpp bytes) as the device stores it; alpha 0xff, or
+ * 1 for an integer format */
 static inline void
-widen_texel(uint8_t *o, const uint8_t *s, unsigned cbpp)
+widen_texel(uint8_t *o, const uint8_t *s, unsigned cbpp, uint8_t alpha)
 {
    o[0] = s[0];
    o[1] = cbpp > 1 ? s[1] : 0;
    o[2] = 0;
-   o[3] = 0xff;
+   o[3] = alpha;
 }
 
 /* Copy the box x0..x1, y0..y1 of a level from the CPU copy into the texture
@@ -217,6 +290,7 @@ encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
    unsigned src_stride = util_format_get_stride(prsc->format, w);
    bool rgbx = prsc->format == PIPE_FORMAT_R8G8B8X8_UNORM;
    bool widen = cbpp != bpp; /* R8, RG8: the texel made RGBA8 */
+   uint8_t alpha = util_format_is_pure_integer(prsc->format) ? 1 : 0xff;
 
    x1 = MIN2(x1, w);
    y1 = MIN2(y1, h);
@@ -231,6 +305,22 @@ encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
             src + y * src_stride + (size_t)x0 * cbpp, x1 - x0);
       return;
    }
+   if (sgx_tex_raw32(prsc->format)) {
+      /* word c of each texel into plane c, an R32 row each */
+      size_t pitch = (size_t)depth_pitch(dev_width(prsc->format, w)) * 4,
+             ps = sgx_tex_plane_stride(prsc);
+      unsigned n = sgx_tex_raw32(prsc->format);
+
+      for (unsigned c = 0; c < n; c++)
+         for (unsigned y = y0; y < y1; y++) {
+            uint32_t *d = (uint32_t *)(dst + c * ps + y * pitch);
+            const uint32_t *s = (const uint32_t *)(src + y * src_stride);
+
+            for (unsigned x = x0; x < x1; x++)
+               d[x] = s[x * n + c];
+         }
+      return;
+   }
    if (!twiddled(w, h)) {
       size_t pitch = (size_t)align(w, 8) * bpp;
 
@@ -238,7 +328,8 @@ encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
          if (widen) {
             for (unsigned x = x0; x < x1; x++)
                widen_texel(dst + y * pitch + (size_t)x * 4,
-                           src + y * src_stride + (size_t)x * cbpp, cbpp);
+                           src + y * src_stride + (size_t)x * cbpp, cbpp,
+                           alpha);
             continue;
          }
          memcpy(dst + y * pitch + (size_t)x0 * bpp,
@@ -280,7 +371,7 @@ encode_rect(struct sgx_resource *res, unsigned level, const uint8_t *src,
                   out + (size_t)(spread[y - by] | spread[x - bx] << 1) * bpp;
 
                if (widen)
-                  widen_texel(o, s + (size_t)x * cbpp, cbpp);
+                  widen_texel(o, s + (size_t)x * cbpp, cbpp, alpha);
                else
                   memcpy(o, s + (size_t)x * bpp, bpp);
                if (rgbx)
@@ -449,6 +540,21 @@ sgx_tex_decode_box(struct sgx_resource *res, unsigned level, unsigned layer,
    /* (nothing renders into a depth texture: the CPU copy is current) */
    if (x0 >= x1 || y0 >= y1 || sgx_tex_depth(prsc->format))
       return;
+   if (sgx_tex_raw32(prsc->format)) {
+      size_t pitch = (size_t)depth_pitch(dev_width(prsc->format, w)) * 4,
+             ps = sgx_tex_plane_stride(prsc);
+      unsigned n = sgx_tex_raw32(prsc->format);
+
+      for (unsigned c = 0; c < n; c++)
+         for (unsigned y = y0; y < y1; y++) {
+            uint32_t *d = (uint32_t *)(dst + y * stride);
+            const uint32_t *s = (const uint32_t *)(src + c * ps + y * pitch);
+
+            for (unsigned x = x0; x < x1; x++)
+               d[x * n + c] = s[x];
+         }
+      return;
+   }
    if (!twiddled(w, h)) {
       size_t pitch = (size_t)align(w, 8) * bpp;
 
@@ -602,10 +708,13 @@ sgx_tex_words(const struct pipe_sampler_view *view,
          t1.height = prsc->height0 - 1;
       }
    }
-   if (sgx_tex_depth(prsc->format)) {
+   if (sgx_tex_word32(prsc->format)) {
       /* rows of depth_pitch texels, strided as a render target is read
-       * (16x16: T0 00060e00, T1 d200f00f), base level only */
-      unsigned p = depth_pitch(w) - 1;
+       * (16x16: T0 00060e00, T1 d200f00f), base level only; an RG32 or
+       * RGBA32 texture's plane 0 (a read of channel c adds c planes,
+       * sgx_tex_plane_stride) */
+      unsigned dw = dev_width(prsc->format, w);
+      unsigned p = depth_pitch(dw) - 1;
 
       sgx_pack(&t[0], TEXSTATE_STRIDED_WORD0, t0)
       {
@@ -620,7 +729,7 @@ sgx_tex_words(const struct pipe_sampler_view *view,
       {
          t1.layout = SGX_TEXSTATE_LAYOUT_STRIDED;
          t1.format = SGX_TEXSTATE_FORMAT_F32;
-         t1.width = w - 1;
+         t1.width = dw - 1;
          t1.height = h - 1;
       }
    }

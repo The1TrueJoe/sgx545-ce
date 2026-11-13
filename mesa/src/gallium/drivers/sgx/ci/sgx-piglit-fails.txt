@@ -13,26 +13,9 @@ spec@glsl-1.10@execution@interpolation@interpolation-none-gl_frontsecondarycolor
 spec@glsl-1.10@execution@interpolation@interpolation-none-other-flat-vertex,Fail
 spec@glsl-1.10@execution@interpolation@interpolation-none-other-smooth-vertex,Fail
 
-# gl_FragDepth isn't written yet: the compiler leaves it for a depthf whose form isn't traced, so the triangle's depth is used (st draws and copies depth pixels with gl_FragDepth too)
-shaders@glsl-bug-22603,Fail
-spec@!opengl 1.1@depthstencil-default_fb-copypixels,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort,Fail
+# gl_FragDepth is written (depthf, ISA.md, H10, 2026-11-12); these two weren't in that run's lists, so not yet confirmed
 spec@!opengl 1.1@draw-pixels,Fail
-spec@!opengl 1.1@drawpix-z,Fail
 spec@!opengl 1.4@copy-pixels,Fail
-spec@!opengl 2.0@early-z,Fail
-spec@arb_depth_texture@fbo-depth-gl_depth_component16-copypixels,Fail
-spec@arb_depth_texture@fbo-depth-gl_depth_component16-drawpixels,Fail
-spec@arb_depth_texture@fbo-depth-gl_depth_component24-copypixels,Fail
-spec@arb_depth_texture@fbo-depth-gl_depth_component24-drawpixels,Fail
-spec@arb_depth_texture@fbo-depth-gl_depth_component32-copypixels,Fail
-spec@arb_depth_texture@fbo-depth-gl_depth_component32-drawpixels,Fail
-spec@ext_packed_depth_stencil@fbo-depth-gl_depth24_stencil8-copypixels,Fail
-spec@ext_packed_depth_stencil@fbo-depth-gl_depth24_stencil8-drawpixels,Fail
-spec@ext_packed_depth_stencil@fbo-depthstencil-gl_depth24_stencil8-copypixels,Fail
-spec@ext_packed_depth_stencil@fbo-depthstencil-gl_depth24_stencil8-drawpixels-24_8,Fail
-spec@ext_packed_depth_stencil@fbo-depthstencil-gl_depth24_stencil8-drawpixels-float-and-ushort,Fail
-spec@glsl-1.10@execution@glsl-1.10-fragdepth,Fail
 
 # varyings: more components than ten sets of four hold (varying-packing: sgx_pack_varyings can't place them); texrect-many not diagnosed
 spec@arb_texture_rectangle@texrect-many,Fail
