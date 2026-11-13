@@ -1,0 +1,60 @@
+# Generate the kick-test reference frame offline: build tools/gen/frame-fake
+# (native host build, no GPU, touches no hardware) and render a 64x64 frame,
+# capturing the pvrtrace and the post-render structure dump. The artifact feeds
+# the CMDTA/RT/PB command-block annotation that is done on the ukernel side.
+# Exploration only: this builds host tools, not the driver, and no golden image.
+name: sgx530-kick-frame
+
+permissions:
+  contents: read
+
+# workflow_dispatch needs the file on the default branch to appear in the UI;
+# the push trigger on wip/** is what actually runs it on this feature branch.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/**']
+    paths:
+      - tools/gen/**
+      - tools/ukernel/**
+      - .github/workflows/sgx530-kick-frame.yml
+
+concurrency:
+  group: sgx530-kick-frame-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frame:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build frame-fake (native, no GPU)
+        run: |
+          set -eux
+          R=$PWD
+          G=$R/tools/gen
+          . "$R/libpvr/abi/flags.sh"
+          CC="cc -O2 -Wno-unused-function $DEFS $INC -I$R/libpvr"
+          python3 "$G/mkusse.py" > "$G/usse_progs.h"
+          $CC -c -Dioctl=fake_ioctl -Dmmap=fake_mmap -o "$G/pvr-fake.o" "$R/libpvr/pvr.c"
+          $CC -o "$G/frame-fake" "$G/frame.c" "$G/sgxgen.c" "$G/fakepvr.c" "$G/pvr-fake.o" -lm
+
+      - name: Render 64x64, capture trace and post-render dump
+        run: |
+          set -eux
+          G=$PWD/tools/gen
+          O=$RUNNER_TEMP/kick
+          mkdir -p "$O"
+          SGXGEN_DUMP_AFTER=1 "$G/frame-fake" -n /dev/null -s 64x64 \
+            -t "$O/frame64.trace" 2> "$O/dump64.txt"
+          echo "--- dump64.txt ---"; cat "$O/dump64.txt"
+          ls -l "$O"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgx530-kick-frame64
+          path: ${{ runner.temp }}/kick/
+          if-no-files-found: error
+          retention-days: 14
