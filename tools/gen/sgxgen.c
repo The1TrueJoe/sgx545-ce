@@ -293,6 +293,19 @@ static uint32_t doutu_w0(struct sgx_ctx *c, uint32_t va, int vertex, uint32_t te
 	return ((temps + 3) >> 2) << 24 | ((off >> 19) + (vertex ? 10 : 0)) | ((off & 0x7ffff) >> 3) << 4;
 }
 
+/* Main vertex/pixel shader DOUTU. SGXGEN_SHADER_BIT21 probe: the 530 may drop a
+ * shader task's temp/memory writes unless the launch carries the write-retire
+ * context (bit21), the way §9 did for the microkernel's EDM task. Emit/state
+ * tasks don't take this (they retire on emit); only the main shaders do. */
+static uint32_t doutu_w0_shader(struct sgx_ctx *c, uint32_t va, int vertex, uint32_t temps)
+{
+	uint32_t w0 = doutu_w0(c, va, vertex, temps);
+
+	if (getenv("SGXGEN_SHADER_BIT21"))
+		w0 |= 0x200000;
+	return w0;
+}
+
 /* LIMM rN, #v (STATE.md, from the DDK's end-of-tile generator) */
 static void usse_limm(uint32_t *w, uint32_t v, uint32_t reg)
 {
@@ -1177,7 +1190,7 @@ void sgx_clear(struct sgx_ctx *c, const float rgba[4], float depth)
 	blk[10] = 5;						/* one 4-component set */
 	blk[11] = 0;
 	state_block(c, blk, 12, 12, 3);
-	vdm_draw(c, SGX_TRIANGLES, 3, c->idx, v.va, 16, 4, doutu_w0(c, c->clear_vs, 1, 0), 4, 8);
+	vdm_draw(c, SGX_TRIANGLES, 3, c->idx, v.va, 16, 4, doutu_w0_shader(c, c->clear_vs, 1, 0), 4, 8);
 }
 
 static uint32_t ispa(const struct sgx_state *st)
@@ -1238,7 +1251,7 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	/* PDS middle word: b18-24 = (secondary dwords+3)>>2 [D]; the rest from the DDK's
 	 * shader object (b0, b16-17 constant; b25-28 = 0xb for this shader) [G] */
 	blk[n++] = 0x00030001 | ((fs->sec_dwords + 3) >> 2) << 18 | 0xbu << 25;
-	prim = pds_pixel(c, fs->w0 ? fs->w0 : doutu_w0(c, fs->code, 0, fs->temps), 4, 0, &rows);
+	prim = pds_pixel(c, fs->w0 ? fs->w0 : doutu_w0_shader(c, fs->code, 0, fs->temps), 4, 0, &rows);
 	blk[n++] = pds_word(c, prim, rows);
 	/* viewport: a window flips y, a pbuffer doesn't [C x offset, D rest] */
 	blk[n++] = f32(vx + vwid * 0.5f);
@@ -1281,7 +1294,7 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	if (getenv("SGXGEN_FAULT"))
 		v.va = c->dev->heap_base[H_GENERAL] + 0x800000;
 	vdm_draw(c, d->prim, d->count, c->idx, v.va, vw, vs->attr_dwords,
-		 vs->w0 ? vs->w0 : doutu_w0(c, vs->code, 1, vs->temps), vs->in_dwords, vs->out_dwords);
+		 vs->w0 ? vs->w0 : doutu_w0_shader(c, vs->code, 1, vs->temps), vs->in_dwords, vs->out_dwords);
 	return 0;
 }
 
