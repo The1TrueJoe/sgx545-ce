@@ -242,6 +242,7 @@ int pvrsgx_ioctl_upload_code(struct drm_device *drm, void *data, struct drm_file
 		goto out_unlock;
 	}
 	if (bad >= 0) {
+		args->bad_offset = args->offset + bad * 8;
 		drm_dbg_driver(drm, "UPLOAD_CODE: word at 0x%llx refused: %s\n",
 			       args->bad_offset, pvrsgx_usse_refusal_name(why));
 		err = -EINVAL;
