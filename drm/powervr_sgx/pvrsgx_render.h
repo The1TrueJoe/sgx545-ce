@@ -42,6 +42,10 @@ struct pvrsgx_render_ctx {
 /* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
 #define PVRSGX_PB_DEFAULT_PAGES	0x1000
 
+/* The PB a context gets without asking: the default, or the core's largest. */
+#define pvrsgx_pb_default_pages(sdev) \
+	min_t(u32, PVRSGX_PB_DEFAULT_PAGES, pvrsgx_heaps(sdev)->pb_max_pages)
+
 void pvrsgx_pb_put(struct pvrsgx_pb *pb);
 void pvrsgx_pb_unmap(struct pvrsgx_vm *vm);
 

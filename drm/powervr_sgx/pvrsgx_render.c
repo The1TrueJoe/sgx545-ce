@@ -109,7 +109,7 @@ static void pb_init(struct pvrsgx_pb *pb)
 static struct pvrsgx_pb *pb_create(struct pvrsgx_device *sdev, u32 req_pages)
 {
 	struct pvrsgx_pb *pb = kzalloc_obj(*pb);
-	u32 pages = (req_pages ?: PVRSGX_PB_DEFAULT_PAGES) + PB_EXTRA_PAGES;
+	u32 pages = (req_pages ?: pvrsgx_pb_default_pages(sdev)) + PB_EXTRA_PAGES;
 	int err;
 
 	if (!pb)
