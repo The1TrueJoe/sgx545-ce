@@ -507,7 +507,7 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     `EXT_texture_integer` only with RGBA32UI/I render targets, which the
     plane passes now give; the switch stays off until the GL 3.0 set is
     there.
-- **Uniform blocks** (`SGX_DEBUG=ubo,glsl130`: 12 a stage of 16 KiB,
+- **Uniform blocks** (`SGX_DEBUG=ubo,glsl130`: 12 a stage of 64 KiB,
   `ARB_uniform_buffer_object`). The compiler loads a block with `ld.a.d`
   from the address in constant `SGX_K_UBO + n`. For each draw the winsys
   copies every block the program reads into the frame's general ring and
@@ -528,17 +528,20 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     block, a member at byte 1280, past the load's immediate, a block array
     indexed by a uniform, a block rewritten between two draws of one frame).
   - piglit's 316 `arb_uniform_buffer_object` tests, with the option: 33
-    pass, 282 skip, 1 fail (`minmax`: GL 3.x's 1024 fragment uniform
-    components, the default uniforms' 508). With GL 3.1 / GLSL 1.40
-    overrides: 41 pass, 275 fail, no GPU faults. 270 of those fails check
-    the block in the vertex program and pass the result on in a
-    `flat out int`. The driver doesn't do flat varyings yet (see "Flat
-    varyings"): the first flat varying, the one the compiler puts on the
-    colour source, comes back wrong even with no block in the program, and
-    the next one, a texcoord set equal at every vertex, comes back exact.
-    The same tests with their checks moved to the fragment program pass (12
-    of 12, runs 22-23). Two more fail to link (blocks over 16 KiB, as they
-    should), and `minmax`.
+    pass, 282 skip, 1 fail. Under GL 3.1 / GLSL 1.40 overrides: **315
+    pass, 1 fail** (run 27).
+    - Run 21 had 41 pass. 270 of its fails checked the block in the vertex
+      program and passed the result on in a `flat out int`, which the
+      driver's varying layout sent through an F32 iterator as a raw word.
+      With integer varyings split (below), they pass.
+    - Two more needed blocks over 16 KiB (32,336 bytes): the size is now
+      64 KiB, as in most drivers.
+  - The one fail is `minmax`: GL 3.x's 1024 fragment uniform components,
+    where the default uniforms give 508 (128 vec4, less st's alpha-test
+    slot). Not a block limit. More default uniforms need the constants the
+    driver numbers from 960 (border colours, `SGX_K_TEXSIZE`,
+    `SGX_K_INSTANCE`) moved past the user range: the compiler's numbering,
+    a change on both sides.
   - The default path with this in (run 23): dEQP 78 F / 16637 P and zs, ms,
     ff, gl21 against run 19 unchanged, apart from fixed-clip-enables (the
     intermittent above).
@@ -633,9 +636,20 @@ Agreed with the compiler (2026-11-11):
   output (o0 alone until H1).
 - **UBOs:** `load_ubo` is an `ld.a.d` from the address in constant
   `ubo_base_k + n`.
-- **Integer varyings** pass as two exact 16-bit halves until a test shows
-  that a flat iteration keeps raw 32-bit words (needs flat shading in the
-  driver first).
+- **Integer varyings** pass as two exact 16-bit halves
+  (`sgx_varying.split`), as an F32 iteration keeps whole numbers to 65535.
+  A raw word doesn't survive one: -1 is a NaN and comes back as 0x7fffffff,
+  and small values are denormals (run 24). The driver's layout gives a
+  slot that holds an integer two sets, the low halves in the first; a float
+  in the same slot (another component) stays in the first set. The
+  compiler refuses an integer varying the layout doesn't split.
+  - Not yet exact for a **constant** value: the compiler swaps a constant
+    for a literal by value and drops the half it reads, so the high half
+    comes back as the low one (0x8080c0c0 as 0xc0c0c0c0, run 26). The
+    compiler's fix for that (941af328) made every integer varying exact on
+    a board (run 28), but it broke GLES2 textures (dEQP 53 crashes, 129
+    more fails), so it is out until it's reworked.
+  - Values computed in the shader, and uniforms, keep the half they read.
 
 Still open:
 
