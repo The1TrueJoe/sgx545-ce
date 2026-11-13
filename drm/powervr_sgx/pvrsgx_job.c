@@ -677,6 +677,7 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	cancel_work_sync(&sdev->reap_work);
 	/* Drains the jobs' final puts, which drm_sched_fini may have queued. */
 	destroy_workqueue(sdev->free_wq);
+	sdev->free_wq = NULL;
 	destroy_workqueue(sdev->wq);
 	pvrsgx_coredump_fini(sdev);
 	dma_fence_put(sdev->last_fence);
