@@ -1752,6 +1752,25 @@ void pvrsgx_fw_stop(struct pvrsgx_device *sdev)
 	u32 data[6] = { 0, POWER_OFF };
 
 	if (sdev->fw_running) {
+		if (pvrsgx_edm_init && sdev->family->event_pds_guessed) {
+			/*
+			 * EDM bring-up stop: skip the DDK power-off handshake (CMD_POWER +
+			 * the POWER_STATUS poll and the clock-gate wait it leads to). The
+			 * microkernel's power handler is not yet validated on the §9 path,
+			 * and the handshake wedges the unload (log 2026-11-12-2347): rmmod
+			 * faulted with the cores left half-torn-down. Stop the GPU
+			 * host-side instead — drop power, drain the IRQ, undo the init
+			 * script with the clocks still on, then soft-reset the cores (the
+			 * real stop). A validated microkernel power-off can come later.
+			 */
+			WRITE_ONCE(sdev->powered, false);
+			synchronize_irq(sdev->irq);
+			deinit_script(sdev);
+			sdev->fw_running = false;
+			sgx_wr(sdev, SGX_CR_SOFT_RESET, cr->soft_reset_bif | cr->soft_reset_cores);
+			sgx_rd(sdev, SGX_CR_SOFT_RESET);
+			return;
+		}
 		if (pvrsgx_ccb_send(sdev, PVRSGX_CMD_POWER, data, NULL) ||
 		    pvrsgx_poll(sdev, &hc[HOSTCTL_POWER_STATUS], HOSTCTL_POWMAN_POWEROFF_COMPLETE,
 				HOSTCTL_POWMAN_POWEROFF_COMPLETE, 500000))
