@@ -31,7 +31,6 @@ core.
 | Piece | State | Upstreamable as-is? |
 |---|---|---|
 | `kernel/` (`pvrsrvkm`) | Intel's GPL DDK 1.7 ported to Linux 7.1, with an i386↔x86_64 compat bridge. Runs on the EA. | **No.** The services/bridge-ioctl uAPI will not be accepted (§3.1). Keep it as the downstream driver and the A/B rig. |
-| `srvinit/` | Userspace GPU bring-up (replaces `libsrv_init`); `-o` loads our microkernel | **No.** Upstream, the *kernel* loads firmware and initialises the GPU. |
 | `ukernel/` | Open microkernel in USSE assembly, validated offline: init, host-kick dispatch, TA kick, TA finished, 3D start, render done; register programming matches the DDK per phase. 3ce8f51 fixed the init path offline (bare-DOUTU pds0 + loader-patched limms). | The **key to the firmware problem** (§3.3). Not complete: render teardown, transfers, cleanup, power, multi-render bookkeeping, hardware validation. |
 | `mesa/` | Gallium driver + NIR→USSE compiler, overlay on Mesa 26.2.5. EGL fbdev only, GLES2, no GBM. Pixel-exact vs the DDK in the A/B cases. Minecraft through gl4es at ~33.5 FPS vs the DDK's ~41. | **Compiler and most of the driver: yes, in spirit.** The winsys (`libpvr` over the services bridge) must be rewritten for a new uAPI. |
 | `libpvr/` | Services client (bridge ioctls) shared by srvinit, winsys and tools. `abi/` is generated from the GPL kernel headers. | **No.** It disappears once the new uAPI exists. Nothing derived from `kernel/src` headers may go into Mesa (§3.5). |
