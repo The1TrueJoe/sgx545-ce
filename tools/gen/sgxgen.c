@@ -24,6 +24,7 @@ int ioctl(int fd, unsigned long req, ...);	/* musl's sys/ioctl.h clashes with th
 
 #include "sgxgen.h"
 #include "usse_progs.h"
+#include "pvrsgx_pds_interleave.h"
 
 /* SGX heap ids (low byte of ui32HeapID) */
 enum { H_GENERAL = 0, H_TADATA = 1, H_KDATA = 3, H_PIXSHADER = 4, H_VTXSHADER = 5, H_PDSPIXEL = 6,
@@ -352,18 +353,22 @@ static void pds_d1(struct pds *p, unsigned i, uint32_t v)
 		p->n1 = i + 1;
 }
 
-/* Lay a program out as 16-byte rows (DS0 DS0 DS1 DS1), code after. */
+/* The device's PDS data interleave (2-dword for the 545, 8-word for the 530);
+ * set at sgx_dev_open. sgxgen drives one device per run. */
+static int pds_2dwords = 1;
+
+/* Lay a program out as 16-byte data rows, code after. DS0/DS1 interleave per the
+ * device's rule (pvrsgx_pds_interleave.h); 2-dword is DS0 DS0 DS1 DS1 per row. */
 static uint32_t pds_emit(struct sgx_ring *r, const struct pds *p, uint32_t *rows_out)
 {
-	uint32_t rows = ((p->n0 > p->n1 ? p->n0 : p->n1) + 1) / 2;
+	uint32_t rows = pvrsgx_pds_ds_rows(p->n0, p->n1, pds_2dwords);
 	struct sgx_ptr m = ring_alloc(r, rows * 16 + p->nc * 4, PDS_ALIGN);
 
-	for (uint32_t i = 0; i < rows; i++) {
-		m.p[4 * i + 0] = p->ds0[2 * i];
-		m.p[4 * i + 1] = p->ds0[2 * i + 1];
-		m.p[4 * i + 2] = p->ds1[2 * i];
-		m.p[4 * i + 3] = p->ds1[2 * i + 1];
-	}
+	memset(m.p, 0, rows * 16);
+	for (unsigned i = 0; i < p->n0; i++)
+		m.p[pvrsgx_pds_ds_word(i, pds_2dwords)] = p->ds0[i];
+	for (unsigned i = 0; i < p->n1; i++)
+		m.p[pvrsgx_pds_ds_word(0x40 + i, pds_2dwords)] = p->ds1[i];
 	memcpy(m.p + 4 * rows, p->code, p->nc * 4);
 	if (rows_out)
 		*rows_out = rows;
@@ -471,6 +476,9 @@ int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
 
 	(void)trace;
 	memset(d, 0, sizeof *d);
+	/* Bring-up: SGXGEN_PDS_8WORD selects the 530 interleave. The proper source
+	 * is a DEV_QUERY core/quirk field; wire that once the uAPI carries it. */
+	pds_2dwords = getenv("SGXGEN_PDS_8WORD") ? 0 : 1;
 	d->fd = node ? open(node, O_RDWR | O_CLOEXEC) : open_render_node();
 	if (d->fd < 0)
 		return -errno;
@@ -496,6 +504,7 @@ int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
 	int e;
 
 	memset(d, 0, sizeof *d);
+	pds_2dwords = getenv("SGXGEN_PDS_8WORD") ? 0 : 1;
 	if ((e = pvr_open(&d->pvr, node)))
 		return e;
 	if (trace && (e = pvr_trace_open(&d->pvr, trace)))

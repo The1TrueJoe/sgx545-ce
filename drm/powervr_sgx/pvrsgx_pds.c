@@ -7,6 +7,7 @@
 
 #include "pvrsgx_fw.h"
 #include "pvrsgx_pds.h"
+#include "pvrsgx_pds_interleave.h"
 
 /*
  * DOUTU word 0 for microkernel code at device address a: code base 15 plus the
@@ -20,11 +21,10 @@ u32 pvrsgx_doutu(u32 kcode, u32 a)
 	return ((seg + 15) & 15) | 0x8000000 | (((off - (seg << 19)) * 2) & 0x3ffff0);
 }
 
+/* The driver programs only the microkernel-entry PDS, all on 2-dword cores. */
 void pvrsgx_pds_ds(struct pvrsgx_pds *p, unsigned int r, u32 v)
 {
-	unsigned int k = r & 0x3f;
-
-	p->w[(k >> 1) * 4 + (r >= 0x40 ? 2 : 0) + (k & 1)] = v;
+	p->w[pvrsgx_pds_ds_word(r, 1)] = v;
 }
 
 static void pds_emit(struct pvrsgx_pds *p, u32 i)
@@ -87,9 +87,10 @@ void pvrsgx_pds_entry(struct pvrsgx_device *sdev, enum pvrsgx_fw_buf b, u32 e)
 		 * init/event entry at offset 0.
 		 */
 		p = pvrsgx_pds_prog(sdev, b, 12);
-		p.w[0] = 0x0020000f;	/* DS0[0]: code base 15, bit 21, no temps */
-		p.w[1] = 0x04000000;	/* DS0[1] */
-		p.w[8] = 0x00000001;	/* DS1[0]: DOUTU word 2 */
+		/* The 8-word interleave (not a 2-dword core): DS1[0] lands at word 8. */
+		p.w[pvrsgx_pds_ds_word(PDS_D0(0), 0)] = 0x0020000f;	/* DS0[0]: code base 15, bit 21, no temps */
+		p.w[pvrsgx_pds_ds_word(PDS_D0(1), 0)] = 0x04000000;	/* DS0[1] */
+		p.w[pvrsgx_pds_ds_word(PDS_D1(0), 0)] = 0x00000001;	/* DS1[0]: DOUTU word 2 */
 		pvrsgx_pds_movs(&p, PDS_DOUTU, PDS_D0(0), PDS_D0(1), PDS_D1(0), PDS_D0(0));
 		pvrsgx_pds_halt(&p);
 		return;
