@@ -40,34 +40,35 @@ struct sgx_const {
 };
 
 #define SGX_MAX_CONSTS 256 /* SA dwords of constants (sa127 ends them) */
-/* The driver's constant numbers, 1280 on: past every uniform (GL 3.x's 1024
- * components and st's 9 vec4 fit under 1280) and under the compiler's
- * SGX_MAX_CONST_K (1536), in the order they had below 1280, so a GLES2
- * program's constants keep their order.
+/* The driver's constant numbers, 1064 to 1175: past every uniform (GL 3.x's
+ * 1024 components and st's 9 vec4 end at 1059), in the order they had, so a
+ * GLES2 program's constants keep their order.  Under 1280: the same numbers
+ * from 1280 on broke programs on a board (run 35, the encoder given an
+ * operand with no register file), not yet explained.
  *
  * fragment constants the driver fills: texture unit u's level-0 width and
  * height at SGX_K_TEXSIZE + 2u (st's textureSize, as its rectangle lookups
  * scale by it) */
-#define SGX_K_TEXSIZE       1280
+#define SGX_K_TEXSIZE       1064
 #define SGX_K_TEXSIZE_UNITS 8
 /* the vertex constant the draw fills with gl_InstanceID, as a float
  * (sgx_program.c lower_instance_id) */
-#define SGX_K_INSTANCE 1296
+#define SGX_K_INSTANCE 1080
 /* The driver's block of constant numbers for programs compiled with the
  * compiler's native integers (docs/GL3.md, "Crossing the driver/compiler
  * line"): unit u's base-level width, height and depth at SGX_K_SIZE + 3u,
  * gl_InstanceID at SGX_K_INSTANCE_INT, all raw integers; uniform block n's
  * GPU address at SGX_K_UBO + n */
-#define SGX_K_SIZE         1304
+#define SGX_K_SIZE         1088
 #define SGX_K_SIZE_UNITS   16
-#define SGX_K_INSTANCE_INT 1352
-#define SGX_K_UBO          1360 /* to 1375: the compiler takes 16 blocks */
+#define SGX_K_INSTANCE_INT 1136
+#define SGX_K_UBO          1144 /* to 1159: the compiler takes 16 blocks */
 #define SGX_UBO_BYTES      65536 /* a block's size, GL_MAX_UNIFORM_BLOCK_SIZE */
 #define SGX_MAX_UBOS       12 /* load_ubo's blocks 0-11: constant buffers 1-12 */
 /* unit u's level count (textureQueryLevels, and the compiler's own level
  * choice for word-by-word fetches) at SGX_K_LEVELS + u, a raw integer */
-#define SGX_K_LEVELS       1376
-static_assert(SGX_K_LEVELS + SGX_K_SIZE_UNITS <= SGX_MAX_CONST_K,
+#define SGX_K_LEVELS       1160
+static_assert(SGX_K_TEXSIZE >= 1060 && SGX_K_LEVELS + SGX_K_SIZE_UNITS <= 1280,
               "the driver's constants past the compiler's numbers");
 
 #define SGX_MAX_DEP_SAMPLES 8
