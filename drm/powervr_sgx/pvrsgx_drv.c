@@ -370,12 +370,18 @@ static struct pci_driver pvrsgx_pci_driver = {
 	.driver.pm = pm_ptr(&pvrsgx_pm_ops),
 };
 
+struct workqueue_struct *pvrsgx_put_wq;
+
 static int __init pvrsgx_init(void)
 {
-	int err = pci_register_driver(&pvrsgx_pci_driver);
+	int err;
 
+	pvrsgx_put_wq = alloc_workqueue("powervr_sgx_put", WQ_UNBOUND, 0);
+	if (!pvrsgx_put_wq)
+		return -ENOMEM;
+	err = pci_register_driver(&pvrsgx_pci_driver);
 	if (err)
-		return err;
+		goto err_wq;
 	err = pvrsgx_aux_register();
 	if (err)
 		goto err_pci;
@@ -388,6 +394,8 @@ err_aux:
 	pvrsgx_aux_unregister();
 err_pci:
 	pci_unregister_driver(&pvrsgx_pci_driver);
+err_wq:
+	destroy_workqueue(pvrsgx_put_wq);
 	return err;
 }
 module_init(pvrsgx_init);
@@ -397,6 +405,8 @@ static void __exit pvrsgx_exit(void)
 	pvrsgx_of_unregister();
 	pvrsgx_aux_unregister();
 	pci_unregister_driver(&pvrsgx_pci_driver);
+	/* After every device: drains the puts that release them. */
+	destroy_workqueue(pvrsgx_put_wq);
 }
 module_exit(pvrsgx_exit);
 

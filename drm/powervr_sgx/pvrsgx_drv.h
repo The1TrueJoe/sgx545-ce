@@ -29,6 +29,9 @@ int pvrsgx_probe_common(struct pvrsgx_device *sdev);
 void pvrsgx_remove_common(struct pvrsgx_device *sdev);
 void pvrsgx_shutdown_common(struct pvrsgx_device *sdev);
 
+/* For puts that may release a device, away from its own workqueues. */
+extern struct workqueue_struct *pvrsgx_put_wq;
+
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_GMA500)
 int pvrsgx_aux_register(void);
 void pvrsgx_aux_unregister(void);

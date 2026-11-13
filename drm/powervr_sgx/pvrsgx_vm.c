@@ -313,6 +313,11 @@ static void vm_pd_unload(struct pvrsgx_device *sdev, struct pvrsgx_mmu *mmu)
 		pm_runtime_put(dev);
 }
 
+static void vm_put_work(struct work_struct *work)
+{
+	drm_gpuvm_put(&container_of(work, struct pvrsgx_vm, put_work)->gpuvm);
+}
+
 static void vm_release(struct kref *ref)
 {
 	struct pvrsgx_vm *vm = container_of(ref, struct pvrsgx_vm, ref);
@@ -334,6 +339,15 @@ static void vm_release(struct kref *ref)
 				      PVRSGX_CC_INVAL_DATA;
 	mutex_unlock(&vm->sdev->ccb_lock);
 	mutex_destroy(&vm->lock);
+	/*
+	 * Its reference to the DRM device may be the last, and the device's
+	 * release can't run on the driver's own workqueues, which it destroys.
+	 */
+	if (current_work()) {
+		INIT_WORK(&vm->put_work, vm_put_work);
+		queue_work(pvrsgx_put_wq, &vm->put_work);
+		return;
+	}
 	drm_gpuvm_put(&vm->gpuvm);
 }
 

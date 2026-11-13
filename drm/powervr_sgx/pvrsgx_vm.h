@@ -48,6 +48,8 @@ struct pvrsgx_vm {
 	u32 ran_gen;
 	/** @pd_slot: Its slot in the microkernel's PD table (single-context cores), or 0. */
 	int pd_slot;
+	/** @put_work: Its last put, from a work item (vm_release()). */
+	struct work_struct put_work;
 };
 
 struct pvrsgx_vm *pvrsgx_vm_create(struct pvrsgx_device *sdev);
