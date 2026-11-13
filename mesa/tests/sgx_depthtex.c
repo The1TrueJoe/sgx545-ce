@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
   glDepthFunc(GL_LESS);
   color_quad(-1, 0, 0.25f, 0, 1, 0);
   color_quad(-1, 1, 0.75f, 1, 0, 0);
-  pixel_is(0, 0, 255, 0, 0, 0); /* ends the render */
+  pixel_is(0, 0, 0, 255, 0, 0); /* ends the render */
   color_quad(-1, 1, 0.5f, 0, 0, 1);
   check("depth", halves_are(0, 255, 0, 0, 0, 255, 0));
 
