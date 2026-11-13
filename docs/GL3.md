@@ -642,14 +642,12 @@ Agreed with the compiler (2026-11-11):
   and small values are denormals (run 24). The driver's layout gives a
   slot that holds an integer two sets, the low halves in the first; a float
   in the same slot (another component) stays in the first set. The
-  compiler refuses an integer varying the layout doesn't split.
-  - Not yet exact for a **constant** value: the compiler swaps a constant
-    for a literal by value and drops the half it reads, so the high half
-    comes back as the low one (0x8080c0c0 as 0xc0c0c0c0, run 26). The
-    compiler's fix for that (941af328) made every integer varying exact on
-    a board (run 28), but it broke GLES2 textures (dEQP 53 crashes, 129
-    more fails), so it is out until it's reworked.
-  - Values computed in the shader, and uniforms, keep the half they read.
+  compiler refuses an integer varying the layout doesn't split. A constant
+  is split into two, one a half, where the halves are packed (the
+  compiler's c4944e3f; its first fix, 941af328, broke GLES2 textures, run
+  28). Exact in both stages on a board (run 32: 1, -1, 0x01020304,
+  0x12345678, 0x8080c0c0, alone and after another flat varying), with
+  dEQP unchanged.
 
 Still open:
 
