@@ -1,9 +1,9 @@
-# The terminate's TA DPM pages are LIVE through TA1's finish, then wiped — not by power (EA3)
+# The terminate's TA DPM pages are LIVE through TA1's finish, then wiped — not by power (CE5300 board)
 
 UK_DPMLOG (commit 7af9d81) logs the TA free-list register 0x700 (readback of
 0x61c = 0x04210000) at three kick-1 points, 0x724 (TA DPM page count) at TA1's
 finish, 0x740 at kick-1 entry, and the hostctl[11] NumActivePowerEvents delta
-(terminate − kick1). Ran on the EA3 clean p1; 5 lockups, the terminate-reaching
+(terminate − kick1). Ran on the CE5300 board clean p1; 5 lockups, the terminate-reaching
 ones all identical.
 
 ## Result (T3C dump; byte offset → logged value)
@@ -49,4 +49,4 @@ the terminate do_ta ENTRY (before any terminate programming); if 0 there → b1
 Handed to ta3d-state (DDK firmware): with TA1 leaving 25 pages live and the DDK's
 terminate also continuing on TA1's leftover state, what in our ta_finished→terminate
 path frees the TA DPM pages that the DDK does not? Evidence:
-`scratchpad/ea3-dpmlog.out`, `docs/log/data/2026-11-03-1900-ea3-dpmlog.log`.
+`scratchpad/ce5300-dpmlog.out`, `docs/log/data/2026-11-03-1900-ce5300-dpmlog.log`.

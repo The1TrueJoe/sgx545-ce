@@ -1,12 +1,12 @@
-# EA1 control: DDK µK renders 10/10, ours 4/10 — the EDM faults on a client address
+# CE5310 board control: DDK µK renders 10/10, ours 4/10 — the EDM faults on a client address
 
-Decisive A/B on one EA1 cold-GPU slot (S50 rig, same frame-dump both runs): the DDK
+Decisive A/B on one CE5310 board cold-GPU slot (S50 rig, same frame-dump both runs): the DDK
 microkernel (`srvinit -f ddk-fw`) rendered **10/10 with zero HWRs**; ours (uk-9e48757,
 the committed frame-1 fix) rendered **4/10 with 3 BIF faults**. Same rig, same frame,
 same DDK/sgx545ce kernel driver — so the rig, the box, and the frame are cleared. The
 bug is ours.
 
-Data: docs/log/data/2026-11-03-2240-ea1-ddk-vs-ours-baseline.log.
+Data: docs/log/data/2026-11-03-2240-ce5310-ddk-vs-ours-baseline.log.
 
 ## The fault
 
@@ -42,5 +42,5 @@ reads are the prime suspects for a page-aligned value.
 ## Next
 
 Either ta3d-state names the wrong offset from the DDK trace, or a gated RDADDR_LOG logs
-the three render_done addresses + the first ta_finished pair to scratch on the next EA1
-slot, to see which equals the fault. EA1 restored to normal by the baselines script.
+the three render_done addresses + the first ta_finished pair to scratch on the next CE5310 board
+slot, to see which equals the fault. CE5310 board restored to normal by the baselines script.

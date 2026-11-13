@@ -296,7 +296,7 @@ test with `fmt` and a C10 ALU op has them too. An f32 operand under
 
 ## Hardware checks (hwt.py, CE5300, 2026-10-28)
 
-    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, EA3SH set; see hwt.py)
+    python3 hwt.py hwt_p1 [-k name] [--dry]     (CAP, REPLAY, BOARD_SH set; see hwt.py)
 
 Each test is a main pixel program poked into the probe frame's replay (main
 program at 0x37008388, its DOUTU given 16 temporaries) that ends `mov o0, rN
@@ -1427,7 +1427,7 @@ Operands: dest, coordinate, texture state, [LOD source], DRC (0/1).
 | h1 | - | never set by the vendor assembler | oracle |
 
 Result format: nothing in the word selects it (oracle); the texture state
-(src1) does. **hardware** (hwt_smp, open stack, EA3, 2026-11-11): the same
+(src1) does. **hardware** (hwt_smp, open stack, CE5300 board, 2026-11-11): the same
 dependent `smp.2d r0, r8, r4` on an RGBA8888 texel (bytes 0x10, 0x20, 0x40,
 0x80) returned one register, 0x80102040 (BGRA byte order, as T1 format 0x0d
 gives it), with T3 = 0x00800800. It returned two registers with T3 =

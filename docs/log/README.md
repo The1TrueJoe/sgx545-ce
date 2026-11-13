@@ -6,7 +6,7 @@ the rest is its evidence.
 - `entries/YYYY-MM-DD-HHMM-<slug>.md`: one file per milestone (UTC): what was tried, what
   worked and what didn't, the numbers, the commit. One file per entry, so work in separate
   clones never conflicts.
-- `img/<stem>[-n].png`: frames read back from the EA3, before/after pairs, plots.
+- `img/<stem>[-n].png`: frames read back from the CE5300 board, before/after pairs, plots.
 - `data/<stem>.csv|json`: the measurements behind an entry.
 - `fig.py`: turns frames into PNGs and grids. A frame is a `glReadPixels` capture
   (`.rgba`, 720×480 RGBA, bottom row first) or a back-buffer dump (BGRA, top row first,

@@ -186,7 +186,7 @@ def run_ours(code, man, events, ctxs):
     # now runs on the DPM 3D-memory-free event (0x1), i.e. AFTER the pages are freed --
     # clears SC_INFLIGHT. Model that race directly: assert SC_INFLIGHT, send the cleanup
     # (must defer); clear it (render_done's effect on 0x1) and resend (must complete).
-    # Never deadlock (else the host frees the PB/RT under the free -> the EA1 render fault).
+    # Never deadlock (else the host frees the PB/RT under the free -> the CE5310 board render fault).
     SC_INFLIGHT = 0x14
     nclean = 0
     for e in events:

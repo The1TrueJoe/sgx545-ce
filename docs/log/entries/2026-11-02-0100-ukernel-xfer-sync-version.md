@@ -1,7 +1,7 @@
 # Transfer destination sync + advisory version word (offline gap work)
 
 Two of the gaps listed in UKERNEL.md §10, closed offline while waiting for the
-EA3 hardware slot.
+CE5300 board hardware slot.
 
 ## Transfer destination sync
 

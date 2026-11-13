@@ -61,14 +61,14 @@ session's reboot only costs the pieces in flight.
 - **A surfaceless display has no window configs**: a client must ask for
   `EGL_PBUFFER_BIT` (or `EGL_SURFACE_TYPE` 0), as dEQP and waffle do.
 
-## First light (EA1, 2026-11-02)
+## First light (CE5310 board, 2026-11-02)
 
 With the shipping caps, a desktop context reports `OpenGL version string: 2.0
 Mesa 26.2.5` on `PowerVR SGX545 (sgx545-ce)`. Mesa grants 2.1 for
 `EXT_texture_sRGB` on top of 2.0, which needs an sRGB format the driver can
 sample.
 
-## Uniforms past sa127 (EA1, 2026-11-03)
+## Uniforms past sa127 (CE5310 board, 2026-11-03)
 
 `glsl-uniform-interstage-limits` (118 vertex vec4, 126 fragment vec4, each
 array read as `u[i]` in a loop over a uniform count) first locked the 3D
@@ -89,7 +89,7 @@ instructions with 360 `ld.a.d`+`wdf` per iteration. At 126 iterations per
 pixel, a 25x25 px rect sometimes takes one recovery (TA lockup, no BIF fault),
 and a 62x62 rect takes two and draws nothing.
 
-The fix is indexed loads, and it passes on the EA1 with no recoveries. An
+The fix is indexed loads, and it passes on the CE5310 board with no recoveries. An
 indexed array that doesn't fit SA is read from the block: the compiler clamps
 the index, adds it to the base with `imae` and loads each component with an
 immediate offset (36ad6fc). The driver sets `indirect_const_addr` (1836bfc).
@@ -97,9 +97,9 @@ The test passes in all three runs (default, `--subdivide 5`, `--subdivide 5
 --statechanges`, 25 cases each), and a full-screen 126-iteration loop takes
 under a second.
 
-## Results (EA3, 2026-11-03)
+## Results (CE5300 board, 2026-11-03)
 
-The whole `gpu` profile ran on the EA3 (a RAM boot of the #124 image), in
+The whole `gpu` profile ran on the CE5300 board (a RAM boot of the #124 image), in
 slices, with 0 wedges. Every test that didn't skip (3,700) was then rerun on
 one build: um-re c111b12 with the varyings driver below (lib-pg17), 0
 recoveries. Of the 25,805 top-level tests:
@@ -168,7 +168,7 @@ Most failures come from these:
 - **Window-buffer tests on the surfaceless platform**: tests that read, draw
   or blit the front buffer or the window's depth/stencil abort or read nothing.
 
-## Open bug: NPOT cube maps lock the 3D (EA3, 2026-11-03)
+## Open bug: NPOT cube maps lock the 3D (CE5300 board, 2026-11-03)
 
 `arb_texture_cube_map@cubemap npot` and `arb_pixel_buffer_object@cubemap npot
 pbo` draw cube maps of NPOT faces (50, 25, 12, 6 and 3 texels), first with one
@@ -190,7 +190,7 @@ The DDK ships a desktop GL: `libPVROGL_MESA.so` (IMG's GL built on Mesa, with
 its own GLSL compiler) and its helper `libegl4ogl.so`. It is a GLX driver:
 `libegl4ogl.so` exports no EGL entry points, and the DDK's `libEGL` rejects
 `EGL_OPENGL_API` (`EGL_BAD_PARAMETER`), so without X it can't be run on an EA,
-only read. Its extension strings (EA1, 2026-11-02) are a GL 2.0 set:
+only read. Its extension strings (CE5310 board, 2026-11-02) are a GL 2.0 set:
 
 - **there:** `ARB_occlusion_query`, `EXT_texture3D`, `ARB_shadow` (+
   `_ambient`, `EXT_shadow_funcs`), `ARB_depth_texture`, `ARB_point_sprite`,

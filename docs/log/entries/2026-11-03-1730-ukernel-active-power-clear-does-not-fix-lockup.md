@@ -1,4 +1,4 @@
-# Clearing ACTIVE_POWER at every TA kick does NOT fix the terminate lockup (EA3)
+# Clearing ACTIVE_POWER at every TA kick does NOT fix the terminate lockup (CE5300 board)
 
 ta3d-state root-caused the residual lockup_ta as a broken ACTIVE_POWER handshake:
 ours raises hostctl[8] bit1 (EDM_INTERRUPT_ACTIVE_POWER=2) when idle but never
@@ -45,4 +45,4 @@ load at kick-1 (dpm_freelist mode 3, 0x664/0x684) never populates 0x724, that is
 upstream of any power issue -> fix 3 (robust POWEROFF save of 0x700/0x710/0x724/
 0x72c into pb w6-9; TA_PB loading 0x638 = w8 | w9<<16, not w8 only). Box handed to
 mesa for a full dEQP run; no HW until it frees. Evidence:
-`scratchpad/ea3-apfix-mf.out`, `docs/log/data/2026-11-03-1730-ea3-apfix.log`.
+`scratchpad/ce5300-apfix-mf.out`, `docs/log/data/2026-11-03-1730-ce5300-apfix.log`.

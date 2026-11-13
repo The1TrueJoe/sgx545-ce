@@ -1,5 +1,5 @@
 #!/bin/sh
-# texture A/B on the EA-1: the DDK (i386 probe, as sgx_varyab.sh runs it) against ours (x86_64 build), same scene
+# texture A/B on the CE5310 board: the DDK (i386 probe, as sgx_varyab.sh runs it) against ours (x86_64 build), same scene
 cd /tmp/mesa
 printf "#!/bin/sh\\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\\n" > ddk-probe.sh; chmod +x ddk-probe.sh
 export PROBE_TEX=1 PROBE_ATTRS=2 PROBE_TEXPAT=1

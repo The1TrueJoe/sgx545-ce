@@ -1,5 +1,5 @@
 #!/bin/sh
-# EA1: one run on WHO (sgx|ddk) in the fixed benchmark world (/opt/mc-ab/bench-world,
+# CE5310 board: one run on WHO (sgx|ddk) in the fixed benchmark world (/opt/mc-ab/bench-world,
 # restored before every run), SECS after the menu; prints FPS + stats
 # (MC_DEBUG: more SGX_DEBUG flags for ours, MC_EXTRA: more environment)
 WHO=${1:-sgx} SECS=${2:-170}

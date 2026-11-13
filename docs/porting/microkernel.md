@@ -81,7 +81,7 @@ fault).
 - The event entry wrote `sa` directly in the bare-`DOUTU` context and stalled init;
   the base must be carried in a reserved temp (`r17`) from the loader-patched `limm`
   ([bring-up fix](../log/entries/2026-11-01-1200-ukernel-bringup-fix.md),
-  [init confirmed](../log/entries/2026-11-02-1000-ukernel-ea3-init-confirmed.md)).
+  [init confirmed](../log/entries/2026-11-02-1000-ukernel-ce5300-init-confirmed.md)).
 
 ### 2. Init without the vendor srvinit
 
@@ -113,8 +113,8 @@ too.
 
 **Traps.**
 - The first kick was lost until the handler gated on `WO ≠ RO` and the ready check
-  was right ([host kick](../log/entries/2026-11-02-2045-ukernel-ea1-host-kick.md),
-  [serviced](../log/entries/2026-11-02-2100-ukernel-ea1-kick-serviced.md),
+  was right ([host kick](../log/entries/2026-11-02-2045-ukernel-ce5310-host-kick.md),
+  [serviced](../log/entries/2026-11-02-2100-ukernel-ce5310-kick-serviced.md),
   [read offset](../log/entries/2026-11-03-0330-ukernel-ccb-readoffset.md),
   [ready check](../log/entries/2026-11-03-0345-ukernel-readoffset-works-ready-check.md)).
 - A snapshot/ack race dropped a kick ([snapshot ack lost kick](../log/entries/2026-11-03-1040-ukernel-snapshot-ack-lost-kick.md)).
@@ -148,14 +148,14 @@ ordering; `tools/gen` frame read back and compared to the reference render.
 **Done.** One TA+3D renders a generated frame that reads back correct — the "frame
 from code" milestone ([frame from code](../log/entries/2026-10-28-0830-frame-from-code.md),
 [first triangle on hardware](../log/entries/2026-11-03-0925-ukernel-first-triangle-renders.md),
-[first frame](../log/entries/2026-11-02-2150-ukernel-ea1-first-frame.md)).
+[first frame](../log/entries/2026-11-02-2150-ukernel-ce5310-first-frame.md)).
 
 **Traps.**
 - The 3D reached but stalled at tile 0 with a clean BIF through a long saga — the
   causes were the TPC flush, the background-object PDS, and the DPM state hand-off,
   not any one fix ([do_3d reached, 3D hangs](../log/entries/2026-11-03-0400-ukernel-do3d-reached-3d-hangs.md),
   [TA output correct, 3D still stalls](../log/entries/2026-11-03-0557-ukernel-ta-output-correct-3d-still-stalls.md),
-  [DDK renders, ours stalls](../log/entries/2026-11-03-0700-ea3-ab-ddk-renders-ours-stalls.md)).
+  [DDK renders, ours stalls](../log/entries/2026-11-03-0700-ce5300-ab-ddk-renders-ours-stalls.md)).
 - `0x630` (the double-buffered DPM slot select) left at a power-up value points the
   3D at a slot the TA did not fill → the same clean-BIF stall (`UKERNEL.md` §6).
 
@@ -178,7 +178,7 @@ runs many frames without a reset.
   false-HWRs a quiescent core — and the first fixes had no effect until the ack was
   right ([timer no effect](../log/entries/2026-11-03-1945-ukernel-event-timer-no-effect-yet.md),
   [timer fixes frame 1](../log/entries/2026-11-03-2030-ukernel-event-timer-fixes-frame1.md),
-  [cold GPU still HWRs](../log/entries/2026-11-03-2120-ukernel-ea1-coldgpu-timer-runs-still-hwrs.md)).
+  [cold GPU still HWRs](../log/entries/2026-11-03-2120-ukernel-ce5310-coldgpu-timer-runs-still-hwrs.md)).
 
 ### 7. Power-down and idle
 
@@ -196,7 +196,7 @@ holds a reference so the core is not powered off under a live job.
   fix a lockup, and runtime PM wedged the GPU on one path
   ([idle active-power analysis](../log/entries/2026-11-02-2130-ukernel-idle-active-power-analysis.md),
   [active-power clear is not the fix](../log/entries/2026-11-03-1730-ukernel-active-power-clear-does-not-fix-lockup.md),
-  [runtime PM](../log/entries/2026-11-03-1700-drm-runtime-pm-ea1.md)).
+  [runtime PM](../log/entries/2026-11-03-1700-drm-runtime-pm-ce5310.md)).
 - `CLKGATESTATUS` is **not** EDM-readable as a plain value on 545 — read it only from
   the devcd (the kernel side), not from the microkernel (`UKERNEL.md` §11).
 
@@ -215,7 +215,7 @@ the microkernel skips the EDM→client pulse.
 - The EDM→list-1 pulse to write the background block faults under secure/no-share;
   the host writes the block and the microkernel skips the pulse
   ([secure mode](../log/entries/2026-11-08-1858-drm-secure-mode.md),
-  [latency in secure mode](../log/entries/2026-11-08-1815-drm-ea3-latency-secure.md)).
+  [latency in secure mode](../log/entries/2026-11-08-1815-drm-ce5300-latency-secure.md)).
 
 ### 9. OOM partial render
 

@@ -1,6 +1,6 @@
 # dEQP-GLES2: no compiler-side failures left
 
-On the morning of 2026-11-02 the first full dEQP-GLES2 run of the open driver on the EA3 passed
+On the morning of 2026-11-02 the first full dEQP-GLES2 run of the open driver on the CE5300 board passed
 15,440 of 17,165 tests. By the afternoon it passed 16,333, with no failures left on the
 compiler's side; the remaining 367 belong to the driver (fragment operations, cube maps, FBOs,
 polygon offset, wide lines). Each fix was found on the box and checked offline with `sgxc` over

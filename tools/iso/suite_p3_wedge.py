@@ -6,7 +6,7 @@ The pixel task's DOUTU word 0 names code base 15 instead of 0, with the real pro
 Base 15 maps the microkernel's code heap, so the hardware runs kernel code (or an unmapped
 address) as the client's pixel task. Expected to fault or wedge the GPU; the wedge is the
 finding (a client should not be able to point the USSE at the kernel code base). Run alone,
-last, with the Bench plug ready. If it renders normally instead, base 15 is reachable AND
+last, with the remote power switch ready. If it renders normally instead, base 15 is reachable AND
 benign, which is worse."""
 from iso import T
 

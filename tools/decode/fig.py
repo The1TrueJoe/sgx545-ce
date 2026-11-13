@@ -1,4 +1,4 @@
-"""Turn EA3 frames into PNGs for the build log.
+"""Turn CE5300 board frames into PNGs for the build log.
 
     python3 fig.py png  <frame> <out.png> [--size W H] [--scale N]
     python3 fig.py grid <out.png> <cols> <frame>... [--size W H] [--scale N] [--gap PX]

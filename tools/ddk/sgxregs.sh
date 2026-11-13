@@ -126,7 +126,7 @@ maint=$((   revv        & 0xff ))
 printf '\n  core id     0x%04x  (config 0x%04x)\n' "$core_id" "$config"
 printf '  revision    %d.%d.%d\n' "$major" "$minor" "$maint"
 
-# sgxerrata.h spells the EA-3 revision 1014, i.e. major.minor.maintenance
+# sgxerrata.h spells the CE5300 board revision 1014, i.e. major.minor.maintenance
 # 1.0.14. The driver is built with SGX_CORE_REV set to match.
 printf '  SGX_CORE_REV %d%d%d\n' "$major" "$minor" "$maint"
 if [ "$major" = "1" ] && [ "$minor" = "0" ] && [ "$maint" = "14" ]; then

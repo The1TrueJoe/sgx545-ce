@@ -1,5 +1,5 @@
 #!/bin/sh
-# gl4es' ctest traces on the EA3, through gl4es, on the DDK and on ours.
+# gl4es' ctest traces on the CE5300 board, through gl4es, on the DDK and on ours.
 #
 #   gl4es-ctest-ab.sh [ddk|ours|both] [TEST...]
 #
@@ -22,7 +22,7 @@
 # CTEST_ENV="VAR=value ..." is added to each replay's environment (debugging).
 # CTEST_FB is gl4es' LIBGL_FB: 3 (pbuffer, as gl4es' own tests; the default) or
 # 1 (fb0 window, as the game runs; the DDK's pbuffers crash in
-# SGXAddRenderTarget under gl4es on the EA3).
+# SGXAddRenderTarget under gl4es on the CE5300 board).
 R=/opt/minecraft/rootfs
 WHO=${1:-both}; [ $# -gt 0 ] && shift
 # name call es: gl4es' CMakeLists create_test()/create_test_GLES() list

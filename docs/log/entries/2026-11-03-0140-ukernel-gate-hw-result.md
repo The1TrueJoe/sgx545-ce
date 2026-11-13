@@ -1,6 +1,6 @@
-# The first-kick gate (4aecd73) matches the DDK but does NOT fix the kick-2 TA hang (EA1)
+# The first-kick gate (4aecd73) matches the DDK but does NOT fix the kick-2 TA hang (CE5310 board)
 
-HW verification of `4aecd73` (first-kick gate) on the EA1, same cold-boot +
+HW verification of `4aecd73` (first-kick gate) on the CE5310 board, same cold-boot +
 `srvinit -o` + `frame` recipe, sentinel+gate debug build (md5 ef10d655).
 
 ## Result: no change
@@ -11,7 +11,7 @@ HW verification of `4aecd73` (first-kick gate) on the EA1, same cold-boot +
 `0x7AF1` (ta_finished), `do_3d` still absent; `EVENT_STATUS = 0` (ta_finish
 acked), `EVENT_STATUS2 = 0x80` (`lockup_ta: yes`), `BIF_INT_STAT = 0x80000`
 (FLUSH_COMPLETE, benign), same T3C-C0/D0/E0. Only HC-10 word 0 differs (a
-counter) and the timestamps. Data: `data/2026-11-03-0100-ea1-gate-still-kick2-lockup.dmesg.log`.
+counter) and the timestamps. Data: `data/2026-11-03-0100-ce5310-gate-still-kick2-lockup.dmesg.log`.
 
 ## What this means
 
@@ -35,7 +35,7 @@ runs) or could kick a second TA over the first (overlap → lockup). In the DDK
 capture the order is kick 1 → **TA finished (1)** → kick 2, i.e. the DDK processes
 kick 2 only after kick 1's TA finishes.
 
-## Next (needs an EA1 slot)
+## Next (needs an CE5310 board slot)
 
 A **do_ta entry-counter + path sentinel**: at do_ta entry increment a scratch word
 (count), and write a path marker that differs for the first kick (r13=1) vs the

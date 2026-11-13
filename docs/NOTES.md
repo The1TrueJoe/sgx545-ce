@@ -38,7 +38,7 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
 | `gen/sgxgen.c`, `gen/frame.c`, `gen/GEN.md` | frames built from code alone (no capture): the generator library, a scene-driven test program, a fake kernel driver for offline runs, `vary.py` checks against the blob |
 | `pds/DumpDecomp.java` | Ghidra headless script: decompile every function in an address range (`analyzeHeadless ... -postScript DumpDecomp.java out.c lo hi`) |
 
-## Findings (confirmed on an EA3, 2026-10-27)
+## Findings (confirmed on a CE5300 board, 2026-10-27)
 
 - **Mapping.** libsrv_um maps device memory with a raw `syscall(__NR_mmap2)`,
   not `mmap()`; the page offset is the cookie from `MHANDLE_TO_MMAP_DATA`.
@@ -82,7 +82,7 @@ blobs running on our own hardware, plus the GPL kernel headers in `src/`.
   minus one, stride (clear: 3, 16; xy-float triangle: 1, 8) and one control
   word (`0x0001010a` / `0x00011b0a`).
 
-## Blob-free replay (proven on an EA3, 2026-10-27)
+## Blob-free replay (proven on a CE5300 board, 2026-10-27)
 
 A native x86_64 static binary (`replay/replay`, no DDK library, no dynamic
 loader) replays the probe's single-triangle frame (`cap/ref.bin`) and the back
@@ -127,7 +127,7 @@ Learned on the way:
   with `VM_INSERT_PAGE failed (-14)`. i386 clients never notice. The replay maps
   with `MAP_32BIT`; the real fix is `unsigned long` in the driver (same
   pattern in osfunc.c `ulPFNRaw` is worth checking). Fixed in `kernel/`
-  (`DoMapToUser` and `OSAcquirePhysPageAddr`), and tested on an EA3 with a CI
+  (`DoMapToUser` and `OSAcquirePhysPageAddr`), and tested on a CE5300 board with a CI
   kernel: `replay -H` (all device memory above 4 GB) and `-W` (wrapped buffer
   above 4 GB) give the same back buffer as the default mode, and the i386
   probe is unchanged (log entry `2026-10-28-1310-user-va-64bit`).
@@ -154,7 +154,7 @@ Learned on the way:
 See `isa/ISA.md`. libusc's USE assembler (useasm.c, `UseAssembleInstruction`
 at libusc + 0x109f50) was decompiled with Ghidra and is also run in an i386
 emulator (`isa/oracle.py`, bit-exact against 5045 instructions logged on the
-EA3), so every field position comes from the encoder and is checked by
+CE5300 board), so every field position comes from the encoder and is checked by
 sweeping it (`isa/check_*.py`, ~20,000 encodings). `isa/hw.py` + `hw_*.py`
 hold the forms for all 32 hardware opcodes; `isa/dis.py` decodes every word of
 the three corpora (c3 adds texture, flow, int, indexing and vertex shaders)
@@ -165,7 +165,7 @@ of live attribute registers; code-block flags are the format-control state
 that decides whether register bit 6 is a C10/F16 select in the color/EFO
 classes; GLSL ES ints compile to float code.
 
-## Our own frame: authored inputs and hand-assembled shaders (EA3, 2026-10-27)
+## Our own frame: authored inputs and hand-assembled shaders (CE5300 board, 2026-10-27)
 
 The replay no longer has to copy the captured frame's inputs. `mkreplay.py`
 pokes overrides after the snapshot loads and again before each kick
@@ -211,7 +211,7 @@ pokes overrides after the snapshot loads and again before each kick
   driver encodings bit-exactly (`asm.py --check`). It refuses anything whose
   fields were never fuzzed.
 
-## USSE semantics on hardware: one register per draw (EA3, 2026-10-28)
+## USSE semantics on hardware: one register per draw (CE5300 board, 2026-10-28)
 
 `isa/hwt.py` turns the replay into an instruction tester. The main pixel
 program (0x37008388, after its `phas.i` word) is replaced by a test program
@@ -221,7 +221,7 @@ a pixel inside the triangle *is* rN, bit for bit; the replay dumps one row of
 32 pixels (all must agree) and the background pixel (the clear color, to
 catch a program that didn't run).
 
-    S=<scratchpad>; CAP=<dir with ref.bin> REPLAY=<static replay> EA3SH=<ssh helper> \
+    S=<scratchpad>; CAP=<dir with ref.bin> REPLAY=<static replay> BOARD_SH=<ssh helper> \
         python3 isa/hwt.py hwt_p1 [-k fmad] [--dry]
 
 - The captured main program had **no temporaries**: its DOUTU word 0 (PDS
@@ -274,7 +274,7 @@ Second round (hwt_p7-p11), after the first write-up:
 - testmask byte/word write 0xff/0xffff.
 - `br [link]` + `lapc` return to the next instruction.
 - The bitwise ops behave as named, and a register shift by 33 gives 0.
-- **The EA3 GPU is shared:** another session's blob probe captures collide with
+- **The CE5300 board GPU is shared:** another session's blob probe captures collide with
   the replay (its buffers then land elsewhere: `replay:4: buffer 0 landed at
   ...`, rc 2). hwt.py's runner now waits while any other process has
   /dev/dri/card0 open and retries a collided draw.
@@ -322,7 +322,7 @@ See `state/STATE.md`. In short:
   plus a sideband word with the format and dither.
 - **Textures:** T0 = wrap/filter/mip, T1 = size + format (b24-28) +
   layout (b29-31), T2 = address, T3 = from the shader.
-- **Proven on an EA3** by 12 one-field replays, each 0 pixels off its
+- **Proven on a CE5300 board** by 12 one-field replays, each 0 pixels off its
   prediction. The fields:
   - the viewport x offset;
   - ISPA dcmp;
@@ -332,7 +332,7 @@ See `state/STATE.md`. In short:
   - kick 1's VDM base;
   - T0 filter and wrap.
 
-## A frame from code alone (EA3, 2026-10-28)
+## A frame from code alone (CE5300 board, 2026-10-28)
 
 See `gen/GEN.md`. `tools/gen/frame` builds every buffer of a frame from
 GL-level parameters with the formulas in STATE.md, PDS.md and ISA.md, and
@@ -351,7 +351,7 @@ blob's own rendering with 0 pixels different.
   entry** when the next TA starts; a client with a different kernel-data
   layout hangs the TA. DDK clients and replays of DDK captures share one
   layout; `sgxgen` allocates the same way.
-- **`SGX_FLUSH_HW_RENDER_TARGET` times out on a srvinit-started EA3**, and the
+- **`SGX_FLUSH_HW_RENDER_TARGET` times out on a srvinit-started CE5300 board**, and the
   GPU locks up after it. `replay` has a `flushrt` op, but `mkreplay.py` only
   emits it with `--flushrt`.
 
@@ -363,7 +363,7 @@ to 8 texels; uploads, `glGenerateMipmap` and `eglSwapBuffers` are all
 transfer-queue blits (a 3D render with only a background object), whose words
 `tools/tex/present.py` rebuilds; an FBO is a second RT data set on the same
 render context, rendered twiddled into its texture; fb0 is the mmap of
-`/dev/fb0` wrapped as GPU memory. All proven natively on the EA3, pixel-exact.
+`/dev/fb0` wrapped as GPU memory. All proven natively on the CE5300 board, pixel-exact.
 The DDK drops FBO depth between renders; ZLS store works with the window
 path's bits, the load bit is still unknown. Per-render HW sync lists carry
 client-written absolute op counts: skip one submitted job and the 3D waits

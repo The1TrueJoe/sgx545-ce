@@ -12,10 +12,10 @@ bring-up, and the thing that first exercises `open()` on the DRM node.
 It exists because neither available userspace can be used as-is:
 
 * Intel's Cedarview package ships **no** `pvrsrvctl` — libraries only.
-* Control4's `pvrsrvctl` is DDK 1.12 and links 1.12's `libsrv_um`/`libsrv_init`,
+* The vendor's `pvrsrvctl` is DDK 1.12 and links 1.12's `libsrv_um`/`libsrv_init`,
   so it cannot drive a 1.7 userspace.
 
-But all `pvrsrvctl --start` really does is one call. Disassembling Control4's
+But all `pvrsrvctl --start` really does is one call. Disassembling the vendor's
 binary shows `SrvInit` takes no arguments and returns a `PVRSRV_ERROR` in `eax`
 (nothing is pushed before the call, and a non-zero return goes straight to
 `PVRSRVGetErrorString`). So this is that call, and nothing else. It `dlopen`s
@@ -75,7 +75,7 @@ i686-linux-gnu-gcc -shared -fPIC -o busidshim.so tools/ddk/busidshim.c -ldl
 LD_PRELOAD=./busidshim.so ./sgxinit
 ```
 
-Control4's DDK 1.12 blobs do not need this -- they call
+The vendor DDK 1.12 blobs do not need this -- they call
 `drmOpen("pvrsrvkm", NULL)` and match on driver name instead -- but they fail
 the DDK version check against this 1.7 tree.
 
@@ -94,7 +94,7 @@ i686-linux-gnu-gcc -O0 -g -o sgxinit tools/ddk/sgxinit.c -ldl
 ```
 
 Pair the blobs with a driver built from the **same DDK version** — the version
-check is exact-match. Cedarview's 1.7 blobs match this tree; Control4's 1.12
+check is exact-match. Cedarview's 1.7 blobs match this tree; the vendor's 1.12
 blobs will be rejected.
 
 Watch `dmesg` alongside it. The first run of this found the driver's missing

@@ -1,4 +1,4 @@
-# The terminate TA kicks with ZERO DPM pages; EVENT_STATUS2 is clean before the kick (EA3)
+# The terminate TA kicks with ZERO DPM pages; EVENT_STATUS2 is clean before the kick (CE5300 board)
 
 UK_K2LOG logs six CRs at the TERMINATE kick's do_ta entry, just before the 0x200,
 to answer ta3d-state's question: is the hang already pending (TA1's fault) or does
@@ -43,6 +43,6 @@ terminate runs with 0 DPM pages and hangs (count=2).
 Handed to ta3d-state: what is 0x724 at the DDK's terminate kick in base4, and does
 the DDK's TA1 / free-list load populate the TA page count in a way ours doesn't?
 Then a fix to ensure the terminate has its DPM pages, or re-run the relevant
-free-list/DPM step. Evidence: `scratchpad/ea3-k2log.out`,
-`docs/log/data/2026-11-03-1600-ea3-k2log.log`. (Box handed to mesa for a 75-min
+free-list/DPM step. Evidence: `scratchpad/ce5300-k2log.out`,
+`docs/log/data/2026-11-03-1600-ce5300-k2log.log`. (Box handed to mesa for a 75-min
 dEQP run meanwhile.)

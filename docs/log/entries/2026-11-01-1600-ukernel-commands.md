@@ -6,7 +6,7 @@ the SGXMKIF command set. Offline, against the DDK (`ukernel/test_commands.py`).
 
 ## get-misc-info — matches the DDK word for word
 
-This is the one that failed the EA3 bring-up: `SGXFinalise` calls
+This is the one that failed the CE5300 board bring-up: `SGXFinalise` calls
 get-misc-info to validate the microkernel's version, and ours never ran it, so
 `SGXInit: Unable to validate device DDK version`. The handler now writes the
 core identity (`EUR_CR_CORE_ID`/`CORE_REVISION`), the SGXMKIF version/feature

@@ -1,6 +1,6 @@
 # The bring-up fix: patched limms, not a DMA in the event program
 
-The first EA3 slot (`2026-10-29-...`) got the core up but our microkernel never
+The first CE5300 board slot (`2026-10-29-...`) got the core up but our microkernel never
 set `ui32InitStatus`. The cause, pinned down offline this round.
 
 ## A PDS interpreter
@@ -47,4 +47,4 @@ Only `sa` is gone from the *init* entry. The TA/3D handlers still read the
 control block through the secondary attributes; on hardware they will need the
 same limm-base treatment (address the control block from a patched base
 register), since the event program no longer DMAs. That is the next step,
-after this bring-up is confirmed on the EA3.
+after this bring-up is confirmed on the CE5300 board.

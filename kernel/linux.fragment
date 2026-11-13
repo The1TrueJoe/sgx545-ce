@@ -3,7 +3,7 @@
 # A distribution can merge it into its kernel config; see README.md.
 
 # Userspace finds the GPU through libdrm's drmOpen(), so a DRM node has to
-# exist -- the stock Control4 system's /dev/dri/card0 is that node, not a KMS
+# exist -- the stock vendor system's /dev/dri/card0 is that node, not a KMS
 # device. The driver registers no modesetting and owns no GEM objects.
 #
 # Measured cost on Linux 7.1.8/i686: about 1.25 MiB of bzImage, nearly all of
