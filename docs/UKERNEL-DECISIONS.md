@@ -60,6 +60,6 @@ build-options and struct-size checks, so the DDK stays a drop-in.
 ## Reproducible build, no DDK inputs
 
 `ukernel/build.py` assembles the image from `ukernel/*.py` with
-`tools/isa/asm.py` alone — no firmware fetch, no DDK library, no extraction.
+`sgx-asm`, built from `sgx.xml` — no firmware fetch, no DDK library, no extraction.
 The build is deterministic (same bytes every run). `srvinit -o` needs only the
 built image and its `.pat` sidecar.
