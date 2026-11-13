@@ -302,6 +302,8 @@ static struct eq_fx *eq_device(struct kunit *test, unsigned int core, u32 core_r
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev->idle_mmu);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, sdev->reset_mmu);
 	KUNIT_ASSERT_NOT_NULL(test, sdev->reset_page);
+	/* As pvrsgx_device_init(): every address of the reset directory on the scratch page. */
+	KUNIT_ASSERT_EQ(test, pvrsgx_mmu_fill(sdev->reset_mmu, sdev->reset_page, 0), 0);
 	eq_pd(fx, sdev->kernel_mmu);
 	eq_pd(fx, sdev->idle_mmu);
 	eq_pd(fx, sdev->reset_mmu);

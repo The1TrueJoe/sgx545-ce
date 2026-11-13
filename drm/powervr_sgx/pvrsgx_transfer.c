@@ -50,7 +50,10 @@ int pvrsgx_transfer_ctx_init(struct pvrsgx_device *sdev, struct pvrsgx_context *
 	if (err)
 		goto fail;
 	/* Freed after a transfer, not a render, has finished. */
-	x->ccb->transfer = x->ccbctl->transfer = x->done->transfer = x->hwctx->transfer = true;
+	x->ccb->transfer = true;
+	x->ccbctl->transfer = true;
+	x->done->transfer = true;
+	x->hwctx->transfer = true;
 
 	/* The words a transfer context needs; the rest stays zero. */
 	hw = (void *)kobj_cpu(x->hwctx);

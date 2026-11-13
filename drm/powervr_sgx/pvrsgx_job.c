@@ -281,8 +281,10 @@ static void reap_work_fn(struct work_struct *work)
 	xdone = sdev->transfers_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	/* Lost, the GPU is stopped for good: everything can go. */
-	if (READ_ONCE(sdev->lost))
-		done = xdone = U64_MAX;
+	if (READ_ONCE(sdev->lost)) {
+		done = U64_MAX;
+		xdone = U64_MAX;
+	}
 	pvrsgx_kobj_reap(sdev, done, xdone);
 	pvrsgx_ccb_inval_reap(sdev, false);
 }

@@ -152,6 +152,7 @@ static void code_write(struct iosys_map *map, u64 offset, const u64 *src, u32 n)
 
 		for (u32 i = 0; i < n; i++)
 			WRITE_ONCE(d[2 * i], lower_32_bits(src[i]));
+		/* Every low half in memory before any high half. */
 		wmb();
 		for (u32 i = 0; i < n; i++)
 			WRITE_ONCE(d[2 * i + 1], upper_32_bits(src[i]));
