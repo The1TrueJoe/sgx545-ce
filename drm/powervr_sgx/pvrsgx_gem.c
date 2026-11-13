@@ -43,6 +43,23 @@ static void pvrsgx_gem_free(struct drm_gem_object *obj)
 	drm_gem_shmem_object_free(obj);
 }
 
+/*
+ * For fdinfo's memory stats: resident once it has pages (an import, its
+ * exporter's). Nothing is purgeable: the uAPI has no madvise. Active, the core
+ * reads from the reservation, where jobs' fences are only bookkeeping.
+ */
+static enum drm_gem_object_status pvrsgx_gem_status(struct drm_gem_object *obj)
+{
+	if (drm_gem_is_imported(obj) || READ_ONCE(to_drm_gem_shmem_obj(obj)->pages))
+		return DRM_GEM_OBJECT_RESIDENT;
+	return 0;
+}
+
+static size_t pvrsgx_gem_rss(struct drm_gem_object *obj)
+{
+	return pvrsgx_gem_status(obj) & DRM_GEM_OBJECT_RESIDENT ? obj->size : 0;
+}
+
 static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
 	.free = pvrsgx_gem_free,
 	.export = pvrsgx_gem_export,
@@ -53,6 +70,8 @@ static const struct drm_gem_object_funcs pvrsgx_gem_funcs = {
 	.vmap = drm_gem_shmem_object_vmap,
 	.vunmap = drm_gem_shmem_object_vunmap,
 	.mmap = pvrsgx_gem_mmap,
+	.status = pvrsgx_gem_status,
+	.rss = pvrsgx_gem_rss,
 	.vm_ops = &drm_gem_shmem_vm_ops,
 };
 
@@ -130,3 +149,7 @@ out:
 	drm_gem_object_put(obj);
 	return err;
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_gem_test.c"
+#endif

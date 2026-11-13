@@ -68,10 +68,38 @@ static void job_test_completions(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, job_completions(sdev, &job), 3);
 }
 
+/* fdinfo's engine time: render and transfer jobs, from send to end; not NULL jobs. */
+static void job_test_account(struct kunit *test)
+{
+	struct pvrsgx_context *ctx = kunit_kzalloc(test, sizeof(*ctx), GFP_KERNEL);
+	struct pvrsgx_job job = { .start_ns = 100 };
+
+	KUNIT_ASSERT_NOT_NULL(test, ctx);
+	ctx->usage = pvrsgx_usage_new();
+	KUNIT_ASSERT_NOT_NULL(test, ctx->usage);
+	job.ctx = ctx;
+
+	job.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;
+	job_account(&job, 350);
+	KUNIT_EXPECT_EQ(test, atomic64_read(&ctx->usage->busy_ns), 250);
+	job.type = DRM_POWERVR_SGX_JOB_TYPE_TRANSFER;
+	job_account(&job, 150);
+	KUNIT_EXPECT_EQ(test, atomic64_read(&ctx->usage->busy_ns), 300);
+	job.type = DRM_POWERVR_SGX_JOB_TYPE_NULL;
+	job_account(&job, 1000);
+	KUNIT_EXPECT_EQ(test, atomic64_read(&ctx->usage->busy_ns), 300);
+	/* A clock read before the send adds nothing, rather than wrapping. */
+	job.type = DRM_POWERVR_SGX_JOB_TYPE_RENDER;
+	job_account(&job, 50);
+	KUNIT_EXPECT_EQ(test, atomic64_read(&ctx->usage->busy_ns), 300);
+	pvrsgx_usage_put(ctx->usage);
+}
+
 static struct kunit_case pvrsgx_job_test_cases[] = {
 	KUNIT_CASE(job_test_intra_timeline),
 	KUNIT_CASE(job_test_intra_every_signaller),
 	KUNIT_CASE(job_test_completions),
+	KUNIT_CASE(job_test_account),
 	{}
 };
 
