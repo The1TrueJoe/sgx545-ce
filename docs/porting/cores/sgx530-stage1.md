@@ -2324,7 +2324,7 @@ under the current `edm_init` (EDMPROTECT kept). sgx530_edm is held as the fallba
 ## MILESTONE: edm_init merged to m2-drm; combined board run CLEAN
 
 The open-microkernel bring-up is on the kernel line: edm_init is merged into m2-drm
-(d70ac7cc). The combined HC-250 run passed clean on the m2-drm base with the 0x8
+(d70ac7cc). The combined OMAP3630-board run passed clean on the m2-drm base with the 0x8
 images (sgx530_edm pkg 47e4282a): **init**, **unbind/rebind ×3** (each re-started the
 microkernel with no wedge), and **shutdown** — `rmmod=0`, `left=0`, **0 lockdep**, no
 WARN/BUG, vs the earlier `rmmod=139`. So on real SGX530 hardware the open microkernel

@@ -247,7 +247,7 @@ option (a), sized to one SW_EVENT per render so there is no double-complete.
 ## 6b. OMAP3 teardown: don't touch gated SGX registers after power-off (C)
 
 On a single-context OMAP3 core, the driver's unload/teardown must not write SGX
-registers after the microkernel has powered off. Confirmed on the HC-250
+registers after the microkernel has powered off. Confirmed on the OMAP3630 board
 (combined run, edm_init on m2-drm): k_power completes (its `ui32PowerStatus` store
 commits — a ctlblk store, like the heartbeat) and gates the clocks; then `fw_stop`'s
 `deinit_script()` (SRVINIT "Deinit": `0xa58`, `0xa68`/`0xa6c`/`0xa70`,
