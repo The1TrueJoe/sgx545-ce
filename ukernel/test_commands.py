@@ -146,7 +146,7 @@ def test_active_power(code, man):
     # draining the kernel CCB with nothing in flight leaves the microkernel
     # idle; it must raise ACTIVE_POWER (host control ui32InterruptFlags, word 8,
     # bit 1) and the host IRQ so the host can power the core down. Without it the
-    # host watchdog HWRs the quiescent GPU (EA1 HW, 2026-11-02).
+    # host watchdog HWRs the quiescent GPU (CE5310 board HW, 2026-11-02).
     u, mem, regs = ours_machine(code)
     ours_cmd(u, mem, regs, man, 6, [0, A["misc"]])          # a GETMISCINFO, then idle
     assert mem.rd(A["hostctl"] + 4 * 8) & 0x2, "idle must set EDM_INTERRUPT_ACTIVE_POWER in ui32InterruptFlags"

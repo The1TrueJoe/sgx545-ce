@@ -1,6 +1,6 @@
 # powervr_sgx: one PB per VM serves several render contexts; in-place restart survives 14 forced hangs
 
-Two items from the M2 list, on one EA1 RAM boot (c9a1af8, 2026-11-03 ~03:52 UTC, DDK
+Two items from the M2 list, on one CE5310 board RAM boot (c9a1af8, 2026-11-03 ~03:52 UTC, DDK
 microkernel, nothing flashed, no power-cycle).
 
 ## One parameter buffer per VM

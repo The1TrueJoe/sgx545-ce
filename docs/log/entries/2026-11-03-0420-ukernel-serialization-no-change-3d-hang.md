@@ -1,6 +1,6 @@
 # Kick serialization works but does not change the 3D hang — the 3D execution is a separate frontier
 
-HW test of the kick-serialization fix on the EA1 (process kick 2 only after kick 1's
+HW test of the kick-serialization fix on the CE5310 board (process kick 2 only after kick 1's
 TA finishes, via a new SC_TAFLIGHT "TA in flight" flag + ta_finished pulling the
 next kick).
 
@@ -45,5 +45,5 @@ Serialization fix HELD uncommitted (offline-validated but unproven on HW — it
 changed nothing observable; run_ours doesn't exercise the defer). The committed
 render-path fixes stand: ack (b6a65d3), first-kick gate (4aecd73), read-offset
 (ded2c15), bLastInScene + emulator test (f852218). Evidence:
-`data/2026-11-03-0415-ea1-serialization-markers-zero.dmesg.log` (the 0x17 bug) and
-`-0420-ea1-serialization-do3d-still-3dhang.dmesg.log` (the fixed run).
+`data/2026-11-03-0415-ce5310-serialization-markers-zero.dmesg.log` (the 0x17 bug) and
+`-0420-ce5310-serialization-do3d-still-3dhang.dmesg.log` (the fixed run).

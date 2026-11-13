@@ -1,14 +1,14 @@
 #!/bin/zsh
-# EA1 host-side register-sampler A/B: capture named SGX DPM/EVENT registers at ~us
+# CE5310 board host-side register-sampler A/B: capture named SGX DPM/EVENT registers at ~us
 # resolution across 3 consecutive frame-dumps, once under OURS (uk-ro1.bin) and once
 # under the DDK microkernel (ddk-fw.bin, 10/10), on the same cold-GPU ramboot rig.
 # Diff the two transition streams around each render-end and the next kick to see what
 # the DDK's DPM state does between processes that ours doesn't. Read-only, named regs
-# only. ALWAYS restores normal boot. Hold ea1.lock around the whole job (caller).
+# only. ALWAYS restores normal boot. Hold ce5310.lock around the whole job (caller).
 setopt sh_word_split
 : "${BOX_PASS:?set BOX_PASS to the board root password}"
 OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o PreferredAuthentications=password -o PubkeyAuthentication=no"
-H=root@10.0.0.110
+H=root@board
 HW=${UK_HWRUNS:?set UK_HWRUNS to the directory with the built test images}
 DDK=${UK_DDK:-$(cd "$(dirname "$0")" && pwd)/tools/ddk}
 OUT=${UK_OUT:-$(cd "$(dirname "$0")" && pwd)/docs/log/data}
@@ -30,7 +30,7 @@ wait_boot() { # <old_boot_id> <NORMAL|RAMBOOT>
 echo "=== precheck NORMAL boot ==="
 pre=$(ssh_ 'grep -o ohc.ramboot /proc/cmdline || echo NORMAL')
 echo "$pre" | grep -q NORMAL || { echo "FATAL: not normal boot ($pre)"; exit 3; }
-ssh_ "echo ukernel-ea1-regsample > /tmp/gpu.lock"
+ssh_ "echo ukernel-ce5310-regsample > /tmp/gpu.lock"
 
 echo "=== stage regsample + uk-rdv.bin (ddk-fw.bin already on box) ==="
 put "$DDK/regsample" /root/uk/regsample
@@ -42,7 +42,7 @@ ssh_ 'chmod +x /root/uk/regsample; md5sum /root/uk/regsample /root/uk/uk-rdv.bin
 mk_install() {
   MODE=$1
   if [ "$MODE" = ddk ]; then SRV='./srvinit -f /root/uk/ddk-fw.bin'; else SRV='./srvinit -o /root/uk/uk-rdv.bin'; fi
-  cat > /tmp/ea1-rs-install.sh <<INSTALL
+  cat > /tmp/ce5310-rs-install.sh <<INSTALL
 #!/bin/sh
 set -e
 cat > /etc/init.d/S50zuktest <<'EOS'
@@ -95,8 +95,8 @@ chmod +x /etc/init.d/S00aramboot
 mkdir -p /boot/once; cp /boot/bzImage /boot/once/bzImage
 sh -n /etc/init.d/S50zuktest && echo "install OK ($MODE)"
 INSTALL
-  put /tmp/ea1-rs-install.sh /root/ea1-rs-install.sh
-  ssh_ 'sh /root/ea1-rs-install.sh 2>&1'
+  put /tmp/ce5310-rs-install.sh /root/ce5310-rs-install.sh
+  ssh_ 'sh /root/ce5310-rs-install.sh 2>&1'
 }
 
 run_arm() { # <ours|ddk>

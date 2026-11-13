@@ -53,10 +53,10 @@ Tool behavior (options, traces, `frame-fake`) is not tagged.
 ## Running it
 
     tools/gen/build.sh
-    scp tools/gen/frame ea3:/tmp/gen/
-    ea3$ /tmp/gen/frame -o bb.bin                       # the reference triangle
-    ea3$ /tmp/gen/frame -k 0.25,0,0,1 -T -0.8,-0.6,0.2,-0.8,-0.3,0.7:1,0.5,0,1 -o bb.bin
-    ea3$ /tmp/gen/frame -d 0x201 -T x0,y0,x1,y1,x2,y2,-0.5:1,0,0,1 -T ...,0.5:0,0,1,1 -o bb.bin
+    scp tools/gen/frame ce5300:/tmp/gen/
+    ce5300$ /tmp/gen/frame -o bb.bin                       # the reference triangle
+    ce5300$ /tmp/gen/frame -k 0.25,0,0,1 -T -0.8,-0.6,0.2,-0.8,-0.3,0.7:1,0.5,0,1 -o bb.bin
+    ce5300$ /tmp/gen/frame -d 0x201 -T x0,y0,x1,y1,x2,y2,-0.5:1,0,0,1 -T ...,0.5:0,0,1,1 -o bb.bin
     python3 tools/decode/cmpfb.py bb.bin ref.rgba          # BGRA top-first dump vs glReadPixels
 
 The `frame` options:
@@ -91,13 +91,13 @@ reference, and two- and three-frame runs in each of the modes above.
 
 Checking a frame without the GPU:
 
-    ea3$ /tmp/gen/frame-fake -n /dev/null -t fake.bin   # any x86_64 Linux; no GPU touched
+    ce5300$ /tmp/gen/frame-fake -n /dev/null -t fake.bin   # any x86_64 Linux; no GPU touched
     python3 tools/state/decode.py fake.bin --brief         # every state word, annotated
     python3 tools/pds/dis.py fake.bin                      # every PDS program
 
 The test suite (it needs a shell helper that runs commands on the CE5300 board):
 
-    EA3SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
+    BOARD_SH=<ssh helper> python3 tools/gen/vary.py OUTDIR [case...]
 
 ## The API (what a gallium driver would sit on)
 

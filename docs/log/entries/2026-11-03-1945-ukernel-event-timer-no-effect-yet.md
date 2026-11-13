@@ -1,4 +1,4 @@
-# EVENT_TIMER enable did not stop the watchdog HWR yet — timer likely never ticks (EA3)
+# EVENT_TIMER enable did not stop the watchdog HWR yet — timer likely never ticks (CE5300 board)
 
 ta3d-state root-caused the terminate lockup as the host watchdog (SGXOSTimer) HWRing
 the quiescent EDM in the TA1->terminate gap (SGXReset wipes the TA DPM). Fix: init
@@ -45,5 +45,5 @@ one slot. If H1, write a real timer period (CoreClockSpeed/uKernelFreq, or a saf
 sub-30 ms VALUE) instead of relying on hostctl[6]; if H2, give the timer event a real
 handler that advances the task registers. Handed to ta3d-state (does our srvinit -o
 path populate hostctl[6], and does a bare event-program pass move 0xb14, or is a real
-timer handler needed). Evidence: `scratchpad/ea3-timer-mf.out`,
-`docs/log/data/2026-11-03-1945-ea3-timer.log`. Box left clean p1, /boot/once removed.
+timer handler needed). Evidence: `scratchpad/ce5300-timer-mf.out`,
+`docs/log/data/2026-11-03-1945-ce5300-timer.log`. Box left clean p1, /boot/once removed.

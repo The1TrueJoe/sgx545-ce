@@ -26,7 +26,7 @@ ship. This is the checklist for flipping it on.
 - A kernel accepts a features-6 image **iff** its `UKFW_FEATURES` includes
   `PVRSGX_UKFW_DONE_SEQ` *and* it reads the seqno at ctlblk `+0x9c`. The reader
   landed in m2-drm `a3b8c8dc`; the mask bump is in `24a2253`. HW-confirmed on the
-  EA3: `powervr_sgx … open microkernel ukernel-m8, interface 1.0, features 0x6` /
+  CE5300 board: `powervr_sgx … open microkernel ukernel-m8, interface 1.0, features 0x6` /
   `microkernel started`.
 - The Linux base stays 7.3.3 across the change. "Kernel version" here means the
   **powervr_sgx driver revision** (the deb's `-sgx` package release), not the

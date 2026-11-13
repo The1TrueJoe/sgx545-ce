@@ -1,6 +1,6 @@
 # Kernel bug: hardware recovery sleeps inside a timer softirq
 
-During a gl4es ctest on the EA3 (foobillardplus, ES1, through the DDK), the
+During a gl4es ctest on the CE5300 board (foobillardplus, ES1, through the DDK), the
 SGX locked up and the driver's recovery could not bring it back. Every retry
 logged `HWRecoveryResetSGX: SGXInitialise failed (24)`. At 2927.7 s the
 kernel then reported:
@@ -64,4 +64,4 @@ same failing recovery loop appeared again on the user-VA test kernel at
 144 s (ctest neverball through the open driver), without the BUG line in
 the part of the ring buffer that survived.
 
-Follow-up: moved to workqueues in 5d1ae00 and tested on the EA3, see `2026-10-28-2210-hwr-workqueues.md`. No more atomic sleeps and the box reboots normally, but the GPU still does not recover from this wedge.
+Follow-up: moved to workqueues in 5d1ae00 and tested on the CE5300 board, see `2026-10-28-2210-hwr-workqueues.md`. No more atomic sleeps and the box reboots normally, but the GPU still does not recover from this wedge.

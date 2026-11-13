@@ -1,4 +1,4 @@
-"""Draw each compiled shader on the EA3 twice, with the DDK's own USP and
+"""Draw each compiled shader on the CE5300 board twice, with the DDK's own USP and
 with sgxc's (uspsub.so), and compare the frames pixel by pixel.
 
     python3 -I tools/usc/hw/hwcmp.py OUTDIR [-k name] [--stage frag|vert|both] [--dry]
@@ -9,7 +9,7 @@ built into usc/build (see glt.c / uspsub.c). Results go to OUTDIR/hw/:
 ddk/<name>.rgba, sub/<name>.rgba, ddk_usp/<tag>.usp (the DDK's binaries),
 and results.txt.
 
-Environment: EA3 (the box's ssh helper script, required).
+Environment: CE5300 board (the box's ssh helper script, required).
 """
 import argparse
 import glob
@@ -42,9 +42,9 @@ A2 = [0.6, 0.1, 0.9, 0.3, 0.2, 0.7, 0.4, 0.8, 0.5, 0.5, 0.1, 0.9, 0.3, 0.95, 0.6
 
 
 def env_ea3():
-    p = os.environ.get("EA3")
+    p = os.environ.get("BOARD")
     if not p:
-        sys.exit("hwcmp: set EA3 to the box's ssh helper script")
+        sys.exit("hwcmp: set CE5300 board to the box's ssh helper script")
     return p
 
 

@@ -1,6 +1,6 @@
-# Runtime PM, first try: the EA1 froze
+# Runtime PM, first try: the CE5310 board froze
 
-EA1 RAM boot of 2fec9ff, 2026-11-03 ~06:10 UTC, DDK microkernel, nothing flashed. The
+CE5310 board RAM boot of 2fec9ff, 2026-11-03 ~06:10 UTC, DDK microkernel, nothing flashed. The
 box stopped answering ping and ssh and needs a power-cycle. It has no smart plug.
 
 ## What ran
@@ -28,7 +28,7 @@ Two things are new with runtime PM:
   registered.** The handler reads `EVENT_STATUS` on every interrupt of its line, and
   the line is shared. Before 2fec9ff the stopped state lasted only from the unload's
   `fw_stop` to `free_irq`. A register read of an unclocked CE5300 block can hang the
-  bus (the VDC sweep hung an EA3).
+  bus (the VDC sweep hung an CE5300 board).
 - **The restart path ran after a clean power-off.** Until now it had only ever run
   after a hang, with the clocks still on.
 
@@ -49,6 +49,6 @@ Changes made without the box:
 
 ## Outcome
 
-On the EA3 the first resume froze the same way, and the cause was the second suspect:
+On the CE5300 board the first resume froze the same way, and the cause was the second suspect:
 the restart's quiesce reads a register of the gated core. Fixed in log
-`2026-11-03-0630-drm-runtime-pm-ea3`.
+`2026-11-03-0630-drm-runtime-pm-ce5300`.

@@ -1,5 +1,5 @@
 P1 open half: does a client USSE `str` to an effective register take effect?
-EA1 (ce5300-board), SGX545 core rev 1.0.14, kernel 7.1.8.
+CE5310 board (ce5300-board), SGX545 core rev 1.0.14, kernel 7.1.8.
 tools/iso/suite_p1_write.py (safe) then tools/iso/suite_p1_dirbase.py (destructive).
 2026-11-02 ~20:20 UTC. RAM 1781388 kB; SGX BAR0 phys 0xdc000000 (16 MB); DIR base at boot ~0x01d6b000.
 
@@ -49,7 +49,7 @@ dump R 0 00000000 01d6b000 01d6b000 00000000
    sentinel -> still the real value, not 0x0a5a5000. The `str` to 0xc84 is ignored as a register value.
 
 === but the box went down seconds later (lockup -> reboot loop) ===
-Right after the iso process exited, ssh went unreachable; the EA1 rebooted (uptime observed 0 min).
+Right after the iso process exited, ssh went unreachable; the CE5310 board rebooted (uptime observed 0 min).
 On the next boot the DDK printed its lockup/recovery debug dump and the CCB was stuck:
 
 [  170.558599] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
@@ -64,7 +64,7 @@ On the next boot the DDK printed its lockup/recovery debug dump and the CCB was 
 [  170.709263] PVR_K: SGX Kernel CCB WO:0xB4 RO:0xB3                            <- one command queued, GPU not consuming (stuck)
 
 Reboot timeline (ssh probes): uptime 0 min -> 1 min -> ~170 s -> reboot -> ~50 s and climbing.
-A warm reboot does not clear it (SGX silicon state stuck); the EA1 has no smart plug, so it needs a
+A warm reboot does not clear it (SGX silicon state stuck); the CE5310 board has no smart plug, so it needs a
 power cycle by Joseph. STOPPED, not retried.
 
 Attribution: the controls in suite_p1_write -- `str` to the unused USE_CODE_BASE_14/15 and the plain
@@ -90,7 +90,7 @@ above was read at ts ~170s on the 20:21 boot = the 20:24 reboot, in a window sha
 pre-existing instability. The box SELF-RECOVERED by 20:24 -- no power cycle. Net: no translation
 escape (firm); DoS undetermined (confounded) -- settle with an isolated re-run (Joseph's call).
 
-Clock note: the EA1's own clock runs ~5 min 11 s FAST. The box-clock times in the correction
+Clock note: the CE5310 board's own clock runs ~5 min 11 s FAST. The box-clock times in the correction
 above are ~5 min ahead of real UTC. Real UTC (mesa-gallium's Mac clock): mesa's chunk ~20:04:20,
 its wedge ~20:06, box SSH dead 20:15:50, reboots ~20:17 and ~20:19:30, my iso run ~20:17 (the
 70-recovery burst ~20:17:35-20:18:06), stable after. mesa's flock was held continuously

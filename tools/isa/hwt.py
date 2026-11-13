@@ -1,4 +1,4 @@
-"""Run hand-assembled USSE fragment programs on the EA3 and read their results back.
+"""Run hand-assembled USSE fragment programs on the CE5300 board and read their results back.
 
     python3 hwt.py <suite module> [-k substring] [--dry]
 
@@ -16,7 +16,7 @@ The frame is the probe's ref.bin replay (tools/decode/mkreplay.py) with:
 - a known clear colour, so a program that never ran is obvious.
 The data file is the same for every test (uploaded once); only the pokes differ.
 
-Environment: CAP (dir with ref.bin), REPLAY (static replay binary), EA3 (ssh helper).
+Environment: CAP (dir with ref.bin), REPLAY (static replay binary), CE5300 board (ssh helper).
 """
 import argparse
 import importlib
@@ -118,8 +118,8 @@ tar cf res.tar *.row *.bg $(ls *.fb 2>/dev/null) 2>/dev/null
 
 
 def run_box(work, tests):
-    ea3 = env("EA3SH")
-    sh = lambda cmd, inp=None: subprocess.run([ea3, cmd], input=inp, capture_output=True, check=False)
+    board = env("BOARD_SH")
+    sh = lambda cmd, inp=None: subprocess.run([board, cmd], input=inp, capture_output=True, check=False)
     sh(f"rm -rf {BOX}; mkdir -p {BOX}")
     files = {"replay": open(env("REPLAY"), "rb").read(), "data": open(os.path.join(work, "base", "data"), "rb").read(),
              "list": "\n".join(n for n, *_ in tests).encode(), "run.sh": (RUNNER % {"box": BOX}).encode()}

@@ -1,7 +1,7 @@
 # bLastInScene fix reaches do_3d on hardware; the 3D now hangs (serialization: do_3d runs before the last TA finishes)
 
 HW verification of the bLastInScene fix (ta_finished tests cmd+0x04 bit 1) on the
-EA1. The whole front of the chain now runs; the frontier moved to the 3D itself.
+CE5310 board. The whole front of the chain now runs; the frontier moved to the 3D itself.
 
 ## Result: do_3d reached, 3D hangs
 
@@ -28,7 +28,7 @@ bLastInScene, and runs do_3d — **before kick 2's terminate TA has finished**. 
 3D then renders an unfinalized scene (the terminate hasn't closed the tile lists)
 and hangs.
 
-## Next (needs an EA1 slot)
+## Next (needs an CE5310 board slot)
 
 Serialize the kicks: process kick 2 only after kick 1's TA finishes, and run do_3d
 only after the **last** TA finishes — matching the DDK. Options to design: defer a
@@ -46,4 +46,4 @@ catches a wrong trigger). Held uncommitted per the parent's "commit once it
 renders"; it didn't fully render (3D hangs), so the bLastInScene + run_ours fixes
 stay bundled, pending the serialization fix + a render. Read-offset fix already
 committed (ded2c15). Evidence:
-`data/2026-11-03-0400-ea1-blastinscene-do3d-reached-3d-no-complete.dmesg.log`.
+`data/2026-11-03-0400-ce5310-blastinscene-do3d-reached-3d-no-complete.dmesg.log`.

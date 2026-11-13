@@ -24,7 +24,7 @@ State on 2026-11-09:
 | 5 | `main`'s old layout goes away: `Config.in`, `sgx545-ce.mk`, `Kbuild`, `Kconfig`, `Makefile`, `linux.fragment`, `sgx-init`, `src/`, `dev/`. Anything that builds from `main` as a Buildroot package breaks at the merge, so check downstream pins first and point them at a tag of the old `main` if they still need it. Downstream pins by submodule at a fixed commit, so the merge breaks nothing until someone bumps it; a bump must follow the new layout. | open |
 | 6 | Tag the current `main` as `intel-closed-userspace` before merging, so the old layout stays reachable. | open |
 | 7 | Root clutter: `ce5300-regsample-ab.sh`, `ce5300-ro1-test2.sh` and `ce5300-stabilize.sh` sit at the top level. Move them under `tools/` or drop them. | done: moved to `tools/rig/` |
-| 8 | `docs/log/data/2026-11-03-0700-ea3-ab-ddk-render.bb.bin` (1.4 MB) is named like a capture of a DDK render. Check that it holds no DDK-derived output; the repository is public. | done: removed from the tree |
+| 8 | `docs/log/data/2026-11-03-0700-ce5300-ab-ddk-render.bb.bin` (1.4 MB) is named like a capture of a DDK render. Check that it holds no DDK-derived output; the repository is public. | done: removed from the tree |
 | 9 | README current: the stack, the status, the hardware, how to install and test. | done (this change) |
 | 10 | `docs/INSTALL.md` checked on hardware, with the CI packages (below). | done for userspace; kernel steps partly |
 | 11 | No closed binaries: only the open microkernel is built and shipped; Intel's DDK image is never in the repository or a package. | done |

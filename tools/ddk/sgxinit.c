@@ -1,7 +1,7 @@
 /*
  * sgxinit — do what pvrsrvctl --start does, and nothing else.
  *
- * Control4's pvrsrvctl is DDK 1.12 and links 1.12's libsrv_um/libsrv_init, so
+ * The vendor's pvrsrvctl is DDK 1.12 and links 1.12's libsrv_um/libsrv_init, so
  * it cannot be pointed at a 1.7 userspace. But the thing it actually does is
  * one call: SrvInit(), no arguments, PVRSRV_ERROR in eax, zero for success.
  * (Established by disassembling it: nothing is pushed before the call, and a

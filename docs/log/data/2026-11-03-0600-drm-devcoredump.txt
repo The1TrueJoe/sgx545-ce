@@ -1,4 +1,4 @@
-# powervr_sgx devcoredump of a forced TA page fault (SGXGEN_FAULT=1 powervr_sgx_frame -n 1), EA1, f52a569
+# powervr_sgx devcoredump of a forced TA page fault (SGXGEN_FAULT=1 powervr_sgx_frame -n 1), CE5310 board, f52a569
 # /sys/class/devcoredump/devcd*/data; the header names the job "null": a label bug fixed after this run (it was a render job)
 
 powervr_sgx hang: null job, ccb 11, reset 2

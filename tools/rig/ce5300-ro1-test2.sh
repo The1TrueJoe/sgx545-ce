@@ -1,12 +1,12 @@
 #!/bin/zsh
-# EA1 render_done-on-0x1 HW test (uk-ro1.bin, commit 1cccc1d) -- v2, robust reboot
+# CE5310 board render_done-on-0x1 HW test (uk-ro1.bin, commit 1cccc1d) -- v2, robust reboot
 # detection. Waits for an actual NEW boot_id + expected cmdline (auth blips can't
 # fool it), and greps the ro1 run tag (can't match a stale clean3 log). Same proven
 # cold-GPU ramboot rig. ALWAYS restores to normal boot.
 setopt sh_word_split
 : "${BOX_PASS:?set BOX_PASS to the board root password}"
 OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 -o PreferredAuthentications=password -o PubkeyAuthentication=no"
-H=root@10.0.0.110
+H=root@board
 HW=${UK_HWRUNS:?set UK_HWRUNS to the directory with the built test images}
 BIN=uk-ro1.bin
 TAG=ro1-render-on-0x1
@@ -32,13 +32,13 @@ echo "precheck: $pre"
 echo "$pre" | grep -q '^NORMAL' || { echo "FATAL: box not on normal boot ($pre) -- stabilize first"; exit 3; }
 
 echo "=== on-box lock + stage $BIN ==="
-ssh_ "echo ukernel-ea1-ro1 > /tmp/gpu.lock"
+ssh_ "echo ukernel-ce5310-ro1 > /tmp/gpu.lock"
 sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/uk/uk-ro1.bin" < "$HW/uk-ro1.bin" 2>&1 | grep -v "Permanently added"
 sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/uk/uk-ro1.bin.pat" < "$HW/uk-ro1.bin.pat" 2>&1 | grep -v "Permanently added"
 echo "staged md5 remote=$(ssh_ "md5sum /root/uk/$BIN | cut -c1-8") local=$(md5 -q "$HW/uk-ro1.bin" | cut -c1-8)"
 
 echo "=== install S50 (ro1) + S00aramboot + /boot/once ==="
-cat > /tmp/ea1-install2.sh <<INSTALL
+cat > /tmp/ce5310-install2.sh <<INSTALL
 #!/bin/sh
 set -e
 cat > /etc/init.d/S50zuktest <<'EOS'
@@ -86,8 +86,8 @@ chmod +x /etc/init.d/S00aramboot
 mkdir -p /boot/once; cp /boot/bzImage /boot/once/bzImage
 sh -n /etc/init.d/S50zuktest && sh -n /etc/init.d/S00aramboot && echo "install OK"
 INSTALL
-sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/ea1-install2.sh" < /tmp/ea1-install2.sh 2>&1 | grep -v "Permanently added"
-ssh_ 'sh /root/ea1-install2.sh 2>&1'
+sshpass -p "$BOX_PASS" ssh $OPTS "$H" "cat > /root/ce5310-install2.sh" < /tmp/ce5310-install2.sh 2>&1 | grep -v "Permanently added"
+ssh_ 'sh /root/ce5310-install2.sh 2>&1'
 
 echo "=== reboot into ramboot ==="
 OLD=$(ssh_ 'head -c11 /proc/sys/kernel/random/boot_id')

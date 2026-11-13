@@ -1,6 +1,6 @@
 # powervr_sgx on the open microkernel: frames render, no DDK code anywhere
 
-M2 and M1 meet. EA1 RAM boot of b24d0aa (ea1-v1), 2026-11-04 ~03:33 UTC. The
+M2 and M1 meet. CE5310 board RAM boot of b24d0aa (ce5310-v1), 2026-11-04 ~03:33 UTC. The
 microkernel is `ukernel/` at um-re 273225c (9736 bytes, built by `ukernel/build.py`),
 wrapped into `powervr_sgx/sgx545_ukernel.bin` by `drm/tools/mkukfw.py` with
 its event entry at 0 and one patch site (the TA3D control block at +0x8). Its feature

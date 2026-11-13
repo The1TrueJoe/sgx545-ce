@@ -32,26 +32,26 @@ Companion to `2026-11-08-ukernel-bringup-history.md`.
 
 ## Box + date → behavior confirmed on hardware
 
-- **EA1, 2026-11-02**: `SA_KCCB` must be word `0x16`/+0x58 (not word 16/+0x40);
+- **CE5310 board, 2026-11-02**: `SA_KCCB` must be word `0x16`/+0x58 (not word 16/+0x40);
   the dpm_freelist load is required or the TA never runs; writing `sa` in the bare
   DOUTU event entry wedges init; a DCU-invalidate (STATUS2 `0x400`) must be acked or
   the event storms 16+ and locks the core; the idle `ACTIVE_POWER` raise is needed or
   `SGXOSTimer` HWRs the quiescent EDM; gating `kick` on `SW_EVENT` was wrong
   (GETMISCINFO left unconsumed).
-- **EA1, 2026-11-03**: ack TA-finish/3D-end against the snapshot; advance the client
+- **CE5310 board, 2026-11-03**: ack TA-finish/3D-end against the snapshot; advance the client
   CCB RO or every TA re-reads kick 1; first-kick gating (re-running per-scene setup
   hangs the TA); the client PD into list 0 wedges the 3D; the `0xa74` RMW must
   preserve `0x208200`; command word 0 is SIZE not flags (do_3d never ran); TPC flush
   before 3D (else ISP hangs, `BIF_FAULT`=0); save CR `0x274` across kicks; dpm_load
   after the TE registers.
-- **EA1, 2026-11-04**: a render = rendezvous of `0x40000` + `0x1`; leaving `0x1`
+- **CE5310 board, 2026-11-04**: a render = rendezvous of `0x40000` + `0x1`; leaving `0x1`
   un-acked lets `free_done` re-raise (else deadlock).
-- **EA3, 2026-11-03**: `op0xff`/`op0x100` cache ops give no improvement (10/30) and
+- **CE5300 board, 2026-11-03**: `op0xff`/`op0x100` cache ops give no improvement (10/30) and
   are not the terminate-kick cause; lock/release of the task mutex is HW-neutral; the
-  two-task RO race HWRs frames 2+; the EA3 p1 fast host delivers kick 2 mid-TA →
+  two-task RO race HWRs frames 2+; the CE5300 board p1 fast host delivers kick 2 mid-TA →
   `SC_TAFLIGHT`. DPM log: 25 pages live at TA1 finish, 0 at terminate, no power event
   on 3/5 lockups.
-- **EA1, ~frame 40 ("M1 exit"), 2026-11-08**: the `PB_TA_LOADED` per-PB rule;
+- **CE5310 board, ~frame 40 ("M1 exit"), 2026-11-08**: the `PB_TA_LOADED` per-PB rule;
   `HC_BGBLOCK` reuse of `ui32PerfGroup` is safe; cleanup must not clear the PB markers
   on RT/ctx cleanup; the EDM bgblock pulse faults under secure/no-share at
   `KERNEL_CODE+0x20d0`; a null transfer status write (`0x168`) faults

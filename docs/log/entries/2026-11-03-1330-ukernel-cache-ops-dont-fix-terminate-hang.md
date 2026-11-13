@@ -1,9 +1,9 @@
-# Cache ops (op0xff / op0x100) do NOT fix the terminate-TA hang; frame 1 always fails (EA3)
+# Cache ops (op0xff / op0x100) do NOT fix the terminate-TA hang; frame 1 always fails (CE5300 board)
 
 ta3d-state's firmware diff (candidate 1) said the DDK runs USE/EDM cache ops that
 ours doesn't — op0xff after every MADD invalidate and op0x100 in the shared
 task-end tail — and that missing them could be the intermittent terminate-kick
-lockup_TA. Tested both on the EA3, each against a same-method baseline control.
+lockup_TA. Tested both on the CE5300 board, each against a same-method baseline control.
 
 ## Method
 
@@ -46,5 +46,5 @@ post-HWR renders as ours. (The M1 first-triangle and multi-frame results do show
 ours renders, so ours is capable; the question is only what the post-HWR renders in
 THIS run were.)
 
-Evidence: `scratchpad/ea3-op0xff-mf.out`, `ea3-op100-mf.out`, `ea3-baseline-mf.out`.
+Evidence: `scratchpad/ce5300-op0xff-mf.out`, `ce5300-op100-mf.out`, `ce5300-baseline-mf.out`.
 ta3d-state's firmware detail: ta3d-state-round2-handover.md, kseq5.txt.

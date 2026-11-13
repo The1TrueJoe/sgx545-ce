@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build blitest (static x86_64 musl, for the EA3): GPU blits on a transfer context of its own.
+# Build blitest (static x86_64 musl, for the CE5300 board): GPU blits on a transfer context of its own.
 set -e
 R=$(cd "$(dirname "$0")/../.." && pwd)
 . "$R/libpvr/abi/flags.sh"

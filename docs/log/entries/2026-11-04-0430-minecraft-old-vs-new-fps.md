@@ -1,6 +1,6 @@
 # Minecraft FPS: the old stack against the new
 
-Joseph asked for Minecraft frame rates on the new driver stack against the old one. EA1, 2026-11-04
+Joseph asked for Minecraft frame rates on the new driver stack against the old one. CE5310 board, 2026-11-04
 04:05 to 04:45 UTC, 3 runs of each stack, no GPU recoveries in any run. The box was put back as
 found: normal boot, display stack running, mc-session stopped.
 

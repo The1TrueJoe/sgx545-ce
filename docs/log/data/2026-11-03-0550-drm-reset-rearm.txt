@@ -1,4 +1,4 @@
-# powervr_sgx on the EA1, RAM boot of e0bc846 (restart re-arms surviving contexts, PBs, RT datasets), 2026-11-03 ~05:45 UTC
+# powervr_sgx on the CE5310 board, RAM boot of e0bc846 (restart re-arms surviving contexts, PBs, RT datasets), 2026-11-03 ~05:45 UTC
 # ---- powervr_sgx_hang (one round)
 round 0: render right
 round 0: mixed render + transfer right

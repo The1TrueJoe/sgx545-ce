@@ -1,9 +1,9 @@
-# The residual lockup_TA is NOT the deferred kick — sentinel correlation refutes it (EA3)
+# The residual lockup_TA is NOT the deferred kick — sentinel correlation refutes it (CE5300 board)
 
 ta3d-state's lead: the ~35% per-frame lockup_TA is kick 2, deferred while kick 1's
 TA runs and re-launched from ta_finished(1) microseconds later, before the TA/MTE
 engine is idle. Cheapest test first: correlate the `k_ta_defer` sentinel (0x0DEF)
-with the lockup. Built UK_SENTINEL=1, pushed to the EA3, looped boots, read the
+with the lockup. Built UK_SENTINEL=1, pushed to the CE5300 board, looped boots, read the
 driver's watchdog scratch dump (T3C) on each timed-out frame.
 
 ## The sentinel map (UK_SENTINEL=1 scratch, dumped as T3C-xx lines, byte offsets)
@@ -70,6 +70,6 @@ Re-run with UK_CCBTRACE words that don't collide with live state (0x35 count,
 - **cmd+0x58 bit0 = 0 on a consumed command** -> we kicked before the kernel
   marked it ready (the DDK gates on this bit); fix = check it at the kick.
 
-Evidence: `scratchpad/ea3-sentinel-defer.out`,
-`docs/log/data/2026-11-03-1130-ea3-sentinel-defer.log`. ta3d-state's DDK model +
+Evidence: `scratchpad/ce5300-sentinel-defer.out`,
+`docs/log/data/2026-11-03-1130-ce5300-sentinel-defer.log`. ta3d-state's DDK model +
 scripts (ccbtrace.py/ccbtrace2.py) in its round-2 handover.

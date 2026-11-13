@@ -2,7 +2,7 @@
  * srvinit: bring the SGX545 up at boot without libsrv_init.
  *
  * Does what the DDK's SrvInit() does (decompiled from libsrv_init 1.7.862890
- * and checked against a pvrtrace of it on an EA3, see SRVINIT.md): connect as
+ * and checked against a pvrtrace of it on a CE5300 board, see SRVINIT.md): connect as
  * the init process, allocate the microkernel's buffers in the kernel heaps,
  * upload and patch the microkernel and its PDS programs, build the init
  * scripts, hand it all to the kernel with SGX_DEVINITPART2, then disconnect,

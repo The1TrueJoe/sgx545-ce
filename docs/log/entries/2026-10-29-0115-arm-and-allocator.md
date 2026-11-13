@@ -1,6 +1,6 @@
 # Minecraft: the arm, and 21-23 FPS
 
-![the first-person arm, lit and textured](../img/2026-10-29-0100-ea1-arm-fixed.png)
+![the first-person arm, lit and textured](../img/2026-10-29-0100-ce5310-arm-fixed.png)
 
 ## The arm
 
@@ -14,7 +14,7 @@ The player's arm came out black, with a moire of the world showing through it.
   loses what comes after (the constants' DMAs were already chunked at 16 for
   that reason). The fetch now DMAs at most 16 dwords at a time (`cb287df`).
 
-Ruled out on the way, each with a test against the DDK on the EA1, all
+Ruled out on the way, each with a test against the DDK on the CE5310 board, all
 byte-identical:
 - non-square twiddled textures (`sgx545_texshape.sh`, 7 shapes);
 - triangles crossing the eye plane (`sgx545_nearclip.sh`);
@@ -48,7 +48,7 @@ mediump varyings were iterated F32. The compiler session has fixed both (its
 
 ## F16 on, and into the DDK's range
 
-![the bench world on our driver with F16 shading: the pig, the jungle, the sea](../img/2026-10-29-0300-ea1-f16-ddk-range.png)
+![the bench world on our driver with F16 shading: the pig, the jungle, the sea](../img/2026-10-29-0300-ce5310-f16-ddk-range.png)
 
 F16/C10 shading is on by default now (`be35c96`, `a435312`). The compiler
 session shortened the F16 programs twice:

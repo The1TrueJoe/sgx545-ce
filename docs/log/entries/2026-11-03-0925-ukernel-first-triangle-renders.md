@@ -1,6 +1,6 @@
 # First TA/3D triangle renders on the open microkernel (byte-identical to the DDK)
 
-The open SGX545 microkernel now completes a full TA/3D render on hardware (EA3 p1,
+The open SGX545 microkernel now completes a full TA/3D render on hardware (CE5300 board p1,
 `srvinit -o`), and the output is **byte-for-byte identical to the vendor DDK's**:
 same color-buffer md5 `56f8466aa4cf3b08cfbd166b63dd88ec`, 43200 green triangle
 pixels (RGB 0,255,0) + 302400 blue-clear (0,0,128) over the visible 720x480. This
@@ -46,9 +46,9 @@ run_ours matched 0x50000000 on both. Fix (ukernel.py do_ta): read-modify-write 0
 
 ## Evidence
 
-- HW (EA3 p1, uk-a74.bin): `srvinit -o` -> "SGX545 microkernel started"; `frame -o`
+- HW (CE5300 board p1, uk-a74.bin): `srvinit -o` -> "SGX545 microkernel started"; `frame -o`
   -> "render done"; color buffer md5 `56f8466a...` == the DDK's (`srvinit -f`) on
-  the same frame, bit for bit. Data: docs/log/data/2026-11-03-0925-ea3-first-
+  the same frame, bit for bit. Data: docs/log/data/2026-11-03-0925-ce5300-first-
   triangle.bin (the open uK's color buffer).
 - Offline: run_ours fake/v1/v2/xfer/xfer-rect all MATCH the DDK value-for-value with
   0xc84 + 0xa74 seeded; test_emu 5/5; test_commands OK.

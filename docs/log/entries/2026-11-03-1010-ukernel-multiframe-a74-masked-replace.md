@@ -18,7 +18,7 @@ sequence per phase (it was never checked before, which is how the clear-to-0 bug
 d3119a4 slipped through). Offline: run_ours fake/v1/v2/xfer/xfer-rect all MATCH with
 0xa74 compared; test_emu 5/5; test_commands OK.
 
-## HW (EA3 p1, uk-mf.bin md5 a45a421c): multi-frame renders stay byte-identical
+## HW (CE5300 board p1, uk-mf.bin md5 a45a421c): multi-frame renders stay byte-identical
 
 On a boot that rendered frame 1, ran 10 consecutive frames (frame-dump x10 after one
 srvinit -o). 6/10 rendered "done", and **every rendered frame's color buffer is

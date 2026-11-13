@@ -1,5 +1,5 @@
 #!/bin/sh
-# vertices of many attributes against the DDK on the EA1: 5 and 6 vec4
+# vertices of many attributes against the DDK on the CE5310 board: 5 and 6 vec4
 # attributes (20 and 24 dwords; Minecraft's lit entities have 5), the colour
 # from the last ones
 cd /tmp/mesa

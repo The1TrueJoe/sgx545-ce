@@ -1,4 +1,4 @@
-# powervr_sgx on the EA1, RAM boots of f52a569, 2026-11-03 ~06:00 UTC (DDK microkernel)
+# powervr_sgx on the CE5310 board, RAM boots of f52a569, 2026-11-03 ~06:00 UTC (DDK microkernel)
 # uAPI suite (33 tests), PCI config of 01:02.0, hang + devcoredump, then the reset_rearm bisect
 # reset_rearm bits: 1 HW render context bit 0, 2 its render details (+0x20/+0x24), 4 PB, 8 RT dataset, 16 HW transfer context bit 0
 

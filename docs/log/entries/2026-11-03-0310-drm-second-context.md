@@ -1,6 +1,6 @@
 # powervr_sgx: a second render context hangs on its third frame; the in-place restart fails
 
-Two RAM-boot slots on the EA1 after the first frames (`2026-11-03-0210-drm-first-frame`),
+Two RAM-boot slots on the CE5310 board after the first frames (`2026-11-03-0210-drm-first-frame`),
 2026-11-03 ~02:45 (driver a7503fe) and ~03:10 UTC (f61191a), DDK microkernel with the
 kernel heaps shared, nothing flashed, no power-cycle; the box went back to its normal boot
 after each.

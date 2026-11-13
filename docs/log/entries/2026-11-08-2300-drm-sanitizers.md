@@ -1,6 +1,6 @@
 # The trimmed driver under KASAN, UBSAN and DMA-API debug; a hang with jobs queued behind it
 
-EA1 (ea1-v1) RAM boot of m2-drm a8dff09 built with `drm/ci/debug.fragment`, on
+CE5310 board (ce5310-v1) RAM boot of m2-drm a8dff09 built with `drm/ci/debug.fragment`, on
 the open microkernel fd1e151 (secure mode), 2026-11-08 ~22:55 UTC. Nothing
 flashed; the box went back to its normal boot afterwards.
 
@@ -27,7 +27,7 @@ No KASAN or UBSAN report.
 
 ## Second run: lockdep and kmemleak (3ca68ab)
 
-EA1 RAM boot of m2-drm 3ca68ab with the fragment's `CONFIG_DEBUG_KERNEL`, so
+CE5310 board RAM boot of m2-drm 3ca68ab with the fragment's `CONFIG_DEBUG_KERNEL`, so
 this time lockdep (`PROVE_LOCKING`), kmemleak and debug objects were in, as
 well as KASAN, UBSAN and DMA-API debug. Open microkernel fd1e151.
 
@@ -46,7 +46,7 @@ path inside `dma_fence_begin_signalling()` and the runtime resume from
 Then a soak: three processes rendering at once (`powervr_sgx_frame -q 4 -n 40
 -c 2` in a loop) for five minutes. A few minutes in, the box lost its
 userspace: ssh dropped, and since then nothing listens on any port while the
-kernel still answers ping. The EA1 has no remote power switch, so it waits for
+kernel still answers ping. The CE5310 board has no remote power switch, so it waits for
 a hand power cycle. After the cycle it came up on its normal boot with
 nothing kept from the lost one: `/var/log` is tmpfs and there is no pstore.
 So the cause (the OOM killer under KASAN and kmemleak, or a driver fault) is

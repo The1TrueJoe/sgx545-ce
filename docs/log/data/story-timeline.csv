@@ -10,10 +10,10 @@ utc,workstream,milestone,commit
 2026-10-28T02:17:10Z,replayer,DoMapToUser 64-bit address fix (pushed for CI as 4e5ceb4),28e6686
 2026-10-28T02:26:01Z,main,Shader corpus tooling: uschook + shc + usp.py,4886901
 2026-10-28T03:08:45Z,isa,USSE first decode: 370 shaders parsed; encoder fuzzed,d4fefce
-2026-10-28T03:20:22Z,replayer,Own frame: authored vertices + hand-assembled shaders drawn on the EA3,7a7a45d
+2026-10-28T03:20:22Z,replayer,Own frame: authored vertices + hand-assembled shaders drawn on the CE5300 board,7a7a45d
 2026-10-28T03:50:56Z,pds,PDS disassembler: 13 captures with 0 unexplained bits,dcd7d3f
 2026-10-28T04:01:22Z,pds,GPU wedged by DOUTU bit 26 (TA lockup; recovery loops),
-2026-10-28T04:20:03Z,main,Bench plug power-cycle clears the wedge,
+2026-10-28T04:20:03Z,main,remote power switch power-cycle clears the wedge,
 2026-10-28T04:22:43Z,pds,MOVS bits 29+27 add index*stride only together (hardware-proven),1c7e0a4
 2026-10-28T04:42:47Z,srvinit,Real SrvInit traced from a cold boot and decoded,
 2026-10-28T04:49:55Z,srvinit,Offline srvinit rebuilds all 15 init buffers identical to the blob,fea842e
@@ -25,7 +25,7 @@ utc,workstream,milestone,commit
 2026-10-28T05:53:32Z,replayer,Replay exact on the open-srvinit GPU: no Intel code in the path,42dbcc8
 2026-10-28T05:55:32Z,pds,libsrv_init's five microkernel-entry PDS programs decoded,96ef782
 2026-10-28T06:22:00Z,finalizer,Discard two-phase program; varyings at o6 with gl_PointSize; USP header named,579240f
-2026-10-28T06:26:25Z,hwcheck,442 hand-assembled draws on the EA3; no hang; decoder corrections,3755f9b
+2026-10-28T06:26:25Z,hwcheck,442 hand-assembled draws on the CE5300 board; no hang; decoder corrections,3755f9b
 2026-10-28T06:54:41Z,isa,Merged ISA + finalizer + hardware check; corrections applied,def0390
 2026-10-28T06:54:53Z,srvinit,srvinit assembles the PDS programs itself; firmware file = microkernel only,64a5a78
 2026-10-28T08:01:00Z,frame-from-code,tools/gen generator runs on fakepvr; its trace decodes like a DDK capture,

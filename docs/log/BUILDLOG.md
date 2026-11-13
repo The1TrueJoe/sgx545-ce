@@ -3,11 +3,11 @@
 Intel CE5300 boards carry a PowerVR SGX545 GPU. The only userspace
 that has ever driven it is Intel's closed i386 Cedarview DDK 1.7 (`1.7@862890`). The boot
 image runs it on a 64-bit system through the kernel's IA32 compat layer, and that blob is what
-renders the Minecraft session on the EA1 today, through gl4es.
+renders the Minecraft session on the CE5310 board today, through gl4es.
 
 This log tells how an open, native x86_64 userspace for that GPU came together, starting
 2026-10-28 00:40 UTC. Times are UTC. Every frame shown here was read back from the GPU of
-an EA3 on the bench (10.0.0.113). Per-milestone entries live in `entries/`, the figures
+an CE5300 board on the bench (board). Per-milestone entries live in `entries/`, the figures
 in `img/`, and the raw numbers in `data/`.
 
 **Where it stands.**
@@ -24,7 +24,7 @@ in `img/`, and the raw numbers in `data/`.
 |---|---|
 | GPU | PowerVR SGX545, revision 1.0.14 (HW core rev 1000e) |
 | Blob replaced | Intel Cedarview DDK 1.7.862890, i386 |
-| Test box | EA3 (CE5315), Linux 7.1.8, sgx545ce driver built in |
+| Test box | CE5300 board (CE5315), Linux 7.1.8, sgx545ce driver built in |
 | Frame | 720×480; back buffer BGRA8888 at device address `0x3e265000`, pitch 736 |
 | Branch | sgx545-ce `um-re` (local) |
 
@@ -86,7 +86,7 @@ context, allocate and map, wrap, register a render context, kick. `mkreplay.py` 
 capture into a script for it: 1,485 operations, 27,212 bytes of data, 196 buffers.
 `replay` is a static x86_64 musl binary. It loads no Imagination library.
 
-The first run on the EA3 died with:
+The first run on the CE5300 board died with:
 
 ```
 replay:5: map of buffer 0 failed
@@ -155,7 +155,7 @@ PVR_K:(Error): HWRecoveryResetSGX: SGXInitialise failed (24)
 ```
 
 Recovery then looped about once a second: 35 triggers in 45 seconds. Only a power cycle
-clears that. The EA3 is on a TP-Link HS110 smart plug called Bench, and a small script
+clears that. The CE5300 board is on a TP-Link HS110 smart plug called Bench, and a small script
 drives it over the plug's local protocol. The box was back 54 seconds after the cycle.
 From then on the rule was one poked replay at a time, with a dmesg check in between.
 
@@ -201,9 +201,9 @@ USSE instructions are 64 bits wide. The compiler, libusc, carries `useasm.c` (th
 encoder) inside it. That made the encoder the oracle:
 
 1. **Hooking the encoder on the box.** `encfuzz.c` hooks the encoder during real compiles on
-   the EA3 and re-encodes every instruction with single bits flipped.
+   the CE5300 board and re-encodes every instruction with single bits flipped.
 2. **Running it on the Mac.** `oracle.py` loads libusc into a unicorn i386 emulator and calls
-   the encoder directly. It reproduced 5,045 of the 5,056 encodings logged on the EA3. The
+   the encoder directly. It reproduced 5,045 of the 5,056 encodings logged on the CE5300 board. The
    other 11 are branches whose labels resolve through callbacks.
 3. **Sweeping it.** About 20,000 oracle-checked encodings later, `tools/isa/hw.py` describes
    172 instruction forms covering all 32 hardware opcodes. All 4,154 instructions in the
@@ -222,7 +222,7 @@ A few results the documentation would not have told you:
   libusc's own table, and c57–c63 exist.
 - f32-to-f16 packing always truncates, whatever rounding mode is set.
 
-![fsin (blue) and fcos (orange) as measured on the EA3, over sin and cos of t·π/2](img/story-06-fsin-quarter-turns.png)
+![fsin (blue) and fcos (orange) as measured on the CE5300 board, over sin and cos of t·π/2](img/story-06-fsin-quarter-turns.png)
 
 ![One swatch per register value read back off the screen](img/story-07-hwt-swatches.png)
 
@@ -295,11 +295,11 @@ The work ran as parallel Claude Code sessions on one Mac, each in its own clone 
 - srvinit;
 - one coordinating session.
 
-They shared a single EA3 with a session working on the box's Ethernet switch driver.
+They shared a single CE5300 board with a session working on the box's Ethernet switch driver.
 
-- **Sharing the EA3.** Before a GPU run, each session messaged the others. Before any
+- **Sharing the CE5300 board.** Before a GPU run, each session messaged the others. Before any
   power cycle it waited for objections.
-- **The EA1 was off limits.** It runs the live Minecraft session.
+- **The CE5310 board was off limits.** It runs the live Minecraft session.
 - **Power cycles.** Eight Bench-plug cycles were needed on the 28th (`data/story-power-cycles.csv`).
   One cleared the PDS wedge. One was lost because a file was not `sync`ed before the plug cut
   power. Three were srvinit's tests. Three cleared hangs of the first generated frames.
@@ -347,7 +347,7 @@ All 0 pixels off.
 - **Test-boot the 64-bit DoMapToUser fix**, so native clients can map anywhere.
 - **A compiler backend for USSE**, from NIR.
 - **A Mesa gallium driver.**
-- **Minecraft on the EA1, on that driver.**
+- **Minecraft on the CE5310 board, on that driver.**
 
 ## 10. Textures, render targets and the display (08:00–09:40)
 
@@ -384,6 +384,6 @@ queue on a context built from `sgxtex` alone:
   coordinates;
 - the swap to `/dev/fb0` (1.3 ms).
 
-All byte-exact on the EA3. Render targets need no conversion
+All byte-exact on the CE5300 board. Render targets need no conversion
 (`sgxtex_rt_*`). Vsync is not established: probing the display controller
 hung the box once.

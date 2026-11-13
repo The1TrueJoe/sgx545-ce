@@ -1,0 +1,66 @@
+=== stage uk-clean3 (dd5adc34 deadlock-safe cleanup) ===
+bin sent
+pat sent
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+staged bin=dd5adc34 pat=298de4ab
+=== install S50 ===
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+=== arm S00aramboot ===
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+installOK
+=== reboot into ramboot; confirm DOWN ===
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+down (1)
+=== wait up ===
+up (23)
+=== wait test.log complete ===
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+=== TEST.LOG ===
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+=== S50 clean3 Wed Nov  4 00:41:28 UTC 2026 ===
+--- srvinit -o uk-clean3.bin (dd5adc34 deadlock-safe cleanup) ---
+srvinit: SGX545 microkernel started (ukernel at 0x30000000, pd 0x01d33000)
+--- 10 frames ---
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render TIMED OUT
+frame: 720x480, 1 draw(s), render done
+--- rate + HWR + md5 ---
+RENDERED=3 TIMEOUT=7
+HWR=7
+56f8466aa4cf3b08cfbd166b63dd88ec  /tmp/f1.bin
+--- (P0) BIF ---
+[   51.132462] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10133 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   51.183798] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   51.189165] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   51.194532] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   51.239472] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   51.244847] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   51.268566] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   51.273934] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+[   51.279302] PVR_K: (P0) EUR_CR_BIF_INT_STAT:     000D0400
+[   51.284671] PVR_K: (P0) EUR_CR_BIF_FAULT:        4031100F
+[   51.290038] PVR_K: (P0) EUR_CR_BIF_MEM_REQ_STAT: 00000000
+[   51.295409] PVR_K: (P0) EUR_CR_CLKGATECTL:       0000A6AA
+[   54.410458] PVR_K:(Error): SGXOSTimer() detected SGX lockup (0x10af6 tasks) [1309, drivers/gpu/drm/sgx545ce/src/services4/srvkm/devices/sgx/sgxinit.c]
+[   54.461792] PVR_K: (P0) EUR_CR_CORE_ID:          01150000
+[   54.467160] PVR_K: (P0) EUR_CR_CORE_REVISION:    0001000E
+[   54.472527] PVR_K: (P0) EUR_CR_EVENT_STATUS:     20000000
+[   54.517469] PVR_K: (P0) EUR_CR_EVENT_STATUS2:    00000000
+[   54.522842] PVR_K: 	(mte_flush: no, vdm_load: no, vdm_kicked: no, otpm_mem_clear: no,otpm_flush: no, dcu_invalid: no, gsg_flush: no, gsg_load: no, lockup_ta: no, lockup_3d: no, partial_deadlock: no, dpm_dhost_free: nodpm_host_free: no, dpm_3d_free: no, dpm_ta_free: no)
+[   54.546561] PVR_K: (P0) EUR_CR_BIF_CTRL:         00000000
+[   54.551923] PVR_K: (P0) EUR_CR_BIF_BANK0:        0000101F
+=== S50 clean3 complete ===
+=== restore CE5310 board to normal ===
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+Warning: Permanently added 'board' (ED25519) to the list of known hosts.
+restored: ramboot=0 once=0 s50=0
+=== DONE ===

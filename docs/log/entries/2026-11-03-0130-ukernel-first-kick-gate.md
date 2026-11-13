@@ -52,7 +52,7 @@ Offline: `test_emu` all OK, `test_commands` all OK, and `run_ours` **MATCH on al
 now equal the DDK's `"TA kick 2"` exactly (the 12 EXTRA writes are gone), while
 `TA1` and `3D` stay matching.
 
-**HW: NOT yet verified** — the EA1 GPU slot was not free (queued behind the M2
+**HW: NOT yet verified** — the CE5310 board GPU slot was not free (queued behind the M2
 kernel driver's RAM-boot slot and mesa-gallium's piglit slices). Expected on HW:
 kick 2's TA finishes (no `lockup_ta`), its `ta_finished` sees the READY bit and
 chains `do_3d` → the first rendered triangle, or the next frontier if something
@@ -62,4 +62,4 @@ is the probe when a slot opens.
 ## Commit
 
 do_ta first-kick gate + the run_ours TA2 check, committed locally (parent pushes).
-Offline-validated; HW verification pending an EA1 slot.
+Offline-validated; HW verification pending an CE5310 board slot.

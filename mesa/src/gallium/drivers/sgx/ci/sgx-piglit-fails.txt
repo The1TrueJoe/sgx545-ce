@@ -1,5 +1,5 @@
 # 2026-11-03: 28515 tests, Crash 87, Fail 1729, Missing 437, Pass 4280, Skip 21978, Timeout 2, Warn 2
-# piglit gpu profile on the EA3; every test that didn't skip rerun on um-re c111b12 + the varyings driver (lib-pg17)
+# piglit gpu profile on the CE5300 board; every test that didn't skip rerun on um-re c111b12 + the varyings driver (lib-pg17)
 
 # interpolation through gl_ClipVertex: user clip planes not implemented (M6); the flat ones need flat shading too
 spec@glsl-1.10@execution@interpolation@interpolation-none-gl_backcolor-flat-vertex,Fail

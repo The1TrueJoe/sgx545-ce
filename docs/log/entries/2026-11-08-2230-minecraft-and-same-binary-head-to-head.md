@@ -1,6 +1,6 @@
 # Minecraft and a same-binary head-to-head: Intel's driver against ours
 
-CE5310 board (EA-1), 2026-11-08 19:40 to 22:10 UTC, nothing flashed. Vanilla Minecraft 1.7.10
+CE5310 board (CE5310 board), 2026-11-08 19:40 to 22:10 UTC, nothing flashed. Vanilla Minecraft 1.7.10
 in a new benchmark world (seed 5915084639795924495, spawn 265/64/41; the old world was lost
 with a reinstall), render distance 4, 720x480. Each run: 30 s warm-up after joining, then 60 s
 standing and 60 s walking (`mesa/tests/x11/mc-oldnew.sh`). A run with a GPU recovery, a failed

@@ -631,7 +631,7 @@ diff -ruN powervr_sgx.orig/pvrsgx_vm.c powervr_sgx/pvrsgx_vm.c
 +/*
 + * The vendor microkernel handles a TA kick under the job's directory: it moves the
 + * EDM's BIF_BANK0 index onto the list it loads with the context's directory,
-+ * then fetches its own code and reads its control blocks through it (EA1,
++ * then fetches its own code and reads its control blocks through it (CE5310 board,
 + * 2026-11-03, docs/DRM-DRIVER.md section 4). So with it, every VM must map the
 + * firmware's heaps, which gives a client's shaders the reach into kernel memory
 + * that P2 and P3 describe (docs/UAPI.md 7.2). The open microkernel keeps the
