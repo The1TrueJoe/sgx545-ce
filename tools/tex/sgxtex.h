@@ -219,9 +219,9 @@ void sgxtex_xctx_words(uint32_t ctx[SGXTEX_XCTX_BYTES / 4], uint32_t ccb, uint32
 #define SGXTEX_SECONDARY_WORDS 8
 void sgxtex_xctx_secondary(uint32_t *pds, uint32_t nop_use);
 
-/* the pixel-event PDS program: 5 data rows + 29 code words (PDS.md; tools/gen's pixel_event) */
-#define SGXTEX_EVENT_WORDS 49
-#define SGXTEX_EVENT_ROWS 5
+/* the pixel-event PDS program: 4 data rows + 25 code words (tools/gen's pixel_event) */
+#define SGXTEX_EVENT_WORDS 41
+#define SGXTEX_EVENT_ROWS 4
 void sgxtex_xctx_pixel_event(uint32_t *pds, uint32_t eot_use, uint32_t emit_use);
 
 /* small USSE programs the context needs (words, low word first) */

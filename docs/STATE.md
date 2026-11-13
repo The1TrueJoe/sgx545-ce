@@ -546,9 +546,8 @@ hardware, open driver]:
 
 ### Constant-color blending
 
-`sgxs_blend_const` in `tools/state/sgxstate.h` builds the five
-instructions. They are bit-exact with the DDK's for k1-k5, k7 and k8
-[capture].
+The Mesa winsys (`blend_const_words` in `sgx_frame.c`) builds the five
+instructions [hardware, open driver].
 
 sop2's selectors can't name a constant. With any CONSTANT_COLOR /
 ONE_MINUS_CONSTANT_COLOR / CONSTANT_ALPHA / ONE_MINUS_CONSTANT_ALPHA
@@ -600,8 +599,7 @@ instruction instead of its final `mov o0, color`:
 
     atst8 o0, p0.nw, pa0, sa0, sa1  [end]      f0000001 f934000d   (e1gt5)
 
-with ISPA pass type 1 (`03d00200`). `tools/state/sgxstate.h` has
-`sgxs_atst8`, `sgxs_atst_depth_word` and `sgxs_atst_alpha_word`.
+with ISPA pass type 1 (`03d00200`).
 
 **The operands.** The secondary program writes sa0 and sa1 with DOUTA:
 
@@ -655,7 +653,6 @@ per pixel**, and every object is drawn only where it is set. Pass type 3
 ("viewport generate") objects write the bit and draw nothing else. The
 **region clip** (group 0x80) limits which tiles the TA bins an object into,
 and it is **sticky**: an object without group 0x80 keeps the last one.
-`tools/state/sgxstate.h` builds all of it (`sgxs_scissor_objects`).
 
 **The two objects** (TA block header `d485`: ISPA, ISPC, region clip,
 output select, MTE, TSP; 9 dwords, DMA kind 0; no PDS group, so no pixel
@@ -672,8 +669,7 @@ program runs):
   q4].
 - The vertices are 2 dwords (x, y). The vertex program is
   `mov o0, pa0 [rpt=2]; mov o2, c3; mov o3, c3` (z = w = 1.0), output
-  select `0x00040000`, MTE `0x40` [capture; hardware, open driver]. The
-  words are in `sgxstate.h`.
+  select `0x00040000`, MTE `0x40` [capture; hardware, open driver].
 - Pixel centers inside the strip get the bit: moving its left edge from
   x 100 to 150 moved the scissor's edge [hardware: q2].
 - The set object only reaches its region clip's tiles [hardware: q3].
@@ -720,8 +716,6 @@ program runs):
 
 ### Lines and points
 
-`tools/state/sgxstate.h` has the words (`sgxs_prim`, `sgxs_ispa_objtype`,
-`sgxs_ispb_width`, `sgxs_point_size_word`, `sgxs_line_list_indices`).
 
 **Primitives.** The VDM index-list word is
 `0x80000000 | 0x00c00000 | prim << 26 | count`. prim is 0 triangles,
