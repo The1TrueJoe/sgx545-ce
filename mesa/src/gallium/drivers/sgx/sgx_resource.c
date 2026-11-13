@@ -293,8 +293,15 @@ sgx_resource_from_handle(struct pipe_screen *pscreen,
        (templ->bind & PIPE_BIND_DEPTH_STENCIL) || whandle->offset ||
        (whandle->modifier != DRM_FORMAT_MOD_LINEAR &&
         whandle->modifier != DRM_FORMAT_MOD_INVALID) ||
-       whandle->stride % 128 || whandle->stride < templ->width0 * 4)
+       whandle->stride % 128 || whandle->stride < templ->width0 * 4) {
+      SGX_DBG(SYNC,
+              "dma-buf import of %ux%u %s refused: type %u shareable %d bind %#x offset %u modifier %#llx stride %u\n",
+              templ->width0, templ->height0,
+              util_format_short_name(templ->format), whandle->type,
+              shareable(templ), templ->bind, whandle->offset,
+              (unsigned long long)whandle->modifier, whandle->stride);
       return NULL;
+   }
    res = CALLOC_STRUCT(sgx_resource);
    if (!res)
       return NULL;
