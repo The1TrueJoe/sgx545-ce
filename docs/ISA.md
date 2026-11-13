@@ -60,15 +60,8 @@ stored low word first.
 
 | file | what it does |
 |---|---|
-| `hw.py`, `hw_*.py` | the instruction forms (framework + one module per group of classes); `decode`, `encode`, `fmt`, `parse` |
-| `dis.py` | disassemble USP binaries (`python3 dis.py corpus/c3`) or hex words (`-x hi lo`) |
-| `asm.py` | assemble dis.py's text; `--check` runs `hwcheck.py` |
+| `asm.py` | text to words and back through `sgx-asm` / `sgx-disasm` (built from `mesa/src/sgx/isa/sgx.xml`; `sh ukernel/sgx-asm.sh DIR`), and `parse()` of the text |
 | `hwt.py`, `hwt_lib.py`, `hwt_*.py`, `hwt_out/` | run hand-assembled fragment programs on the CE5300 board through the replay and read the result register back from the back buffer; one suite per area, logs per suite |
-| `hwcheck.py` | every corpus word: has a form, no unexplained bit, text round-trips |
-| `check_float.py`, `check_pack.py`, `check_int.py`, `check_mem.py` | oracle sweeps per area |
-| `usp.py`, `smpblock.py` | the USP container and its texture-sample blocks |
-| `isadoc_cov.py` | does this page state every form's identifying bits, field positions, operand slots and enum values (necessary, not sufficient) |
-| `blind.py` | random valid instructions per form, and the score of an encoder written from this page alone against them (docs/CLEANROOM.md "Validation"). Two blind passes on 2026-11-01, by fresh sessions that read only `docs/`: 120/122 words exact before the "Encoding conventions" section and the fixes it prompted (41% marked sure), 120/120 after (88% sure) |
 | `gen3.py` | the texture / flow / int / index / vertex corpus (`corpus/c3`) |
 
 Oracle input formats for the sweeps are in `tools/isa/oracle-map.md`.
