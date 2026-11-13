@@ -369,8 +369,8 @@ static int pdtable_init(struct pvrsgx_device *sdev)
 	if (!pvrsgx_core_single_context(sdev->family))
 		return 0;
 	err = pvrsgx_kmem_alloc(sdev, &f->pdtable,
-				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET, SGX_MMU_PAGE_SIZE,
-				SGX_MMU_PTE_READONLY, 0);
+				pvrsgx_heaps(sdev)->kernel_code.base + PDTABLE_OFFSET,
+				SGX_MMU_PAGE_SIZE, SGX_MMU_PTE_READONLY, 0);
 	if (err)
 		return err;
 	memset32(f->pdtable.cpu, pvrsgx_mmu_pd_addr(sdev->kernel_mmu), PDTABLE_SLOTS);
