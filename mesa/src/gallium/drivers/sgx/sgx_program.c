@@ -163,11 +163,9 @@ match_fs(struct sgx_pipe_shader *so)
 
       if (!l || comp != c || (load && l != load))
          return;
-      if (l->intrinsic == nir_intrinsic_load_ubo) {
-         if (!nir_src_is_const(l->src[0]) || nir_src_as_uint(l->src[0]) != 0 ||
-             !nir_src_is_const(l->src[1]))
-            return;
-      } else if (l->intrinsic == nir_intrinsic_load_uniform) {
+      /* (a load_ubo is a uniform block's, compiled: st's default uniforms
+       * are load_uniform, as nothing lowers them to constant buffer 0) */
+      if (l->intrinsic == nir_intrinsic_load_uniform) {
          if (!nir_src_is_const(l->src[0]))
             return;
       } else {
@@ -175,12 +173,9 @@ match_fs(struct sgx_pipe_shader *so)
       }
       load = l;
    }
-   /* load_ubo: a byte offset into constant buffer 0; load_uniform: vec4 slots */
-   if (load->intrinsic == nir_intrinsic_load_ubo)
-      so->ubo_offset = nir_src_as_uint(load->src[1]);
-   else
-      so->ubo_offset =
-         (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
+   /* load_uniform's vec4 slots */
+   so->ubo_offset =
+      (nir_intrinsic_base(load) + nir_src_as_uint(load->src[0])) * 16;
    so->kind = SGX_SHADER_FS_UNIFORM;
 }
 
@@ -458,8 +453,28 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
             BITFIELD64_BIT((var->data.location - VARYING_SLOT_VAR0 + r) & 63);
    }
    /* a set per slot in slot order (after gl_PointCoord's set 0), each
-    * variable at its component in the slot */
+    * variable at its component in the slot; two for a slot that holds an
+    * integer: the compiler passes an integer row as its 16-bit halves, exact
+    * floats, the low ones in the first set and the high ones in the next
+    * (sgx_varying.split). A raw word iterated as an F32 doesn't survive: -1
+    * is a NaN, and small ones are denormals */
    qsort(vars, n, sizeof(vars[0]), cmp_varying);
+   uint8_t slot_sets[64] = {0};
+   for (unsigned s = 0; s < 64; s++)
+      slot_sets[s] = rows_used & BITFIELD64_BIT(s) ? 1 : 0;
+   for (unsigned i = 0; i < n; i++) {
+      unsigned slot = vars[i]->data.location - VARYING_SLOT_VAR0;
+
+      if (!glsl_base_type_is_integer(
+             glsl_get_base_type(glsl_without_array(vars[i]->type))))
+         continue;
+      for (unsigned r = 0;
+           r < glsl_count_vec4_slots(vars[i]->type, false, false); r++)
+         slot_sets[(slot + r) & 63] = 2;
+   }
+   unsigned n_sets = 0;
+   for (unsigned s = 0; s < 64; s++)
+      n_sets += slot_sets[s];
    for (unsigned i = 0; i < n; i++) {
       nir_variable *var = vars[i];
       const struct glsl_type *t = var->type;
@@ -481,8 +496,20 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
          frac = 0;
          comps = 4;
       }
-      set =
-         (sprite ? 1 : 0) + util_bitcount64(rows_used & BITFIELD64_MASK(slot));
+      set = sprite ? 1 : 0;
+      for (unsigned s = 0; s < slot && s < 64; s++)
+         set += slot_sets[s];
+      bool split = glsl_base_type_is_integer(glsl_get_base_type(t));
+      /* a float sharing an integer's slot (another location_frac) is in the
+       * slot's first set; one over several such slots would need every
+       * other set, which a varying can't say */
+      if (!split && rows > 1)
+         for (unsigned r = 0; r < rows; r++)
+            if (slot_sets[(slot + r) & 63] == 2 && !warned) {
+               fprintf(stderr, "sgx: a float array shares slots with an "
+                               "integer varying: not laid out\n");
+               warned = true;
+            }
       /* The compiler finds a varying's set by name.  st's packed slots are
        * named after what they hold ("packed:a,b"), and a varying split over
        * two slots names both: two vec3 texture coordinates and the fog had
@@ -498,9 +525,15 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
       snprintf(v->name, sizeof(v->name), "%s", name);
       v->set = set;
       v->comp = frac;
-      v->rows = rows;
       v->comps = comps;
       v->precision = var->data.precision;
+      if (split) {
+         /* (whole numbers to 65535: an F32 iteration) */
+         v->split = true;
+         rows *= 2;
+         v->precision = GLSL_PRECISION_HIGH;
+      }
+      v->rows = rows;
       for (unsigned r = 0; r < rows && set + r < SGX_MAX_SETS; r++)
          vary->set_comps[set + r] =
             MAX2(vary->set_comps[set + r], frac + comps);
@@ -514,7 +547,7 @@ assign_varyings(nir_shader *nir, struct sgx_varyings *vary, bool sprite)
          vars[i]->data.interpolation == INTERP_MODE_NOPERSPECTIVE;
    if (noperspective && vary->n < ARRAY_SIZE(vary->v)) {
       struct sgx_varying *v = &vary->v[vary->n++];
-      unsigned set = (sprite ? 1 : 0) + util_bitcount64(rows_used);
+      unsigned set = (sprite ? 1 : 0) + n_sets;
 
       snprintf(v->name, sizeof(v->name), "%s", SGX_NOPERSPECTIVE_W);
       v->set = set;
@@ -1047,6 +1080,9 @@ compile_shader(struct sgx_context *ctx, struct sgx_pipe_shader *so,
     * screen's, so GLSL ES 1.00 programs come with integers then too */
    opts.native_integers = so->native_integers =
       screen->base.shader_caps[nir->info.stage].integers;
+   /* uniform block n's address in constant SGX_K_UBO + n (fill_consts) */
+   if (nir->info.num_ubos)
+      opts.ubo_base_k = SGX_K_UBO;
    if (vtx_fmt) {
       memcpy(opts.vtx_fmt, vtx_fmt, sizeof(opts.vtx_fmt));
       memcpy(so->vtx_fmt, vtx_fmt, sizeof(so->vtx_fmt));

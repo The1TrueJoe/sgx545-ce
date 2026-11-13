@@ -73,6 +73,12 @@ class sgx_compile_test : public ::testing::Test {
       opts.rt_packed = rt_packed;
       sgx_assign_varyings(b.shader, b.shader->info.stage == MESA_SHADER_VERTEX,
                           &vary);
+      for (unsigned i = 0; drop_split && i < vary.n; i++) {
+         if (vary.v[i].split) {
+            vary.v[i].split = false;
+            vary.v[i].rows /= 2;
+         }
+      }
       compiled = true;
       return sgx_compile(b.shader, &opts, &vary, &out) == 0;
    }
@@ -110,6 +116,7 @@ class sgx_compile_test : public ::testing::Test {
    bool pds_alone = false;
    bool f16_samples = false;
    bool split_phases = false;
+   bool drop_split = false; /* a layout that doesn't split integer varyings */
    bool dep_f16 = false;
    uint32_t tex_f32 = 0;
    uint32_t tex_r32x4 = 0, tex_r32x2 = 0;
@@ -1981,6 +1988,43 @@ TEST_F(sgx_compile_test, vertex_loop_once_no_branches)
    ASSERT_TRUE(compile()) << out.log;
    expect_decodes();
    EXPECT_FALSE(has("br")) << disasm();
+}
+
+/* a constant integer varying: its high half from the constant's top 16
+ * bits, not the low half again (pck .l2 of a literal) */
+TEST_F(sgx_compile_test, int_varying_constant_halves)
+{
+   native = true;
+   int_vertex(
+      [](nir_builder *b, nir_def *x, nir_def *y) {
+         return nir_imm_int(b, (int)0x8080c0c0u);
+      },
+      glsl_uint_type());
+   ASSERT_TRUE(compile()) << out.log;
+   expect_decodes();
+   bool lo = false, hi = false;
+   for (unsigned i = 0; i < out.n_consts; i++) {
+      if (out.consts[i].fmt != 0x11)
+         continue;
+      uint32_t v = out.consts[i].value & 0xffff;
+      lo |= v == 0xc0c0;
+      hi |= v == 0x8080;
+   }
+   EXPECT_TRUE(lo && hi) << disasm();
+}
+
+/* an integer varying in a layout without split: an error, not a raw word
+ * iterated as an F32 */
+TEST_F(sgx_compile_test, int_varying_unsplit_fails)
+{
+   native = true;
+   drop_split = true;
+   int_vertex([](nir_builder *b, nir_def *x, nir_def *y) {
+      return nir_imul(b, x, y);
+   });
+   ASSERT_FALSE(compile());
+   EXPECT_NE(std::string(out.log ? out.log : "").find("not split"),
+             std::string::npos);
 }
 
 /* integer varyings as two exact 16-bit halves: two sets per row, written

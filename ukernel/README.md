@@ -130,7 +130,9 @@ default build is the upstream-loadable one.
 | `entries` | byte offset of each entry/label the loader points its PDS programs and host-kick table at |
 | `patches` | byte offset of each `limm` site the loader fills at load (e.g. `ctlblk`, the control-block base) |
 
-## Licence
+## License
 
-MIT (`LICENSE`); every source file carries an `SPDX-License-Identifier: MIT`
-header.
+MIT OR Apache-2.0, at your option (`LICENSE` holds both texts); every source
+file carries an `SPDX-License-Identifier: MIT OR Apache-2.0` header. The
+Apache-2.0 option carries an explicit patent grant, which linux-firmware's
+LICENSE-CRITERIA (section 3.1) asks of a firmware license.

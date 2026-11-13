@@ -176,7 +176,7 @@ rotation of each triangle's vertices on the CPU before step 2.
 | GLSL 1.40 | — | compiler | — | compiler |
 | instancing, `gl_InstanceID` (`ARB_draw_instanced`) | the PDS vertex program's `in1` is the instance index (**unconfirmed**); no instance count is known in the VDM draw words | one VDM draw per instance, each with its own small PDS vertex program that writes the instance number with DOUTA into the primary attribute the compiler reads `gl_InstanceID` from. Native instancing, if H7 finds the count, replaces it | PDS.md (DOUTA: hardware; `in1`: unconfirmed); STATE.md §2 VDM draw | high (per-instance draws) |
 | instance divisors (`ARB_instanced_arrays`, 3.3, but cheap here) | PDS has the divisor's reciprocal sequence (capture) | per-instance draws: the per-instance stream's base moves on the CPU | PDS.md | high |
-| uniform buffers (`ARB_uniform_buffer_object`, 16 KiB, 12 per stage) | `ld.a.d` from a driver address: the state-emit programs the driver runs already use it | the driver puts each UBO's address in an SA register; the compiler loads with `ld.a.d`. Small UBOs could be copied into SA, but 16 KiB doesn't fit | STATE.md §2 (the state-emit program's `ld.a.d`: hardware, open driver); `sgxws_const_mem` already loads constants that don't fit in SA | high |
+| uniform buffers (`ARB_uniform_buffer_object`, 16 KiB, 12 per stage) | `ld.a.d` from a driver address: the state-emit programs the driver runs already use it | the driver puts the address of each block's copy in the frame in the constant the compiler loads from; the compiler loads with `ld.a.d` (in, `SGX_DEBUG=ubo,glsl130`: see "Status"). Small UBOs could be copied into SA, but 16 KiB doesn't fit | STATE.md §2 (the state-emit program's `ld.a.d`: hardware, open driver); `sgxws_const_mem` already loads constants that don't fit in SA | high |
 | `EXT_texture_snorm` | no signed sampler format known | sample the unorm format and convert in the shader (`2x - 1` from the byte, with the -1 clamp GL asks); render by packing | TEX.md §1 | high |
 | primitive restart (`NV_primitive_restart`) | none known | split on the CPU (`util_draw_vbo_without_prim_restart`); the driver already reads indices on the CPU | `sgx_draw.c` | high |
 | rectangle textures (`NV_texture_rectangle`) | NPOT linear layout (T1 layout 3) | unnormalized coordinates scaled in NIR (`nir_lower_tex` `lower_rect`) | TEX.md §1 (hardware) | high |
@@ -408,7 +408,12 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
   `drawpixels-float-and-ushort` at 1, 2 and 4 samples included.
 - **A depth texture rendered into** is sampled from its ZLS buffer: a draw
   reads it into the CPU copy and rewrites level 0's sampled copy first
-  (`sgx_resource_zls_for_sampling`). `fbo-depthtex` passes.
+  (`sgx_resource_zls_for_sampling`), also after a map (glReadPixels) has
+  brought the CPU copy up (62021488). `fbo-depthtex` and
+  `fbo-depth-sample-compare` pass (run 33).
+  - Level 0 of a 2D texture only: rendering into another level
+    (`depthstencil-render-miplevels`) or a layer isn't decoded, and the ZLS
+    buffer isn't checked against the attached level and layer.
 - **`mixed_framebuffer_sizes` is on** (5de10967), so ARB_framebuffer_object
   and `GL_RENDERBUFFER_SAMPLES`. On the final stack (a012e986), against runs
   2 and 3, nothing goes from pass to fail in the gate (157 tests), the
@@ -420,7 +425,10 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
   `fbo-alphatest-formats` intensity formats, and the 4x `alpha-blending`
   twice, `alpha-to-one-single-sample-buffer 4` and seven `interpolation 0`
   tests); 10 FBO depth tests that never ran before pass.
-- **Known failures that the cap lets run** (they skipped before):
+- **Known failures that the cap lets run** (they skipped before). Against
+  plain dev (run 34, 2026-11-13: dev 489bf56f with and without this
+  branch, full dEQP-GLES2 and the zs, ms, ff and gl21 lists), these five are
+  the only tests that go from skip to fail; nothing goes from pass to fail:
   - `tex-miplevel-selection` (`-nobias -nolod`): the sampled level is one
     below the base level at the top of the chain (level 4 for base level 5,
     max level 5).
@@ -430,6 +438,9 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     whose rectangles are clipped (source or destination off the
     framebuffer) leaves the destination at its clear colour
     (`sgx_blit_resolve`); not diagnosed further.
+  - `ext_framebuffer_multisample-alpha-to-coverage-no-draw-buffer-zero 4`
+    (four colour buffers make it run): alpha to coverage from buffer 0
+    when the shader doesn't write buffer 0; not looked at.
 - **The FBO depth tests** (64): 28 pass, 31 skip (`ARB_depth_buffer_float`,
   `EXT_texture_array`), 5 fail with and without the cap, so they are known
   failures that don't come from it:
@@ -445,8 +456,6 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     way), **not yet on a board**. A power-of-two level with a side from 2 to 8 (32×4, say)
     can't be rendered in the sampler's layout with either PBE mode and is
     still wrong.
-  - `fbo-depth-sample-compare`: shadow compares against a depth texture a
-    render wrote; it prints no detail, not diagnosed.
 - **Known intermittent: `clipping@fixed-clip-enables`** fails in about 6 to
   14 of 20 runs with the cap and passes 20 of 20 without it (runs 7-15,
   2026-11-12). Every failure is the same probe, (200,175) in the third
@@ -507,6 +516,44 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     `EXT_texture_integer` only with RGBA32UI/I render targets, which the
     plane passes now give; the switch stays off until the GL 3.0 set is
     there.
+- **Uniform blocks** (`SGX_DEBUG=ubo,glsl130`: 12 a stage of 64 KiB,
+  `ARB_uniform_buffer_object`). The compiler loads a block with `ld.a.d`
+  from the address in constant `SGX_K_UBO + n`. For each draw the winsys
+  copies every block the program reads into the frame's general ring and
+  writes the copy's address where that constant lives, in SA or in the
+  program's memory block (`sgxws_ubo`). A block nothing has written since
+  is copied once a frame (keyed on the buffer's id and write count). The
+  copies give each draw the contents it was recorded with, so a
+  `glBufferSubData` between two draws of one frame is right without a
+  flush, at the cost of a copy a draw for blocks written every draw.
+  - `load_ubo`'s block n is constant buffer 1 + n: st binds the default
+    uniforms as buffer 0 (`load_uniform`) and block i as 1 + i, and nothing
+    lowers the default uniforms to a block. So a fixed fragment program
+    never reads a `load_ubo` as buffer 0.
+  - Only with the native integers: the float path's `nir_lower_int_to_float`
+    turns a block's byte offset into a float (1280 arrives as 0x44a00000).
+  - On a CE5300 board (runs 20-22, 2026-11-12): `mesa/tests/sgx_ubo` exact
+    (a vertex block rewritten before every draw of one frame, a fragment
+    block, a member at byte 1280, past the load's immediate, a block array
+    indexed by a uniform, a block rewritten between two draws of one frame).
+  - piglit's 316 `arb_uniform_buffer_object` tests, with the option: 33
+    pass, 282 skip, 1 fail. Under GL 3.1 / GLSL 1.40 overrides: **315
+    pass, 1 fail** (run 27).
+    - Run 21 had 41 pass. 270 of its fails checked the block in the vertex
+      program and passed the result on in a `flat out int`, which the
+      driver's varying layout sent through an F32 iterator as a raw word.
+      With integer varyings split (below), they pass.
+    - Two more needed blocks over 16 KiB (32,336 bytes): the size is now
+      64 KiB, as in most drivers.
+  - The one fail is `minmax`: GL 3.x's 1024 fragment uniform components,
+    where the default uniforms give 508 (128 vec4, less st's alpha-test
+    slot). Not a block limit. More default uniforms need the constants the
+    driver numbers from 960 (border colours, `SGX_K_TEXSIZE`,
+    `SGX_K_INSTANCE`) moved past the user range: the compiler's numbering,
+    a change on both sides.
+  - The default path with this in (run 23): dEQP 78 F / 16637 P and zs, ms,
+    ff, gl21 against run 19 unchanged, apart from fixed-clip-enables (the
+    intermittent above).
 
 - primitive restart, the NV extension and the fixed index: split on the CPU
   (`sgx_draw_vbo`);
@@ -598,9 +645,18 @@ Agreed with the compiler (2026-11-11):
   output (o0 alone until H1).
 - **UBOs:** `load_ubo` is an `ld.a.d` from the address in constant
   `ubo_base_k + n`.
-- **Integer varyings** pass as two exact 16-bit halves until a test shows
-  that a flat iteration keeps raw 32-bit words (needs flat shading in the
-  driver first).
+- **Integer varyings** pass as two exact 16-bit halves
+  (`sgx_varying.split`), as an F32 iteration keeps whole numbers to 65535.
+  A raw word doesn't survive one: -1 is a NaN and comes back as 0x7fffffff,
+  and small values are denormals (run 24). The driver's layout gives a
+  slot that holds an integer two sets, the low halves in the first; a float
+  in the same slot (another component) stays in the first set. The
+  compiler refuses an integer varying the layout doesn't split. A constant
+  is split into two, one a half, where the halves are packed (the
+  compiler's c4944e3f; its first fix, 941af328, broke GLES2 textures, run
+  28). Exact in both stages on a board (run 32: 1, -1, 0x01020304,
+  0x12345678, 0x8080c0c0, alone and after another flat varying), with
+  dEQP unchanged.
 
 Still open:
 

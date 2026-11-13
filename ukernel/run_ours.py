@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright © 2026 Joseph Telaak
 """Run the open microkernel (ukernel/) through a frame in the emulator and
 diff the core registers it programs against the DDK's.

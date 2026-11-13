@@ -35,6 +35,7 @@
 #define SGX_DEBUG_ZLS_DUMP           (1 << 19)
 #define SGX_DEBUG_GLSL130            (1 << 20)
 #define SGX_DEBUG_NO_MRT             (1 << 21)
+#define SGX_DEBUG_UBO                (1 << 22)
 
 extern uint32_t sgx_drv_debug;
 /* SGX_DUMP_CODE=dir: every compiled program's instructions written there */
@@ -56,6 +57,7 @@ struct sgx_screen {
    /* the services connection; one per screen, used under lock */
    struct sgxws_dev *dev;
    simple_mtx_t lock;
+   uint64_t spare_bytes; /* textures' spare copies (p_atomic) */
    /* The one hardware render context (CCB, parameter buffer) of the process,
     * shared by every pipe context and serialised by the lock, as the DDK runs a
     * GL client on one render context: a second render context with a parameter

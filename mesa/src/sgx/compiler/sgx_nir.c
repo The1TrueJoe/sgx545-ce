@@ -1743,10 +1743,11 @@ find_varying(const struct sgx_varyings *v, const char *name)
 
 /* per component of a varying variable, the register: base[set] + the
  * varying's component in the set */
-static void
+static bool
 map_varying(int *tab, int *hi, nir_variable *var,
-            const struct sgx_varyings *vary, const int *set_base)
+            const struct sgx_varyings *vary, const int *set_base, bool native)
 {
+   bool ok = true;
    char names[8][64];
    unsigned n = var_names(var, names, 8);
    unsigned comp = var->data.location_frac;
@@ -1754,6 +1755,11 @@ map_varying(int *tab, int *hi, nir_variable *var,
       const struct sgx_varying *vy = find_varying(vary, names[i]);
       if (!vy)
          continue;
+      /* a raw integer word iterated as an F32 isn't kept exact (NaNs) */
+      if (native && !vy->split &&
+          glsl_base_type_is_integer(
+             glsl_get_base_type(glsl_without_array(var->type))))
+         ok = false;
       unsigned step = vy->split ? 2 : 1;
       for (unsigned r = 0; r < vy->rows / step; r++) {
          unsigned set = vy->set + step * r;
@@ -1771,6 +1777,7 @@ map_varying(int *tab, int *hi, nir_variable *var,
       }
       comp += vy->rows == step ? vy->comps : 0;
    }
+   return ok;
 }
 
 /* Assign I/O registers (c->in_reg / c->out_reg, per component). */
@@ -1843,7 +1850,9 @@ assign_io(struct sgx_ctx *c)
       c->n_out_regs += nclip;
       nir_foreach_shader_out_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
-            map_varying(c->out_reg, c->out_hi, var, c->vary, obase);
+            if (!map_varying(c->out_reg, c->out_hi, var, c->vary, obase,
+                             o->native_integers))
+               sgx_fail(c, "integer varying %s not split", var->name);
    } else {
       /* in F16 mode, a varying every load of which is mediump is iterated as
        * F16 (list A format 2: two components per register) */
@@ -1991,7 +2000,9 @@ assign_io(struct sgx_ctx *c)
       c->n_pa_inputs = pa;
       nir_foreach_shader_in_variable (var, s)
          if (var->data.location >= VARYING_SLOT_VAR0)
-            map_varying(c->in_reg, c->in_hi, var, c->vary, pbase);
+            if (!map_varying(c->in_reg, c->in_hi, var, c->vary, pbase,
+                             o->native_integers))
+               sgx_fail(c, "integer varying %s not split", var->name);
    }
 
    /* uniforms: constant numbers */

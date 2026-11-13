@@ -17,6 +17,7 @@
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 
+#include "util/u_atomic.h"
 #include "sgx_context.h"
 #include "sgx_resource.h"
 #include "sgx_screen.h"
@@ -161,7 +162,7 @@ sgx_stats_report(struct sgx_context *ctx)
    fprintf(
       stderr,
       "sgx stats: renders by cause: end of frame %u, other flush %u, target switch %u "
-      "(%u of clears only), readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to seen done) %.1f ms over %u, into scanout %.1f ms over %u\n",
+      "(%u of clears only), readback %u, deferred %u; zero-copy draws %u; vertex cache %u hits, %u misses, %u not cacheable, %u KB; fence waits %.0f ms; render latency (kick to done, renders a wait saw end) %.1f ms over %u, into scanout %.1f ms over %u\n",
       ctx->stats.fl_eof, ctx->stats.fl_other, ctx->stats.fl_switch,
       ctx->stats.fl_switch_clear, ctx->stats.fl_read, ctx->stats.fl_deferred,
       ctx->stats.zc_draws, ctx->stats.vc_hits, ctx->stats.vc_misses,
@@ -179,18 +180,21 @@ sgx_stats_report(struct sgx_context *ctx)
       ctx->stats.rb_ns * ms, (unsigned long long)(ctx->stats.rb_bytes >> 10));
    fprintf(
       stderr,
-      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped\n",
+      "sgx stats: GPU draws were given %llu indices into %llu vertices (%.0f / %.0f a frame); TA state blocks %u sent, %u skipped; "
+      "buffers %u allocated, %u from the cache (%u cached still in use)\n",
       (unsigned long long)ws.gpu_indices, (unsigned long long)ws.gpu_verts,
       ctx->stats.frames ? (double)ws.gpu_indices / ctx->stats.frames : 0.0,
       ctx->stats.frames ? (double)ws.gpu_verts / ctx->stats.frames : 0.0,
-      ws.state_sent, ws.state_skipped);
+      ws.state_sent, ws.state_skipped, ws.bo_allocs, ws.bo_cached, ws.bo_busy);
    fprintf(
       stderr,
       "sgx stats %.1f s: %.1f FPS, %u flushes (%u for texture writes, %u rings full), %u draws, "
-      "%u vertices, %u texture writes; ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
+      "%u vertices, %u texture writes (spare copies %llu KiB); ms: draw %.0f, flush+wait %.0f, texture %.0f, compile %.0f\n",
       dt * 1e-9, ctx->stats.frames / (dt * 1e-9), ctx->stats.flushes,
       ctx->stats.tex_flushes, ws.room_flushes, ctx->stats.draws,
-      ctx->stats.verts, ctx->stats.tex_writes, ctx->stats.draw_ns * ms,
+      ctx->stats.verts, ctx->stats.tex_writes,
+      (unsigned long long)(p_atomic_read(&sgx_screen(ctx->base.screen)->spare_bytes) >> 10),
+      ctx->stats.draw_ns * ms,
       ctx->stats.flush_ns * ms, ctx->stats.tex_ns * ms,
       ctx->stats.compile_ns * ms);
    memset(&ctx->stats, 0, sizeof(ctx->stats));
@@ -265,8 +269,11 @@ sgx_context_destroy(struct pipe_context *pctx)
    util_unreference_framebuffer_state(&ctx->framebuffer);
    for (unsigned i = 0; i < ctx->num_vertex_buffers; i++)
       pipe_vertex_buffer_unreference(&ctx->vertex_buffers[i]);
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       pipe_resource_reference(&ctx->constants[i].buffer, NULL);
+      for (unsigned n = 0; n < SGX_MAX_UBOS; n++)
+         pipe_resource_reference(&ctx->ubos[i][n].buffer, NULL);
+   }
    for (unsigned i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++)
       pipe_sampler_view_reference(&ctx->views[i], NULL);
    if (pctx->stream_uploader)

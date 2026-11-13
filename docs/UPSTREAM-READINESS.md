@@ -203,7 +203,9 @@ Write it for Mesa's docs tree. It covers:
   advertises EXT_provoking_vertex (GL_FIRST_VERTEX_CONVENTION is ignored
   until a provoking-vertex field is found, or the draw rotates each
   primitive's indices); depth textures are compared on the nearest
-  texel only (the F32 depth isn't filtered) and aren't rendered into;
+  texel only (the F32 depth isn't filtered); a depth texture rendered
+  into keeps its depth in the ZLS buffer, decoded on the CPU into the
+  texture before it is sampled or mapped (level 0 only);
 - how to run the tests.
 
 ### M9. Build inputs from `tools/`
@@ -347,8 +349,8 @@ earlier licensing and provenance audit.
 
 ## Firmware (the open SGX microkernel, `ukernel/`)
 
-The microkernel is MIT-licensed source (`ukernel/ukernel.py`) assembled to a
-small binary a loader runs on the SGX core. Upstreaming has two destinations:
+The microkernel is MIT OR Apache-2.0 source (`ukernel/ukernel.py`) assembled to
+a small binary a loader runs on the SGX core. Upstreaming has two destinations:
 the **source** (this repository `powervr_sgx`, under `ukernel/`) and the **built
 binary** (linux-firmware, loaded by the DRM driver).
 
@@ -356,7 +358,7 @@ binary** (linux-firmware, loaded by the DRM driver).
 |---|---|
 | Reproducible build | **Done.** Pure-CPython assembler, no timestamps/paths/randomness; byte-identical `.bin`+`.json` on any machine, any CPython ≥ 3.7. One command: `ukernel/build.sh`. |
 | Pinned toolchain | **Done (documented).** Only CPython ≥ 3.7; no external packages. Recorded in `ukernel/README.md` → Building. |
-| MIT license | **Done.** `ukernel/LICENSE` + an `SPDX-License-Identifier: MIT` header on every source file. |
+| MIT OR Apache-2.0 license | **Done.** `ukernel/LICENSE` holds both texts + an `SPDX-License-Identifier: MIT OR Apache-2.0` header on every source file (dual-licensed for linux-firmware's patent-grant criterion, LICENSE-CRITERIA §3.1). |
 | Release manifest | **Done.** `core`, `version` (major.minor), `features`, `build_id`, sizes, entry offsets, patch sites. |
 | Per-core identity | **Done.** The per-core config `cores/<core>.py:CORE_NAME` (selected by `build.py <core>` / `SGX_CORE`, default sgx545) names the target SGX core; build.py derives the binary name and manifest `core` from it, so SGX540/SGX531/… images never collide. |
 | Feature-bit documentation | **Done.** `ukernel/README.md` → Feature bits (bit 0 CLEANUP_V2, bit 1 SECURE). |
@@ -379,7 +381,7 @@ Version: 1.0
 Source: https://github.com/The1TrueJoe/powervr_sgx   (ukernel/ — ukernel.py +
         cores/<core>.py + build.py; the DRM driver's packaging tool applies the
         header/feature bits)
-License: MIT.  See LICENSE.powervr_sgx for details.
+License: MIT OR Apache-2.0.  See LICENSE.powervr_sgx for details.
 ```
 
 Naming (no project name upstream; one file per core; the driver's own
@@ -392,10 +394,10 @@ build.py, the driver, the docs and the test scripts.
 
 **Still needed before linux-firmware submission:**
 
-1. **MIT license file entry.** linux-firmware carries each file's license text in
-   its own tree and the WHENCE `License:` line references it. Add the MIT text as
-   `LICENSE.powervr_sgx` (or reuse an existing MIT entry if the maintainers prefer)
-   and point the `License:` line at it.
+1. **License file entry.** linux-firmware carries each file's license text in
+   its own tree and the WHENCE `License:` line references it. Add the MIT and
+   Apache-2.0 texts (reuse linux-firmware's existing entries for either if the
+   maintainers prefer) and point the `License:` line at them.
 2. **Public source URL.** **Set** — the source is the monorepo
    `https://github.com/The1TrueJoe/powervr_sgx` (`ukernel/`), which must be publicly
    reachable at submission so a third party can reproduce the binary from it.
@@ -404,6 +406,14 @@ build.py, the driver, the docs and the test scripts.
    change to the emitted bytes bumps the build, and the checked-in golden hash
    (`ukernel/golden/sgx545.sha256`) is what proves a given Version's binary. Source
    and built binary are versioned together.
+4. **Re-spin the parked dry run.** The linux-firmware dry run (df280de) was cut
+   with WHENCE `Licence: MIT`. It needs a re-spin with:
+   - the dual license, `Licence: MIT OR Apache-2.0`;
+   - the file name the driver will request, `powervr_sgx/sgx545_v1.fw` (Kernel
+     K17);
+   - the shipped features word: 0x6 (DONE_SEQ), and 0xe once PB_SWITCH lands
+     (Kernel K7, K11);
+   - a WHENCE that `check_whence.py` accepts: no `Source:` line naming a URL.
 
 ### Not a blocker, noted
 - **Done.** The microkernel source's inline bring-up provenance (box names and
@@ -718,301 +728,120 @@ the PDS programs (isaspec), and the TA/3D state words (csbgen). Status as of
 
 ## Kernel (powervr_sgx)
 
-Owner: powervr_sgx. `drm/powervr_sgx`, the gma500 patch in `drm/gma500`, the
-uAPI header `docs/uapi/powervr_sgx_drm.h`. Status as of m2-drm 2026-11-08, with
-the RFC series of 2026-11-11 below.
+Owner: powervr_sgx (m2). Covers `drm/powervr_sgx`, the gma500 patches in
+`drm/gma500` and the uAPI header `docs/uapi/powervr_sgx_drm.h`. This is the
+status as of m2-drm 3f36c8a4 (2026-11-12). That tree has:
+- rev 3 uAPI step 1: per-command structs, D6 cache ranges and explicit sync
+  only;
+- the TLB-free VM release;
+- the v0.1.1 fixes;
+- every item of the 2026-11-11 presubmit review except B1.
 
-### RFC series (2026-11-11, dry run, not sent)
+The RFC is cut after sgx530-kernel's per-core restructure (`wip/multicore`)
+lands on m2-drm. Joseph asked for this order.
 
-`[PATCH RFC 00/12] drm/powervr_sgx: DRM driver for PowerVR SGX5xx GPUs`, cut
-from m2-drm by `drm/ci/rfc-series.sh` onto drm-misc-next 41b5458595c6 (b4
-branch `b4/powervr-sgx` in `upstream/sgx-series`, the emails in
-`upstream/sgx-series-dryrun` with `RECIPIENTS.txt`):
+Each open item says what it blocks. **RFC** means it is fixed, or disclosed
+in the cover letter, before Joseph sends. **Merge** means it is needed only
+before a v1 that can merge.
 
-1. drm/gma500: Publish the Cedarview SGX as an auxiliary device
-2. drm/gma500: Export GEM objects as dma-bufs
-3. drm/powervr_sgx: Add the uAPI header and its documentation (and MAINTAINERS)
-4. to 11. the driver by area, 331 to 1,391 lines each: core table, registers and
-   device bring-up; the microkernel loader; GEM, VMs and dma-buf; contexts, the
-   scheduler and SUBMIT_JOBS; the command-stream decoder; render and transfer
-   jobs; the shader validator; the DRM driver, PM and debugging, with the Kconfig
-   entry. Nothing builds before 11.
-12. drm/powervr_sgx: Add KUnit tests
+### Open: blocks the RFC
 
-The driver files are byte-identical to m2-drm; only its Makefile (no
-out-of-tree branch) and Kconfig (no vendor-driver note) differ. checkpatch
-`--strict` per patch: no errors but the missing Signed-off-by; the only
-CHECKs are `TRACE_EVENT` layout in `pvrsgx_trace.h` (patch 7), and the
-"MAINTAINERS need updating" warnings on 4 to 12 are covered by 3's entry. The same code
-builds clean on drm-misc-next in CI (gcc W=1, sparse, smatch, coccinelle,
-clang W=1, kernel-doc, KUnit). To/Cc from get_maintainer, minus its INTEL SGX
-keyword hit (our `SGX_` names), plus the Rogue maintainers and the
-imagination list.
+| # | item | state | plan |
+|---|---|---|---|
+| K1 | Per-core restructure | sgx530-kernel's series: a register-write and struct-bytes KUnit golden first (47374f27), then the core table and heap layouts with no change for the SGX545 | sgx530-kernel owns it. K2 and K3 follow on top, gated by the same golden |
+| K2 | Firmware words written by index | The rest of the firmware structures are already C structs with `static_assert` offsets (`pvrsgx_fwif.h`). Left: the background object (`b[0..22]`, `pvrsgx_render.c` ~462 and ~802), the PB block header (`blocks[0..2]`, ~78) and `ta_data[0..2]`. 16 fields are `unk_*` with a known value and no known meaning | Structs for the three. Name every `unk_*` that the GPL headers give a meaning; keep the rest as `unk_*` with their value and say so. The golden must not change |
+| K3 | Encodings as named fields | `pvrsgx_pds.c` builds PDS instruction words from shifts. `pds_word()` and `BG_PDS_MIDDLE` are in `pvrsgx_render.c`, and the microkernel's `limm` patch is in `fw_limm()` (`pvrsgx_fw.c` ~140) | `GENMASK` field definitions plus `FIELD_PREP`. The golden must not change |
+| K4 | Comments that cite out-of-tree docs (review M12) | 5 came back with rev 3: `pvrsgx_cmd.c`, `pvrsgx_cmd.h`, `pvrsgx_cmd_checks.c` (2) and `pvrsgx_drv.h` cite `docs/uapi/rev3-commands.md` or `UAPI.md` | Put the facts in the comment or in `Documentation/gpu/powervr_sgx` |
+| K5 | Device wedging (drm-uapi.rst) | A failed restart sets `sdev->lost`: the cores stay in reset, bus mastering is off, fences are signaled and ioctls return -EIO. No uevent is sent | `drm_dev_wedged_event(..., DRM_WEDGE_RECOVERY_REBIND)` on that path. The prerequisites already hold |
+| K6 | fdinfo (drm-usage-stats.rst) | No `show_fdinfo` | `drm_show_memory_stats()` through the shmem helper's status, and per-client `drm-engine-render` time. Recent drivers have it, and reviewers ask for it |
+| K7 | Completion by polling (review M8) | With a features-2 microkernel, completion is polled every jiffy (`pvrsgx_job.c` ~215); with DONE_SEQ (features 6) it comes from the interrupt, with a 100 ms backstop. Released v0.1.x kernels accept features 0x3 only | **Approved (2026-11-12).** The driver requires DONE_SEQ and the per-jiffy path goes. The order is in `m2-k7-firmware-baseline-plan.md` (notes). Step 2 is done: `sgx545_ukernel-m8-f6.bin` (ukernel-4b6a324e, md5 7079b4c3) loads as features 0x6 on a CE5300 board with one interrupt per job, and uAPI, hang, frame, blit and PRIME are right. It ships in v0.2.0, with the firmware/kernel Depends/Breaks pair |
+| K8 | Runtime checkers on today's tree | The last clean single-process run under lockdep, KASAN, UBSAN, kmemleak and DMA-API debug was 57ca2d0 (2026-11-08). The three-process soak lost the box's userspace on 11-08, cause open | Running on a CE5300 board (`wip/debug-k8`). It adds DMABUF_DEBUG, the ww_mutex slowpath check, lockup and hung-task detectors, netconsole and a new `powervr_sgx_unplug` test. Runs: uAPI, frame, blit, hang, PRIME, runtime-PM rounds, unbind with a mapping open, `pm_test`, kmemleak, then the soak last (1, 2, 3 processes) |
+| K9 | The series itself (Phase B) | The 2026-11-11 dry run is stale (rev 2 uAPI, before D6), and it built only from patch 11 on | Re-cut with `drm/ci/rfc-series.sh` on current drm-misc-next. Every patch builds and passes checkpatch `--strict`, kernel-doc, sparse, smatch and gcc/clang W=1, proven per patch in CI. `b4 prep`, then `b4 send --dry-run` only |
+| K10 | The cover letter and the RFC notes, kept out of the tree (with K18) | The subject and patch list say 8 patches, but there are 10 patch texts and the series has 12. dEQP is 16,587 there and 16,638 today | Refresh in Phase B; K18 lists the rest. The AI-disclosure wording (G0) is Joseph's |
+| K14 | Synchronous VM_BIND takes fences (research U11) | `drm-vm-bind-async.rst`: "A synchronous VM_BIND takes neither in-fences nor out-fences." Ours requires `FLAG_SYNC`, yet it still waits on `sync_ops` and signals them with an already-signaled fence | **Decided:** sync binds take no fences. `sync_ops` must be empty, and an async mode is a later flag, as Rogue did. With uapi-stream on the Mesa side. In the rev-4 bump |
+| K15 | Ioctl numbers and version (U10) | The header carries downstream numbers with gaps (0x0b and 0x0d retired, SUBMIT_JOBS at 0x0e), DRM version 0.3, and a revision history in its DOC block | **Decided:** contiguous numbers from 0 and version 1.0, with no history in the header (history goes in UAPI.md). This is the rev-4 bump: our Mesa and kernel ship in step. It also states that BOs are always zeroed and that quirks are never removed for a GPU (U13, U15) |
+| K16 | Fence-signaling work on a shared workqueue (S3) | `poll_work` and `reap_work` signal fences from `system_dfl_wq` (`pvrsgx_job.c` ~209, ~214, ~304) | A driver workqueue with `WQ_MEM_RECLAIM`, or the scheduler's submit workqueue |
+| K17 | The linux-firmware entry (F3, F5-F7) | The WHENCE draft gives `Source:` as a URL, which `check_whence.py` refuses. There are two names (`sgx_ukernel.bin`, `sgx545_ukernel.bin`) and no version in the name. The MIT note is stale: `LICENSES/MIT` already exists. MIT has no patent grant (LICENSE-CRITERIA 3.1) | One versioned name, e.g. `powervr_sgx/sgx545_v1.bin`, that ships with K7 in v0.2.0. A new name means old kernels never see the new image, so the firmware package can carry both. WHENCE gets `Licence: MIT` and either in-tree source or a URL in free text. The patent question and the linux-firmware AI trailer are Joseph's |
+| K18 | Cover letter and README facts (research section d) | The patch lists disagree. Transfer, runtime PM, devcoredump and tracepoints are called follow-ups but sit in v1 patches. Question 6 undercounts: it is three CPA passes, two with a per-page clflush, plus PAT memtype operations per page; the lines are :256/:281 in v7.3. Question 3 asks about "hardware this old". The Cc still has Binns as a reviewer; the drm/imagination maintainers are Belle and Santivetti. The README's AI-tag claim is wrong (Assisted-by was removed in v7.4-rc1, 1e035297ffda). The docs title says SGX545, the cover SGX5xx | Make the text and the series agree. Rewrite question 6 in about five lines with function names, 41d88484c71c and Hellström's and Hansen's direction. Drop question 3 (K14 answers it). Fix the Cc and the README. Add the lineage, implicit-sync and 32-bit-DMA lines. "No vendor binaries or vendor userspace", not "no vendor code" |
+| K19 | Lockdep priming (S4) | Lockdep doesn't know that the scheduler and done locks are taken under reclaim | At init: `fs_reclaim_acquire()`/`might_lock()` on those locks, as Brost asked of ethos-u |
+| K20 | A permanent vmap of every import (M3) | D6 keeps the exporter's `dma_buf_vmap()` for the import's whole life, to clflush the listed ranges | Justify it in the uAPI docs and the cover letter: a vmap can't be taken in the signaling path. Expect the question |
+| K21 | "Why does this need firmware at all?" | Gama's SGX535 path in gma500 has no microkernel: the CPU writes fixed register sequences to start the TA (31 writes) and the raster (20), as the old Poulsbo driver did | One line in the cover letter's Design section (the draft is outside git, `sgx545-work/upstream/rfc/`): the microkernel splits an overflowing scene into partial renders on the GPU with no CPU round trip mid-scene, switches parameter buffers between clients, and reports each completion by interrupt. The number to back it (partial renders in the 4 MiB Minecraft run) comes from the K11 test |
 
-**Left after the RFC, before a v1 that can merge:**
-- [ ] Joseph signs and sends (one-time permission each time).
-- [ ] The userspace in canonical Mesa (drm-uapi.rst), and its reviewer's
-  Acked-by on the uAPI patch.
-- [ ] The microkernel in linux-firmware (`powervr_sgx/sgx545_ukernel.bin`; the
-  WHENCE draft is in the Firmware section).
-- [ ] A parameter buffer per client (Design, below).
-- [ ] The uAPI tests as an IGT `powervr_sgx` binary.
-- [ ] Each driver patch building on its own ("The series", below); the RFC adds
-  the files by area and builds them from patch 11.
-- [ ] About 60 comments point at this repository's docs (`docs/UKERNEL.md`,
-  `docs/SRVINIT.md`, log entries). Upstream needs the facts in the comment or
-  in `Documentation/gpu/powervr_sgx`.
-- [ ] The runtime-PM stopgap (a render context keeps the GPU awake) and F1,
-  both in Design.
-- [ ] System suspend (255f24c: drain, microkernel stop, start on resume) is
-  proven with pm_test on a CE5300 board only; a real S3 on Cedarview is for the
-  testers.
-- [ ] More cores: a DT platform driver for the `img,powervr-sgx` binding, an
-  SGX535 compatible there, and what isn't per-core yet (`docs/porting/kernel.md`,
-  "What a core needs").
-- [x] The sysfb DIRTYFB change: declined upstream (RFC v1, 2026-11-11: DIRTYFB
-  blocks by design, as the compositor's feedback path; fix X). Not sent again;
-  the CE5300 test kernels keep it as a local patch (`drm/sysfb/README.md`).
+### Open: disclosed in the RFC, fixed before the merge
 
-### Design
+| # | item | state | plan |
+|---|---|---|---|
+| K11 | One parameter buffer for the device (review B1) | Every client's render context shares the device's PB, mapped read-write at the same 3D-params address in every VM. One client's GPU work can read or corrupt another's binned geometry and the DPM free list. The research ranks it the most likely design blocker (the rocket precedent) | **Moved to "blocks the RFC": option A (Joseph, 2026-11-12, "best upstream practice").** The microkernel saves the outgoing PB's DPM state and loads the incoming one's. open-ukernel's `wip-pb-switch` 4730d4fe is software-validated, with the golden held. Feature bit PB_SWITCH = BIT(3), so upstream gets features 0xe. Kernel side: a PB per VM on its first render context, on top of sgx530-kernel's golden. Tests: two clients alternating frames on a CE5300 board, hang blame, Minecraft at 16 and 4 MiB, and an isolation check. Cover question 4 goes |
+| K12 | F1: transfer state across clients | After one client's transfers have run, a second client's first transfer faults until a microkernel restart. Mesa submits no transfers | **Decided:** the transfer job stays out of the RFC series, and its uAPI job type is reserved. That also answers U9 (no uAPI without a user) |
+| K13 | System suspend | Drain, microkernel stop, then start on resume (255f24c). Proven with `pm_test` on a CE5300 board only | **Decided:** disclosed in the cover letter |
 
-- [x] **One driver for the SGX5xx family.** `pvrsgx_core.c` has one entry per
-  supported core: ID and revision, the features the driver relies on (as
-  `SGX_FEATURE_*` in the GPL DDK's `sgxfeaturedefs.h`), the number of BIF
-  directory lists, the core clock and the firmware file. A core that isn't
-  listed, or lacks a required feature, is refused before any register write.
-  The SGX535 (also 16 directory lists, multiple memory contexts, plus a 2D core)
-  would be a new entry and a check of the features it lacks.
-- [x] **No vendor microkernel.** The driver knows only the open microkernel,
-  and loads it only if it declares secure mode (no client directory maps the
-  firmware's heaps). The vendor image, its entry programs and patch sites, and
-  the shared-kernel-heap mode it needs are an out-of-tree patch
-  (`drm/ci/ddk-compat.patch`, about 400 lines) that only the CE5300 test
-  kernels apply.
-- [x] **Fail closed on unknown hardware.** Core table above; the gma500
-  auxiliary-device probe checks the BAR size and parent.
-- [x] **Cedarview entry.** SGX545 1.0.13 (0x0001000d), from the first tester
-  report (an N2600): same features, ISA and microkernel as the CE5300.
-- [x] **Firmware name.** The CE5300 entry names
-  `powervr_sgx/sgx545_ukernel.bin`, the name agreed with the firmware section
-  (one file per core under the module's directory).
-- [x] **Upstream tree layout.** `drm/ci/rfc-series.sh` lays the driver out as
-  upstream carries it: `include/uapi/drm/powervr_sgx_drm.h`,
-  `Documentation/gpu/powervr_sgx/`, the MAINTAINERS entry, the drm Kconfig and
-  Makefile hooks.
-- [x] **Module parameters.** Down to `job_timeout_ms` and `overlap` (a
-  render's TA while the same context's previous 3D finishes, default off).
-- [x] **Core families.** The table has the registers that move between SGX5xx
-  cores, the init script, directory lists, address width and ISA per core, and
-  the bus names the core (PCI ID, gma500's per-chip `gma_sgx_info`).
-- [ ] **One parameter buffer per device (cross-client exposure).** Every
-  render context of every client shares the device's PB, mapped at the same
-  3D-params address in every VM (2c1f6ac), as the DDK shares one PB
-  descriptor (`pb.c`, `SGXFindSharedPBDescKM`). The DPM's free-list state is
-  one set of registers, and the open microkernel, like the DDK's, doesn't
-  switch it between PBs; two PBs ran each other's lists off their ends (bug
-  B). The cost: client A's GPU work can address client B's binned parameter
-  data, a cross-process read of geometry. Userspace can't reach the PB any
-  other way: the 3D-params range is outside every client heap, so `VM_MAP`
-  refuses it and no CPU mapping exists. Reviewers will ask. The follow-up is
-  a PB per client with the microkernel storing and loading the DPM free-list
-  state on a PB change (ta3d-state's rules, `UKERNEL.md` e2d08c2); the
-  kernel side is the per-VM PB this replaced. The DDK does this too when its
-  `PBSize` apphint is set (a per-context PB from its "Percontext
-  3DParameters" heap, seen on hardware 2026-11-09), so it is a mode the
-  hardware and a microkernel support, not only a plan.
-- [ ] **F1: transfer state across clients.** A second client's first
-  transfer faults (PDS fetch outside its programs) after another client's
-  transfers ran, until a microkernel restart; `powervr_sgx_blit -2` repeats it.
-  The kernel side is ruled out: the job's own directory is loaded, its context
-  and command are fresh, and released contexts flush the data caches (8da962c,
-  as the DDK does after its cleanup). With open-ukernel; behind the render
-  path's out-of-memory handling, since Mesa submits no transfers.
-- [ ] **Runtime PM while a client renders.** On the debug kernel (lockdep,
-  KASAN, kmemleak) the desktop got no frames with runtime suspend on and
-  rendered with it off: submitted work never resumed the GPU, with no timeout
-  (log mc-bench reset-desk-ab, 2026-11-09). The release kernel suspends and
-  resumes between frames at a 1 ms autosuspend delay and renders fine, so it is
-  not the window alone. Stopgap (535b5dc): a render context holds a runtime-PM
-  reference for its life, so the GPU stays powered while any GL client is open.
-  To find the debug-only path and drop the stopgap, so the GPU can power off
-  between frames again.
-- [x] **Graveyard policy.** Released firmware objects are freed once a later
-  render completes (9798b17, no parameter), everything at a restart; unbind
-  frees the whole chain (4ae6750, KUnit `powervr_sgx_kobj`), and a VM's
-  mappings go with its last user (0f4d7d3).
+### Open: merge only
+
+- [ ] Joseph signs and sends, with one-time permission each time. G0 (the
+  disclosure wording) and G1 (ask dri-devel about new C drivers first) are his.
+- [ ] Userspace reviewed in canonical Mesa, and a Mesa reviewer's Acked-by on
+  the uAPI patch (G2, drm-uapi.rst). The Mesa MR goes out with the RFC.
+- [ ] The microkernel in linux-firmware (`powervr_sgx/sgx545_ukernel.bin`, G3;
+  the WHENCE draft is in the Firmware section). Its features word decides K7.
+- [ ] The uAPI tests as an IGT `powervr_sgx` binary. `drm/tests/IGT-PLAN.md`
+  maps every test onto igt-gpu-tools. The port is parked until the uAPI has
+  had its review, so the tests aren't ported twice. The cover letter states
+  the plan.
+- [ ] The x86 WC/WB page-attribute cost per BO (cover letter question 6).
+  Re-measure after mesa-gallium's BO cache lands. If it still shows,
+  CPU-cached BOs with D6 flushes go to Joseph as a uAPI decision
+  (`m2-wc-page-pool-proposal.md`).
+- [ ] More cores: a DT platform driver for `img,powervr-sgx` and the SGX530
+  (sgx530-kernel), on top of K1.
+
+### Done since the 2026-11-08 status
+
+| what | where |
+|---|---|
+| Validator: exact forms and every operand slot. Code base 14 aliases base 0. The threat model is in `Documentation/gpu/powervr_sgx` (B2) | 1bd1e3cb, 9a685789, 2d03eddf; E3 fuzz and the NVAL table in rev 3 step 1 |
+| PRIME import: only its DMA addresses are checked, and the exporter's pages are never touched (B3) | 09e407c5; D6 |
+| D6 cache ranges: per-job 2D ranges flushed through the exporter's vmap, before the job and after it for writes. Explicit sync only (M5) | rev 3 step 1 (92442046) |
+| VM_BIND with drm_gpuvm `sm_map`/`sm_unmap`, freeing deferred to a BOOKKEEP fence callback (M6). A VM's last unmap frees at once when no walk can be in flight | fdb30269; 70d04a7f (v0.1.1) |
+| Arm-then-push submit (M1). Monotonic CCB sequence numbers (M2). The GPU is halted before any fence signals on a hang (M3). Unbind with files open (M4) | 10695c13, b862f516, 3c79a631, 1e60417e |
+| **Runtime PM per job (M7): the stopgap is gone.** Each job takes its reference at submit, and `run_job` never resumes the GPU | c45ca872, d889d5cc |
+| Completion from the microkernel's DONE_SEQ (M8, kernel half) | a3b8c8dc; firmware in K7 |
+| A BIF page fault ends the job at once with -EFAULT (M9). `drm_dev_set_dma_dev` behind gma500 (M10) | c8863684, 4dc69604 |
+| The uAPI header matches the code (M11). Docs match the code, and comments stand on their own (M12; see K4 for the rev 3 regressions) | c4fba4e4, ab5cc656, 0e793fdb, 67483f85 |
+| No `overlap` parameter and no `prepare_job` (M13). gma500 exports pin without a GTT slot (M14); gma500 hands the SGX over | d01ca426, 2a8020a1, 5bb5d765 |
+| The graveyard: no parameter. Released objects go after the next completed render, everything at a restart, and the lost paths reap | 9798b17, 5ff9dd95 (v0.1.1) |
+| `job_timeout_ms` is the only module parameter | |
+| sysfb DIRTYFB: declined upstream (fix X). Only the CE5300 test kernels keep it | `drm/sysfb/README.md` |
+
+### drm-uapi.rst
+
+| requirement | state |
+|---|---|
+| Open-source userspace, the real driver rather than a toy | yes: the Gallium driver passes 16,638 of 17,165 dEQP-GLES2 tests with no vendor code |
+| Userspace reviewed in the canonical upstream, with an Acked-by | merge only (G2) |
+| The kernel merges before the userspace | at merge |
+| Render node only, every ioctl `DRM_RENDER_ALLOW` | yes |
+| Hot-unplug: fences `-ENODEV`, ioctls `-ENODEV`, mmaps keep working | yes (M4); the mmap read after unbind is in K8 |
+| Device reset: fence errors, per-context guilty state, submits from an affected context refused | yes: `-ECANCELED`, `reset_count`, guilty/innocent |
+| Reset causes: devcoredump | yes |
+| Device wedging | no: K5 |
+| Recommended return values (`-ENOENT` for lookups, `-EIO` for a dead GPU, `-ENODEV`) | yes (M11) |
+| IGT | merge only, with the plan stated |
+| uAPI header under MIT, with kernel-doc | yes: `(GPL-2.0-only WITH Linux-syscall-note) OR MIT`, `kernel-doc -Werror` in CI |
 
 ### Tools (CI)
 
-`.github/workflows/powervr-sgx.yml` (the EA kernel) and
-`.github/workflows/powervr-sgx-upstream.yml` (mainline with the gma500 patch,
-both configurations).
+All green on m2-drm 3f36c8a4:
+- checkpatch `--strict` on every driver file, the tests and the uAPI header;
+- `kernel-doc -Wall -Werror`;
+- sparse (`C=2`), smatch and coccinelle;
+- gcc W=1 in tree and out of tree, and clang W=1 (`LLVM=1`);
+- the i386/x86_64 uAPI layout check and its negative case;
+- KUnit under QEMU (23/23 on 92442046).
 
-- [x] `checkpatch.pl --strict` on every driver file, the tests and the uAPI
-  header: clean.
-- [x] `kernel-doc -Wall -Werror` on the uAPI header and every driver file.
-- [x] sparse (`C=2`), driver and gma500.
-- [x] gcc `W=1`, in tree and out of tree; the CE5300 test kernels also build the DDK-compat patch.
-- [x] clang `W=1` (`LLVM=1`), upstream configuration.
-- [x] smatch (`-p=kernel`).
-- [x] coccinelle (`make coccicheck MODE=report`).
-- [x] uAPI layout: `docs/uapi/check_layout.c` built `-m32` and `-m64` with
-  `-Wpadded -Werror` (one layout, no implicit padding), and its negative case
-  must fail.
-- [x] KUnit: the firmware file checks, under QEMU.
-- [ ] **Runtime checkers on the EA.** The EA workflow's `debug` input builds the
-  RAM-boot kernel with lockdep (`PROVE_LOCKING`), KASAN, UBSAN, DMA-API debug,
-  kmemleak and debug objects (`drm/ci/debug.fragment`). To run: the uAPI
-  suite, the frame, blit, hang and PRIME tests on both microkernels, then
-  `dmesg` and `/sys/kernel/debug/kmemleak`. Findings get fixed and listed here.
-  Single-process tests: clean (3ca68ab; DMA segment size fixed). Open: a
-  three-process soak took the box's userspace down (log 2026-11-08-2300).
-- [ ] **IGT.** The uAPI tests are IGT-shaped C (`drm/tests`); upstream will
-  want them as an IGT `powervr_sgx` test binary.
+The `debug` CI input builds the RAM-boot kernel with lockdep, KASAN, UBSAN,
+DMA-API debug, kmemleak and debug objects (K8). A per-patch build of the
+series is K9.
 
-### Idioms
-
-- [x] `devm_drm_dev_alloc`, `pcim_enable_device`, `pcim_iomap_region`.
-- [x] Runtime PM is set up before `drm_dev_register`, and torn down if it fails.
-- [x] `drm_sched` (one entity per context, credit 1), `drm_exec` for the
-  submit's reservations, `drm_gpuvm` for VMs and their shared reservation.
-- [x] **dma-fence signaling rules.** The hardware fence is allocated at
-  submit and only initialized in `run_job`; the timeout's devcoredump
-  allocates with `GFP_NOWAIT`; completions run inside
-  `dma_fence_begin_signalling()`. To confirm under lockdep (above).
-- [ ] **`run_job` resumes the GPU.** `pvrsgx_power_get()` can runtime-resume
-  from `run_job`, as panthor does. The resume path allocates nothing, but
-  the debug run must show lockdep accepts it.
-- [x] **Named registers.** Names from the GPL `sgx545defs.h` (soft-reset bits,
-  clock-gating fields, BIF, event kick); our names for the event-program
-  registers the header leaves out; the vendor init script's unnamed
-  registers as one table pointing at `docs/SRVINIT.md`.
-- [ ] **Firmware structure layouts.** `pvrsgx_render.c` still writes the
-  microkernel's command and render structures by word offset (`cmd[0x1c / 4]`
-  and the like, 78 places). They should become C structures with named
-  fields, from `docs/UKERNEL.md` and `docs/STATE.md`. This is the largest
-  remaining item.
-- [ ] **PDS encodings.** `pvrsgx_pds.c` builds instruction words from shifts
-  that `docs/PDS.md` explains; named fields would make review easier.
-- [x] Fixed in this pass: cleanup took a runtime-PM reference through
-  `sdev->pdev`, which is NULL behind gma500.
-
-### Minimal first series (plan, 2026-11-08)
-
-Today the driver is 7,639 lines (`drm/powervr_sgx`, including 640 lines of
-stream decoder shared with Mesa and the 168-line KUnit test). The tree keeps
-everything, but it is layered so that v1 builds and runs on its own, and each
-follow-up is a self-contained addition: its own file(s) plus a few clearly
-marked call sites. CI builds the whole driver on drm-misc-next; building v1
-alone needs stubs for the follow-ups' call sites first (not done).
-
-**v1, about 5,900 lines:** probe and the core table, firmware boot (open
-microkernel only, secure mode), MMU and VMs (`drm_gpuvm`, `VM_MAP`/`VM_UNMAP`),
-GEM with dma-buf import from other devices (X on simpledrm needs it; mesa-gallium,
-2026-11-08), `DEV_QUERY`, contexts, render job submit with syncobjs, the command-stream
-and shader validator (the security model), timeout reset and recovery with
-guilty/innocent reporting, and the minimum uAPI.
-
-| follow-up | what | lines it takes out of v1 |
-|---|---|---|
-| F1 transfer | transfer contexts and jobs, their uAPI job type | ~150 |
-| F3 runtime PM | autosuspend; v1 keeps the GPU on while the device is open | ~90 |
-| F4 devcoredump | the hang dump | ~125 |
-| F5 debugfs | `status`, `render`, `render_before` and the snapshot parameters | ~180 |
-| F6 tracepoints | `pvrsgx_kick/irq/job_done/flush_imports` | ~100 |
-| F7 gma500 host | the auxiliary-device binding (with the gma500 patch) | ~150 |
-
-**Out of the upstream driver entirely:**
-- DDK compat (vendor firmware, entry programs, shared kernel heaps): done,
-  the tree lost 384 lines to `drm/ci/ddk-compat.patch`, which only the CE5300
-  test kernels apply.
-- Microkernel cleanup commands (v1 and v2): ~70 lines. The open microkernel
-  doesn't use them; freed objects wait in the graveyard until the next
-  render.
-- Developer parameters `single_entry`, `idle_kernel_pd`, `restart_quiesce`,
-  `hwr_check`, `probe_only`, `reap_after_render`, `core_clock`, `cleanup`
-  and their code paths: ~60 lines.
-
-**While cutting, in this order:**
-1. Delete: DDK compat out to the patch, cleanup commands, developer
-   parameters, anything the open microkernel no longer reads (to confirm with
-   it: the TA/3D signature lists, HWPerf buffer, `GETMISCINFO` struct-size
-   check).
-2. Layer: move F1-F7 into their own files behind stubs in their headers.
-3. Kernel style:
-   - Firmware structures as C structs with kernel-doc and `static_assert`
-     offsets, in place of word offsets (`cmd[0x1c / 4]`, 78 sites in
-     `pvrsgx_render.c`).
-   - Registers generated from the GPL `sgx545defs.h` into `pvrsgx_regs.h`, with
-     `BIT()`/`GENMASK()`, only the registers the driver uses.
-   - No DDK names (`SGXMKIF_*`, `ui32*`: 17 places).
-   - One prefix, `pvrsgx_`: the five `powervr_sgx_stream*` files become
-     `pvrsgx_stream*` (shared with Mesa, so agreed with uapi-stream first).
-4. Generic: an ISA generation in the core table for the validator's tables;
-   no SGX545 or CE5300 constants outside the table and the platform glue.
-5. Prove it: the checker CI on v1 and the whole; the lockdep/KASAN/UBSAN run
-   on the CE5300 with the uAPI suite and frame tests; then full dEQP through
-   Mesa.
-
-**Status (m2-drm a8dff09, 2026-11-08).** The driver is 7,458 lines; the
-follow-up files hold 690, leaving about 6,800 for v1. That is above the
-5,900 first estimated: v1 keeps dma-buf import (X needs it), and it carries
-533 lines of firmware-structure definitions with kernel-doc, which replaced
-word offsets, plus the 690-line stream decoder shared with Mesa. The v1
-patch series also carries the 873-line uAPI header and 239 lines of
-Documentation.
-
-| step | state |
-|---|---|
-| DDK compat out | done: `drm/ci/ddk-compat.patch`, applied only by the CE5300 test kernels |
-| cleanup commands, 8 developer parameters, the render snapshot and last-render debugfs, the signature lists, HWPerf buffer and `GETMISCINFO` check the open microkernel never reads | deleted |
-| F1 transfer | own file (`pvrsgx_transfer.c`, 209 lines) |
-| F3 runtime PM | own file (`pvrsgx_pm.c`, 126 lines), built with `CONFIG_PM`, stubs otherwise; no `runtime_pm` parameter |
-| F4 coredump, F5 debugfs, F6 tracepoints, F7 gma500 | already separate files; their call sites are still in v1 code |
-| PRIME import | own file (`pvrsgx_prime.c`), but in v1: X through kmsro on simpledrm imports its scanout buffers |
-| firmware structures | done: TA command, dependency block, render details, RT data, PB descriptor, HW render and transfer contexts, transfer command, control block (`pvrsgx_fwif.h`, offsets checked by `static_assert`); no firmware word is written by offset any more |
-| DDK names in comments | gone (the uAPI's `DRM_POWERVR_SGX_FW_IF_SGXMKIF_1_7` is left for uapi-stream) |
-| generated register header | done: `pvrsgx_regs.h` comes from the GPL `sgx545defs.h` through `drm/tools/gen_regs.py` (CI diffs it); our names for the registers that header leaves out, and the MMU constants, are in `pvrsgx_hw.h` |
-| one `pvrsgx_` prefix | done (the shared stream files are now `pvrsgx_stream*`) |
-| ISA generation in the core table | done: the validator picks its USSE form table by the core's ISA |
-| runtime checkers on the CE5300 | single-process tests clean under lockdep, KASAN, UBSAN, DMA-API debug and kmemleak (3ca68ab, one finding fixed; again on 57ca2d0); a three-process soak lost the box's userspace, cause open |
-
-**Since then (to fc2551b, 2026-11-09).** The driver is 7,706 lines, the
-follow-up files 814, so v1 is about 6,900, plus the 875-line uAPI header and
-239 lines of Documentation.
-
-| change | where it lands |
-|---|---|
-| one parameter buffer for the device, mapped into every VM (bug B; the DDK's design) | v1 (render); isolation cost in Design above and the cover letter |
-| a released context or VM flushes the GPU's data caches with the next command, as the DDK does after its cleanup | v1 |
-| the default parameter buffer is 16 MiB; the first render context sets its size | v1 |
-| `DRIVER_GEM_GPUVA` dropped (gone in 7.3); `drm/ci/compat.sh` puts it back for older test kernels | v1; compat out of tree |
-| a render context holds a runtime-PM reference (stopgap) | F3 runtime PM |
-| `pvrsgx_render_kick` tracepoint, 5 arguments (BPF caps an event at 12), `ctlblk` debugfs | F6, F5 |
-| CI on drm-misc-next with `BPF_EVENTS` | tooling |
-
-**uAPI effect.** v1's header leaves out the transfer context and job types
-and their structures (F1 appends them; the enums are append-only). Mesa
-creates only render contexts and submits only render jobs, so it needs no
-change (mesa-gallium, 2026-11-08). Nothing else in the uAPI changes.
-
-### The series
-
-The m2-drm history is a development log with fixes on fixes; nothing upstream
-will see it. The series gets cut from the final tree by area, each patch
-building on its own:
-
-1. uAPI header and documentation.
-2. Core table, registers, MMU, kernel memory, device bring-up (no firmware).
-3. Open-microkernel loader and start, PDS programs.
-4. GEM, VMs (`drm_gpuvm`), `VM_MAP`/`VM_UNMAP`.
-5. Contexts, scheduler, fences, NULL jobs, `SUBMIT_JOBS`.
-6. Render: PB, RT datasets, the TA command; stream validation (D9).
-7. Transfer jobs.
-8. Hang recovery, devcoredump, runtime PM.
-9. debugfs, tracepoints.
-10. gma500: the SGX as an auxiliary device; powervr_sgx binds to it.
-11. (Not for upstream) DDK compat.
-
-The files already split along these lines; cutting the series will show where
-one patch reaches into a later one.
+The plan of 2026-11-08 (DDK compat out of tree, the follow-up layering, a
+generated register header, one `pvrsgx_` prefix, the ISA generation in the
+core table) is done. Its record is in git history before this revision.
