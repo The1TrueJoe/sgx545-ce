@@ -57,6 +57,7 @@ write it, boot it, attach the results file to the issue.
 - `drm/` (the `powervr_sgx` kernel driver): GPL-2.0-only; its uAPI header is
   GPL-2.0-only WITH Linux-syscall-note, or MIT.
 - `kernel/src/`: GPL-2.0, Imagination Technologies, as published by Intel.
+- `libpvr/`: GPL-2.0-only (built against and generated from `kernel/src`'s headers).
 - Everything else here (the microkernel, the Mesa driver, the tools, the test sticks): MIT.
 
 ## Contributing
