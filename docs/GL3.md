@@ -408,7 +408,12 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
   `drawpixels-float-and-ushort` at 1, 2 and 4 samples included.
 - **A depth texture rendered into** is sampled from its ZLS buffer: a draw
   reads it into the CPU copy and rewrites level 0's sampled copy first
-  (`sgx_resource_zls_for_sampling`). `fbo-depthtex` passes.
+  (`sgx_resource_zls_for_sampling`), also after a map (glReadPixels) has
+  brought the CPU copy up (62021488). `fbo-depthtex` and
+  `fbo-depth-sample-compare` pass (run 33).
+  - Level 0 of a 2D texture only: rendering into another level
+    (`depthstencil-render-miplevels`) or a layer isn't decoded, and the ZLS
+    buffer isn't checked against the attached level and layer.
 - **`mixed_framebuffer_sizes` is on** (5de10967), so ARB_framebuffer_object
   and `GL_RENDERBUFFER_SAMPLES`. On the final stack (a012e986), against runs
   2 and 3, nothing goes from pass to fail in the gate (157 tests), the
@@ -445,8 +450,6 @@ Runs 4 and 5 (the second CE5300 board, 2026-11-12; `docs/log/entries/2026-11-12-
     way), **not yet on a board**. A power-of-two level with a side from 2 to 8 (32×4, say)
     can't be rendered in the sampler's layout with either PBE mode and is
     still wrong.
-  - `fbo-depth-sample-compare`: shadow compares against a depth texture a
-    render wrote; it prints no detail, not diagnosed.
 - **Known intermittent: `clipping@fixed-clip-enables`** fails in about 6 to
   14 of 20 runs with the cap and passes 20 of 20 without it (runs 7-15,
   2026-11-12). Every failure is the same probe, (200,175) in the third
