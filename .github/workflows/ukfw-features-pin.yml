@@ -5,6 +5,7 @@
 name: ukfw-features-pin
 
 on:
+  workflow_dispatch:
   push:
     branches: [dev, main]
     paths:
