@@ -11,6 +11,8 @@ config DRM_POWERVR_SGX
 	select CRC32
 	select FW_LOADER
 	select WANT_DEV_COREDUMP
+	# The tests are built into the driver's objects: their helpers follow it.
+	select DRM_KUNIT_TEST_HELPERS if DRM_POWERVR_SGX_KUNIT_TEST != n
 	help
 	  Render-only DRM driver for PowerVR SGX5xx GPUs. It supports the
 	  SGX545 of the Intel Atom CE5300 media processors, where the GPU is
@@ -51,7 +53,8 @@ config DRM_POWERVR_SGX_OF
 config DRM_POWERVR_SGX_KUNIT_TEST
 	tristate "KUnit tests for the PowerVR SGX5xx driver" if !KUNIT_ALL_TESTS
 	depends on DRM_POWERVR_SGX && KUNIT
-	select DRM_KUNIT_TEST_HELPERS
+	# Built into the driver: KUnit must be at least what the driver is.
+	depends on KUNIT=y || DRM_POWERVR_SGX=m
 	default KUNIT_ALL_TESTS
 	help
 	  Unit tests of the driver's firmware file checks (a well-formed
