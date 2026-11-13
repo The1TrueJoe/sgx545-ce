@@ -361,7 +361,7 @@ static void pvrsgx_shutdown(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id pvrsgx_pci_ids[] = {
-	{ PCI_VDEVICE(INTEL, 0x089b), 545 },	/* CE5300 family: SGX545 */
+	{ PCI_VDEVICE(INTEL, 0x089b), .driver_data = 545 },	/* CE5300 family: SGX545 */
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, pvrsgx_pci_ids);
