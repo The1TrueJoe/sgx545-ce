@@ -1001,29 +1001,23 @@ of a blend.
 
 ### The pixel event program (render details +0x5c)
 
-The DDK's, from the base4 capture (0x2e006000, data 0x50 bytes, 29
-instructions). The data rows:
+The 3D runs it for pixel events with the event word in in1, the tile position
+in in0 and a word to forward in in2. What it must do, by in1:
 
-| word | value | what |
-|---|---|---|
-| ds0[0], ds0[1] | `00010400`, 0 | DOUTU of the ptoff task (`0x37008200`) |
-| ds1[0] | 0 | compare operand for in1's b8 test |
-| ds1[1] | `01008000` | DOUTU w0 of the end-of-tile task (`0x37004000`, temps 4) |
-| ds0[2], ds0[3] | `01010500`, `00c00000` | DOUTU of the pixel-event emit task (`0x37008280`, temps 4), w1 = b22 \| b23 |
-| ds1[2], ds1[3], ds1[4] | 8, 2, 4 | the in1 bit masks |
-| ds0[4]..ds0[8] | `00000100 00000ff8 00800000 003ff000 00400000` | masks for building the end-of-tile DOUTU w1 |
-
-The code, by in1 (the event word the hardware passes):
-
-- in1 & 8 → DOUTU the **ptoff** task, then halt. That task is
-  `phas.i #0, #0 [wait=7]; ptoff [end]`.
-- else in1 & 2 → test `op0xd(in1, ds1[0]) & 0x100`:
-  - if set → `douta in2 → attr 0`, then DOUTU the **end-of-tile** task with
-    w1 = `(in0<<3 & 0xff8) | 0x00800000 | (in0<<3 & 0x3ff000) | (in1<<20 & 0x400000)`;
-  - else → the emit task below.
-- else in1 & 4 → DOUTU the **pixel-event emit** task, which is
+- in1 & 8 → start the **ptoff** task (`phas.i #0, #0 [wait=7]; ptoff [end]`),
+  then halt.
+- else in1 & 2:
+  - with in1 b8 **clear** → `douta in2 → attr 0`, then start the
+    **end-of-tile** task with DOUTU w1 =
+    `(in0<<3 & 0x3ffff8) | 0x00800000 | (in1<<20 & 0x400000)`;
+  - with b8 set → the emit task below.
+  [hardware: the open program; with the b8 test reversed nothing is drawn]
+- else in1 & 4 → start the **pixel-event emit** task,
   `phas.i #0, #0 [wait=7]; limm r0, #0; emit.t0 r0, #0, r0 [end f3_20 imm=512]`.
 - else halt.
+
+The end-of-tile and emit tasks take 4 temporaries; the emit task's DOUTU w1
+is b22 | b23.
 
 [capture]. What each in1 bit is (end of tile, end of render, …), and
 what in0 and in2 carry, is [guess]. `docs/PDS.md` has the instruction
