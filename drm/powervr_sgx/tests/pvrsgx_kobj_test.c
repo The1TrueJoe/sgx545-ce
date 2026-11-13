@@ -122,7 +122,7 @@ static void kobj_test_free_after_invalidate(struct kunit *test)
 
 	/* Released before render 1, which has finished. */
 	pvrsgx_kobj_drop(sdev, &o);
-	pvrsgx_kobj_reap(sdev, 1);
+	pvrsgx_kobj_reap(sdev, 1, 0);
 	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
 	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->kobj_unmapped));
 	KUNIT_EXPECT_TRUE(test, pvrsgx_mmu_range_empty(sdev->kernel_mmu, addr, PAGE_SIZE));
@@ -131,14 +131,45 @@ static void kobj_test_free_after_invalidate(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, drm_mm_clean(&sdev->krange[PVRSGX_KRANGE_KDATA]));
 
 	/* No command since: still held. */
-	pvrsgx_kobj_reap(sdev, 1);
+	pvrsgx_kobj_reap(sdev, 1, 0);
 	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->kobj_unmapped));
 
 	/* The next command was sent and taken. */
 	sdev->ccb_issued++;
-	pvrsgx_kobj_reap(sdev, 1);
+	pvrsgx_kobj_reap(sdev, 1, 0);
 	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->kobj_unmapped));
 	KUNIT_EXPECT_TRUE(test, drm_mm_clean(&sdev->krange[PVRSGX_KRANGE_KDATA]));
+
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = NULL;
+	kobj_test_fini(test, sdev);
+}
+
+/*
+ * A transfer context's object waits for a transfer to finish after its
+ * release, not a render; one no command named goes at once.
+ */
+static void kobj_test_kinds(struct kunit *test)
+{
+	struct pvrsgx_device *sdev = kobj_test_device(test);
+	u32 *ccbctl = kunit_kzalloc(test, 2 * sizeof(u32), GFP_KERNEL);
+	struct pvrsgx_kobj *o = NULL, *u = NULL;
+
+	KUNIT_ASSERT_NOT_NULL(test, ccbctl);
+	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = ccbctl;
+	KUNIT_ASSERT_EQ(test, pvrsgx_kobj_new(sdev, &o, PVRSGX_KRANGE_KDATA, PAGE_SIZE, 0, NULL),
+			0);
+	o->transfer = true;
+	pvrsgx_kobj_drop(sdev, &o);
+	pvrsgx_kobj_reap(sdev, 5, 0);
+	KUNIT_EXPECT_FALSE(test, list_empty(&sdev->graveyard));
+	pvrsgx_kobj_reap(sdev, 5, 1);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
+
+	KUNIT_ASSERT_EQ(test, pvrsgx_kobj_new(sdev, &u, PVRSGX_KRANGE_KDATA, PAGE_SIZE, 0, NULL),
+			0);
+	pvrsgx_kobj_drop_sent(sdev, &u, false);
+	KUNIT_EXPECT_NULL(test, u);
+	KUNIT_EXPECT_TRUE(test, list_empty(&sdev->graveyard));
 
 	sdev->fw.cpu[PVRSGX_FW_CCBCTL] = NULL;
 	kobj_test_fini(test, sdev);
@@ -192,6 +223,7 @@ static struct kunit_case pvrsgx_kobj_test_cases[] = {
 	KUNIT_CASE(kobj_test_vm_gone_first),
 	KUNIT_CASE(kobj_test_free_after_invalidate),
 	KUNIT_CASE(kobj_test_after_invalidate),
+	KUNIT_CASE(kobj_test_kinds),
 	{}
 };
 

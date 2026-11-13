@@ -237,6 +237,9 @@ void pvrsgx_job_process_done(struct pvrsgx_device *sdev)
 		if (job->type == DRM_POWERVR_SGX_JOB_TYPE_RENDER) {
 			sdev->renders_done++;
 			reap = true;
+		} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+			sdev->transfers_done++;
+			reap = true;
 		}
 	}
 	more = !list_empty(&sdev->active);
@@ -271,13 +274,16 @@ static void reap_work_fn(struct work_struct *work)
 {
 	struct pvrsgx_device *sdev = container_of(work, struct pvrsgx_device, reap_work);
 	unsigned long flags;
-	u64 done;
+	u64 done, xdone;
 
 	spin_lock_irqsave(&sdev->fence_lock, flags);
 	done = sdev->renders_done;
+	xdone = sdev->transfers_done;
 	spin_unlock_irqrestore(&sdev->fence_lock, flags);
 	/* Lost, the GPU is stopped for good: everything can go. */
-	pvrsgx_kobj_reap(sdev, READ_ONCE(sdev->lost) ? U64_MAX : done);
+	if (READ_ONCE(sdev->lost))
+		done = xdone = U64_MAX;
+	pvrsgx_kobj_reap(sdev, done, xdone);
 	pvrsgx_ccb_inval_reap(sdev, false);
 }
 
@@ -345,8 +351,16 @@ static struct dma_fence *pvrsgx_run_job(struct drm_sched_job *sched_job)
 			mutex_unlock(&sdev->kobj_lock);
 		}
 	} else if (job->type == DRM_POWERVR_SGX_JOB_TYPE_TRANSFER) {
+		mutex_lock(&sdev->kobj_lock);
+		sdev->transfers_submitted++;
+		mutex_unlock(&sdev->kobj_lock);
 		pvrsgx_transfer_job_build(job, data);
 		err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_TRANSFER, data, &job->ccb_seq);
+		if (err) {
+			mutex_lock(&sdev->kobj_lock);
+			sdev->transfers_submitted--;
+			mutex_unlock(&sdev->kobj_lock);
+		}
 	} else {
 		/* A NULL job is a no-op command: done when the microkernel has taken it. */
 		err = pvrsgx_ccb_send(sdev, PVRSGX_KCMD_PROCESS_QUEUES, data, &job->ccb_seq);
@@ -605,7 +619,7 @@ void pvrsgx_job_unplug(struct pvrsgx_device *sdev)
 	 * every kernel object in the graveyard, whose VMs hold the DRM device.
 	 */
 	pvrsgx_ccb_inval_reap(sdev, true);
-	pvrsgx_kobj_reap(sdev, U64_MAX);
+	pvrsgx_kobj_reap(sdev, U64_MAX, U64_MAX);
 }
 
 /*

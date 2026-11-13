@@ -37,6 +37,8 @@ struct pvrsgx_render_ctx {
 	struct pvrsgx_kobj *hwctx, *ccb, *ccbctl, *scratch, *sync3d;
 	struct pvrsgx_pb *pb;
 	u32 ccb_woff;
+	/* A command for it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 /* 16 MiB: the device's one PB holds every client's scenes (pvrsgx_render.c). */
@@ -73,6 +75,8 @@ struct pvrsgx_rt_dataset {
 	struct pvrsgx_kobj *tailptr, *ta40, *ta50, *rgn[2], *ta88[2];
 	/** @frames: Renders into this dataset so far. */
 	u32 frames;
+	/** @sent: A kick into it was built: its objects may be the GPU's. */
+	bool sent;
 };
 
 /* Each context's command ring. */

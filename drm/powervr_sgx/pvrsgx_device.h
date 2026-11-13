@@ -243,6 +243,8 @@ struct pvrsgx_device {
 	struct list_head kobj_unmapped;
 	/** @renders_submitted: Render jobs handed to the firmware, for reaping @graveyard. */
 	u64 renders_submitted;
+	/** @transfers_submitted: Likewise for transfer jobs (under @kobj_lock). */
+	u64 transfers_submitted;
 	/**
 	 * @done_seq: Completions accounted since the microkernel started, against
 	 * its count (pvrsgx_fw_ta3d_ctl.done_seq; under @fence_lock).
@@ -265,6 +267,8 @@ struct pvrsgx_device {
 	size_t coredump_len;
 	/** @renders_done: Render jobs the firmware has finished. */
 	u64 renders_done;
+	/** @transfers_done: Transfer jobs the firmware has finished (under @fence_lock). */
+	u64 transfers_done;
 	/** @reap_work: Frees @graveyard entries a later render made safe. */
 	struct work_struct reap_work;
 

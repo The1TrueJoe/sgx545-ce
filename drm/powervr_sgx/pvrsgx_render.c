@@ -310,14 +310,16 @@ fail:
 void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *ctx)
 {
 	struct pvrsgx_render_ctx *r = ctx->render;
+	bool sent;
 
 	if (!r)
 		return;
-	pvrsgx_kobj_drop(sdev, &r->hwctx);
-	pvrsgx_kobj_drop(sdev, &r->sync3d);
-	pvrsgx_kobj_drop(sdev, &r->ccbctl);
-	pvrsgx_kobj_drop(sdev, &r->ccb);
-	pvrsgx_kobj_drop(sdev, &r->scratch);
+	sent = READ_ONCE(r->sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->hwctx, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->sync3d, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->ccbctl, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->ccb, sent);
+	pvrsgx_kobj_drop_sent(sdev, &r->scratch, sent);
 	pvrsgx_pb_put(r->pb);
 	kfree(r);
 	ctx->render = NULL;
@@ -375,24 +377,25 @@ static void rtds_release(struct kref *ref)
 {
 	struct pvrsgx_rt_dataset *s = container_of(ref, struct pvrsgx_rt_dataset, ref);
 	struct pvrsgx_device *sdev = s->ctx->sdev;
+	bool sent = READ_ONCE(s->sent);
 
-	pvrsgx_kobj_drop(sdev, &s->rtword);
-	pvrsgx_kobj_drop(sdev, &s->rtdata);
-	pvrsgx_kobj_drop(sdev, &s->done);
-	pvrsgx_kobj_drop(sdev, &s->tailptr);
-	pvrsgx_kobj_drop(sdev, &s->ta40);
-	pvrsgx_kobj_drop(sdev, &s->ta50);
+	pvrsgx_kobj_drop_sent(sdev, &s->rtword, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->rtdata, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->done, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->tailptr, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->ta40, sent);
+	pvrsgx_kobj_drop_sent(sdev, &s->ta50, sent);
 	for (int i = 0; i < 2; i++) {
-		pvrsgx_kobj_drop(sdev, &s->bgblock[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd_w8[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd_w4[i]);
-		pvrsgx_kobj_drop(sdev, &s->hwsync[i]);
-		pvrsgx_kobj_drop(sdev, &s->rd_sync[i]);
-		pvrsgx_kobj_drop(sdev, &s->hwsync_access[i]);
-		pvrsgx_kobj_drop(sdev, &s->entword[i]);
-		pvrsgx_kobj_drop(sdev, &s->rgn[i]);
-		pvrsgx_kobj_drop(sdev, &s->ta88[i]);
+		pvrsgx_kobj_drop_sent(sdev, &s->bgblock[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd_w8[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd_w4[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->hwsync[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rd_sync[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->hwsync_access[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->entword[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->rgn[i], sent);
+		pvrsgx_kobj_drop_sent(sdev, &s->ta88[i], sent);
 	}
 	pvrsgx_context_put(s->ctx);
 	kfree(s);
@@ -773,6 +776,8 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 
 	if (first)
 		pb_rearm(job->ctx->sdev, r->pb);
+	WRITE_ONCE(r->sent, true);
+	WRITE_ONCE(s->sent, true);
 	f = s->frames;
 	odd = f & 1;
 	/* This frame's RT-data entry and everything that goes with it. */
