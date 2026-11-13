@@ -370,6 +370,14 @@ static uint32_t pds_emit(struct sgx_ring *r, const struct pds *p, uint32_t *rows
 	for (unsigned i = 0; i < p->n1; i++)
 		m.p[pvrsgx_pds_ds_word(0x40 + i, pds_2dwords)] = p->ds1[i];
 	memcpy(m.p + 4 * rows, p->code, p->nc * 4);
+	/* SGXGEN_DUMP_PDS: the data segment as uploaded, to confirm the interleave
+	 * reached the client BOs (2word: DS0 DS0 DS1 DS1 per 16-byte row). */
+	if (getenv("SGXGEN_DUMP_PDS")) {
+		fprintf(stderr, "pds @ 0x%08x rows=%u %s:", m.va, rows, pds_2dwords ? "2word" : "8word");
+		for (unsigned j = 0; j < rows * 4 && j < 16; j++)
+			fprintf(stderr, " %08x", m.p[j]);
+		fputc('\n', stderr);
+	}
 	if (rows_out)
 		*rows_out = rows;
 	return m.va;
@@ -479,6 +487,8 @@ int sgx_dev_open(struct sgx_dev *d, const char *node, const char *trace)
 	/* Bring-up: SGXGEN_PDS_8WORD selects the 530 interleave. The proper source
 	 * is a DEV_QUERY core/quirk field; wire that once the uAPI carries it. */
 	pds_2dwords = getenv("SGXGEN_PDS_8WORD") ? 0 : 1;
+	if (!pds_2dwords)
+		fprintf(stderr, "sgxgen: PDS data interleave: 8-word (SGX530)\n");
 	d->fd = node ? open(node, O_RDWR | O_CLOEXEC) : open_render_node();
 	if (d->fd < 0)
 		return -errno;
