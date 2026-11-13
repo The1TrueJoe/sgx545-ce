@@ -2320,3 +2320,24 @@ rendezvous commits, kick_adv advances the CCB read offset itself, render_complet
 writes + SW_EVENT complete the DDK way. Then **sgx530_edm and the host-owned-memory layer
 are unnecessary**. Decisive test: a single-render KICK with the **plain sgx530 image**
 under the current `edm_init` (EDMPROTECT kept). sgx530_edm is held as the fallback.
+
+## MILESTONE: edm_init merged to m2-drm; combined board run CLEAN
+
+The open-microkernel bring-up is on the kernel line: edm_init is merged into m2-drm
+(d70ac7cc). The combined HC-250 run passed clean on the m2-drm base with the 0x8
+images (sgx530_edm pkg 47e4282a): **init**, **unbind/rebind ×3** (each re-started the
+microkernel with no wedge), and **shutdown** — `rmmod=0`, `left=0`, **0 lockdep**, no
+WARN/BUG, vs the earlier `rmmod=139`. So on real SGX530 hardware the open microkernel
+inits under §9, reaches steady state, and the driver loads/unloads/rebinds cleanly.
+
+**Teardown root cause CONFIRMED (the fix works).** The earlier unload hang was the
+OMAP3-gated-register fault: k_power completes and gates the clocks, then `fw_stop`'s
+`deinit_script()` writes SGX registers on the now-gated OMAP3 target-module and
+bus-errors (ti-sysc/genpd idles the whole module). The fix — host-side stop that keeps
+the clocks up through `deinit_script` and skips the DDK power handshake — gives a clean
+unload (validated non-destructively: the clean rmmod/rebind result, not a forced stock
+crash, which would wedge the board). CE5300/PCI never hit it (registers stay up after
+power-off), so it is OMAP3-specific.
+
+The only step left for a first frame is the kick test (a frame-fake render through
+run_job on the m2-drm base).
