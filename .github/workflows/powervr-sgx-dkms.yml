@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# Copyright © 2026 Joseph Telaak
+#
+# The DKMS package against a stock distribution kernel, as a tester installs
+# it: Arch Linux's own linux-headers and dkms (which passes KERNELRELEASE on
+# make's command line), plain and with --cedarview.
+name: powervr-sgx-dkms
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [m2-drm, 'wip/**']
+    paths:
+      - drm/dkms/**
+      - drm/powervr_sgx/**
+      - drm/ci/compat*
+      - drm/gma500/0001-*
+      - docs/uapi/**
+      - .github/workflows/powervr-sgx-dkms.yml
+
+concurrency:
+  group: powervr-sgx-dkms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [plain, cedarview]
+    steps:
+      - name: Distribution kernel headers and DKMS
+        run: |
+          pacman -Syu --noconfirm --needed base-devel linux-headers dkms git
+          ls /usr/lib/modules
+      - uses: actions/checkout@v4
+      - name: Make the DKMS tree and build it
+        run: |
+          set -eux
+          KVER=$(ls /usr/lib/modules | head -1)
+          [ -e /usr/lib/modules/$KVER/build ]
+          OPT=; [ ${{ matrix.variant }} = cedarview ] && OPT=--cedarview
+          sh drm/dkms/mkdkms.sh $OPT 0.0.0-ci /usr/src
+          cat /usr/src/powervr_sgx-0.0.0-ci/dkms.conf
+          dkms add powervr_sgx/0.0.0-ci
+          dkms build powervr_sgx/0.0.0-ci -k "$KVER" || { cat /var/lib/dkms/powervr_sgx/0.0.0-ci/build/make.log; exit 1; }
+          M=$(find /var/lib/dkms/powervr_sgx/0.0.0-ci -name 'powervr_sgx.ko*' | head -1)
+          [ -n "$M" ]
+          ls -l "$M"
+          case "$M" in *.zst) zstd -dq "$M" -o /tmp/p.ko; M=/tmp/p.ko ;; *.xz) xz -dkc "$M" > /tmp/p.ko; M=/tmp/p.ko ;; esac
+          modinfo "$M" | grep -E '^(vermagic|name|firmware):'
+          # The Cedarview build binds gma500's auxiliary device; the plain one doesn't.
+          if [ ${{ matrix.variant }} = cedarview ]; then
+            modinfo "$M" | grep -q 'auxiliary:gma500_gfx.sgx'
+          else
+            ! modinfo "$M" | grep -q 'auxiliary:gma500_gfx.sgx'
+          fi
