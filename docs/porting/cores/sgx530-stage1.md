@@ -2287,24 +2287,36 @@ The open microkernel reached steady-state on an OMAP3630 board under §9 real-in
 PDS base 0xa68 = 0x014042c0 with data 0x3/0x13d01, the keep-alive timer advancing, no
 BIF fault, no -110. **§6 step 2 is proven on hardware.**
 
-**Reconciliation — st.a.d COMMITS to non-EDMPROTECT pages under §9.** The status dump
-showed the microkernel's own heartbeat (ctlblk word 0x2a) at 135 after ~137 ms (one
-`ld+add+st.a.d` per 1 kHz tick) and the version word (0x18) written — neither written
-by the driver. So the microkernel's `st.a.d` to ctlblk COMMITS. This does **not**
-contradict stor5: EDM_PROTECT is the store gate (attempt 45, C — "the fix is to map the
-microkernel's writable structures without EDM_PROTECT"), and every §9 store probe,
-stor5 included, ran with **EDMPROTECT ON** (the vendor-requestor test, §9 step 4), so it
-dropped. The real control block is the sgx530 default **non-EDMPROTECT**, so the
-heartbeat commits. **Under §9: st.a.d commits to non-EDMPROTECT, drops to EDMPROTECT.**
+**Reconciliation — st.a.d COMMITS under §9 EVEN WITH EDMPROTECT; the §9 task is the EDM
+requestor.** The status dump showed the microkernel's own heartbeat (ctlblk word 0x2a)
+at 135 after ~137 ms (one `ld+add+st.a.d` per 1 kHz tick) and the version word (0x18)
+written — neither written by the driver. So the microkernel's `st.a.d` to ctlblk
+COMMITS. **Correction (sgx530-kernel, from `data_pte_flags()`): under `edm_init` the
+control block IS mapped `EDMPROTECT`** (`CACHECONSISTENT | EDMPROTECT`), not
+non-EDMPROTECT — so the heartbeat committed *under* EDMPROTECT. EDM_PROTECT is therefore
+**not** a blanket store gate; on the 530 (one list, no CID) it can't be list-scoped, so
+it gates on the requestor's **data-master** (sgx530.md "Why the SGX530 USSE task is not
+the EDM requestor"). The §9 launch writes the task's code base 15 with **data-master 3**
+(vendor-setup §6), which makes the task the **EDM requestor**, so EDMPROTECT admits its
+writes. The earlier "not the EDM requestor / map without EDM_PROTECT" (attempt 45) was
+pre-§9, before the data-master-3 launch existed.
 
-**Design impact (pending the kick test).** The "st.a.d drops → stateless, host-owned
-memory, pixel_done/free_done reduction (sgx530_edm)" design came from the EDMPROTECT-ON
-probes — it does **not** apply to the open microkernel's non-EDMPROTECT mappings. If all
-the microkernel-written structures (control block, CCB control, sync heap, render
-details/RT/PB) are mapped non-EDMPROTECT, the **DDK-style microkernel should work on the
-530 as-is**: the WAIT_3D/WAIT_FREE rendezvous commits (no double/no-complete), kick_adv
-advances the CCB read offset itself, and render_complete's sync writes + SW_EVENT raise
-complete the DDK way. Then **sgx530_edm and the host-owned-memory layer are unnecessary**.
-Decisive test: a single-render KICK with the **plain sgx530 image** and non-EDMPROTECT
-structures. sgx530_edm is held as the fallback (needed only if some structure must stay
-EDMPROTECT).
+**stor5 vs the heartbeat — same EDMPROTECT, same requestor, yet stor5 dropped.** stor5
+used `stage1_vlaunch` (the same §9 launch → data-master 3 → EDM requestor) and the same
+EDMPROTECT mapping as `edm_init`. So the drop was **not** EDMPROTECT and **not** the
+requestor. The remaining difference is the store target: stor5 wrote `ctlblk+0x200`
+(0x3200, 0x100 *past* the 0x100-byte TA3DCTL control block) with a **bare `st`**; the
+heartbeat writes `ctlblk+0xa8` (*inside* the control block) with `ld+add+st`. Best
+hypotheses: (a) 0x3200 is past the struct — even mapped+zeroed for the test it may be a
+different allocation/page whose access differs; (b) the bare `st` vs the heartbeat's
+read-modify-write interacts with the store/cache path differently. The heartbeat is
+authoritative (a live counter in the real control block); stor5's +0x200 is an edge case.
+
+**Design impact.** The "st.a.d drops → stateless, host-owned memory, pixel_done/free_done
+reduction (sgx530_edm)" design was built on the EDMPROTECT-ON **probes**, which don't
+reflect the real microkernel (the heartbeat proves it commits). So the **DDK-style
+microkernel likely works on the 530 as-is, WITH EDMPROTECT isolation kept** — the
+rendezvous commits, kick_adv advances the CCB read offset itself, render_complete's sync
+writes + SW_EVENT complete the DDK way. Then **sgx530_edm and the host-owned-memory layer
+are unnecessary**. Decisive test: a single-render KICK with the **plain sgx530 image**
+under the current `edm_init` (EDMPROTECT kept). sgx530_edm is held as the fallback.
