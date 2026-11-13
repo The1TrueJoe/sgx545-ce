@@ -29,10 +29,6 @@
  *  - sgx_powervr_sgx.c: the powervr_sgx DRM driver (docs/UAPI.md).  The
  *    kernel owns every structure the microkernel reads; a frame is one
  *    SUBMIT_JOBS render job.
- *  - sgx_pvr.c: the DDK's services driver, pvrsrvkm, through libpvr
- *    (the DDK's services stack).  Built only with the
- *    kernel's bridge headers (meson option sgx-pvrsrvkm), so nothing of
- *    kernel/src reaches the rest of the winsys.
  */
 
 #ifndef SGX_FRAME_H
@@ -310,8 +306,6 @@ struct sgxws_kif {
 /* the backends: 0 and *d, or -ENODEV when fd isn't their kernel driver */
 int sgxws_powervr_sgx_dev_create(int fd, const struct sgxws_dev_options *opts,
                                  struct sgxws_dev **d);
-int sgxws_pvr_dev_create(int fd, const struct sgxws_dev_options *opts,
-                         struct sgxws_dev **d);
 
 /* a buffer in a given heap with given attributes (sgxws_bo_alloc picks them by
  * use) */

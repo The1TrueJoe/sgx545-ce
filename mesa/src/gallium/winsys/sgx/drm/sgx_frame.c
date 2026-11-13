@@ -841,10 +841,6 @@ sgxws_dev_create(int fd, const struct sgxws_dev_options *opts)
       opts = &none;
    if (v && !strcmp(v->name, "powervr_sgx"))
       e = sgxws_powervr_sgx_dev_create(fd, opts, &d);
-#ifdef SGX_PVRSRVKM
-   else if (v && !strcmp(v->name, "pvrsrvkm"))
-      e = sgxws_pvr_dev_create(fd, opts, &d);
-#endif
    if (e)
       mesa_loge("sgx: no SGX kernel driver on fd %d (%s): %d", fd,
                 v ? v->name : "?", e);
