@@ -521,8 +521,8 @@ enum {
 /* MOVS (DOUT): r1 = DS0 pair row, r2 = DS1 pair row; selects 0 s1.lo, 1 s1.hi,
  * 2 s2.lo, 3 s2.hi */
 static uint32_t
-pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
-         unsigned c, unsigned d, enum sgx_pds_dout dest)
+pds_movs_encode(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
+                unsigned c, unsigned d, enum sgx_pds_dout dest)
 {
    return sgx_pds_encode(&(struct sgx_pds_instr){
       .opc = SGX_PDS_OPC_MOVS,
@@ -534,6 +534,30 @@ pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
       .r2 = r2,
       .sel = {a, b, c, d},
    });
+}
+
+/* every draw's PDS programs are a few MOVS forms, so each thread keeps the
+ * words it encoded (the encoder walks the instruction description) */
+static uint32_t
+pds_movs(unsigned form, unsigned r1, unsigned r2, unsigned a, unsigned b,
+         unsigned c, unsigned d, enum sgx_pds_dout dest)
+{
+   static _Thread_local struct {
+      uint32_t key, word;
+   } cache[64];
+   uint32_t key;
+
+   if (form > 3 || r1 > 63 || r2 > 63 || (a | b | c | d) > 3 || dest > 15)
+      return pds_movs_encode(form, r1, r2, a, b, c, d, dest);
+   key = 1u << 31 | form << 24 | r1 << 18 | r2 << 12 | a << 10 | b << 8 |
+         c << 6 | d << 4 | dest;
+   unsigned h = (key ^ key >> 7 ^ key >> 13) & 63;
+
+   if (cache[h].key != key) {
+      cache[h].word = pds_movs_encode(form, r1, r2, a, b, c, d, dest);
+      cache[h].key = key;
+   }
+   return cache[h].word;
 }
 
 /* dst = src1 op src2: add, mul16, and, or, xor, op0xd.s1 */
