@@ -1,4 +1,4 @@
-# Cedarview test stick v4: live Debian, one hands-off boot
+# Cedarview test stick v5: live Debian, one hands-off boot
 
 One boot answers everything a Cedarview tester can tell us, with nothing for the tester to
 do: flash, boot, walk away, attach one file. A live Debian 13 system on a USB stick, with
@@ -21,12 +21,17 @@ written to.
 | `kit-display`, `kit-save` | the display side's dumps and register timeline; the results file, written and renamed |
 | `99-kit-readonly.rules`, `initramfs-hook` | every non-USB disk read-only from the initramfs on |
 | `qemu-test.sh` | the CI check: boots the image in QEMU next to a disk that must stay unchanged |
-| `SERIES` | the kit's version for testers (`v4`), on the screen and in the results file name |
+| `SERIES` | the kit's version for testers (`v5`), on the screen and in the results file name |
 
 CI: `.github/workflows/cedarview-live.yml` takes the newest `powervr-sgx-deb-cedarview-kit`
 (kernel), `powervr-sgx-cedarview` (static tests) and `mesa-sgx-trixie` (firmware and Mesa
 packages), builds microkernel variant B from `ukernel/`, and keeps the image as the
-`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v4` for v4, from `SERIES`) for 90 days. There are no GitHub releases.
+`sgx545-cedarview-kit-<series>` artifact (`sgx545-cedarview-kit-v5` for v5, from `SERIES`) for 90 days. There are no GitHub releases.
+On a `release/*` branch all three come from that branch's own runs, so the stick carries
+the release's kernel and Mesa together.
+
+v5 is v4's run with the 0.2 kernel and Mesa (uAPI revision 4) from `release/v0.2`. Only
+the amd64 and `all` packages go on the stick; the i386 `mesa-sgx` stays off it.
 
 ## One boot
 

@@ -4,13 +4,27 @@
 #
 #   kernel:  linux-image/linux-headers, the Cedarview kernel in its release
 #            flavor (no test-kit patches)           powervr-sgx-deb.yml
-#   mesa:    mesa-sgx and sgx545-firmware           mesa-debian.yml
-#   release: SHA256SUMS over all of them, and the draft
+#   mesa:    mesa-sgx (amd64, i386) and sgx545-firmware   mesa-debian.yml
+#   release: SHA256SUMS over all of them, and the draft, with the notes from
+#            docs/releases/<tag>.md when there is one
+#
+# Run by hand (workflow_dispatch) it is a rehearsal: the same packages under a
+# version you give, an apt repository signed with a throwaway key, and
+# tools/release/repo-test.sh's install and upgrade scenarios against the last
+# published release. It creates no tag, release or repository.
 name: release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: package version to rehearse with (0.2.0~rc0)
+        required: true
+      kernel_run:
+        description: a powervr-sgx-deb run whose release-flavor kernel to reuse (its pkg_version must match); empty builds one
+        default: ''
 
 permissions:
   contents: read
@@ -28,16 +42,19 @@ jobs:
       - id: v
         env:
           TAG: ${{ github.ref_name }}
+          REHEARSE: ${{ inputs.version }}
         run: |
           set -eu
           # v0.1.0 -> 0.1.0; a pre-release suffix sorts before its release:
           # v0.2.0-rc1 -> 0.2.0~rc1 (git tags can't hold a ~)
-          v=$(printf '%s' "${TAG#v}" | tr '-' '~')
-          case $v in *[!0-9A-Za-z.+~]* | "" | [!0-9]* ) echo "tag $TAG is not a version"; exit 1 ;; esac
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then v=$REHEARSE
+          else v=$(printf '%s' "${TAG#v}" | tr '-' '~'); fi
+          case $v in *[!0-9A-Za-z.+~]* | "" | [!0-9]* ) echo "$v is not a version"; exit 1 ;; esac
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
   kernel:
     needs: version
+    if: ${{ !inputs.kernel_run }}
     uses: ./.github/workflows/powervr-sgx-deb.yml
     with:
       flavor: release
@@ -51,10 +68,12 @@ jobs:
 
   release:
     needs: [version, kernel, mesa]
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: powervr-sgx-deb-cedarview-release
@@ -65,17 +84,7 @@ jobs:
           path: assets
 
       - name: Checksums
-        run: |
-          set -eux
-          cd assets
-          rm -f SHA256SUMS
-          # GitHub serves a ~ in an asset name as a dot; name the files that
-          # way first so SHA256SUMS checks against a plain download
-          for f in *.deb; do
-            case $f in *'~'*) mv -- "$f" "$(printf '%s' "$f" | tr '~' '.')" ;; esac
-          done
-          sha256sum -- *.deb > SHA256SUMS
-          cat SHA256SUMS
+        run: sh tools/release/assets.sh assets
 
       - name: Draft pre-release
         env:
@@ -84,7 +93,10 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -eux
-          cat > notes.md <<EOF
+          if [ -f "docs/releases/$TAG.md" ]; then
+            cp "docs/releases/$TAG.md" notes.md
+          else
+            cat > notes.md <<EOF
           Debian 13 (trixie, amd64) packages for the PowerVR SGX545 of Intel Cedarview
           (Atom N2600/N2800/D2500/D2550/D2700), built from $TAG.
 
@@ -97,7 +109,8 @@ jobs:
           Install and removal: docs/INSTALL.md. Check the downloads with
           \`sha256sum -c SHA256SUMS\`.
           EOF
-          sed -i 's/^          //' notes.md
+            sed -i 's/^          //' notes.md
+          fi
           gh release create "$TAG" assets/*.deb assets/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
             --title "powervr_sgx $VERSION" --notes-file notes.md
@@ -106,3 +119,78 @@ jobs:
             --jq '.assets[].name' | grep -vx SHA256SUMS | sort > served.txt
           awk '{print $2}' assets/SHA256SUMS | sort > listed.txt
           diff listed.txt served.txt
+
+  rehearsal:
+    needs: [version, kernel, mesa]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.mesa.result == 'success' && (needs.kernel.result == 'success' || needs.kernel.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends reprepro gnupg dpkg-dev
+
+      - uses: actions/download-artifact@v4
+        if: ${{ !inputs.kernel_run }}
+        with:
+          name: powervr-sgx-deb-cedarview-release
+          path: assets
+      - name: The kernel from run ${{ inputs.kernel_run }}
+        if: ${{ inputs.kernel_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ inputs.kernel_run }}
+        run: |
+          set -eux
+          # it may still be building
+          gh run watch "$RUN" -R "$GITHUB_REPOSITORY" --exit-status --interval 300 > /dev/null
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n powervr-sgx-deb-cedarview-release -D assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.mesa.outputs.artifact }}
+          path: assets
+
+      - name: The release's files, as the draft would carry them
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eux
+          sh tools/release/assets.sh assets
+          # five: the kernel image and headers, the firmware, Mesa for amd64 and i386
+          ls assets
+          [ "$(ls assets/*.deb | wc -l)" = 5 ]
+          for f in assets/*.deb; do dpkg-deb -f "$f" Package Version Architecture Multi-Arch Breaks; echo; done | tee control.txt
+          [ "$(grep -c "^Version: .*$VERSION\$" control.txt)" = 5 ]
+          # the release's Mesa and firmware break the kernels before their uAPI
+          [ "$(grep -c "^Breaks: $(cat mesa/debian/BREAKS)\$" control.txt)" = 3 ]
+          (cd assets && sha256sum -c SHA256SUMS)
+
+      - name: The previous published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          prev=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')
+          gh release download "$prev" -R "$GITHUB_REPOSITORY" -D "old/$prev" --pattern '*.deb' --pattern SHA256SUMS
+          (cd "old/$prev" && sha256sum -c SHA256SUMS)
+          echo "PREV=old/$prev" >> "$GITHUB_ENV"
+
+      - name: An apt repository, signed with a throwaway key
+        run: |
+          set -eux
+          export GNUPGHOME=$RUNNER_TEMP/gnupg
+          install -d -m 700 "$GNUPGHOME"
+          gpg --batch --passphrase '' --quick-gen-key "powervr_sgx rehearsal <rehearsal@invalid>" ed25519 sign 1d
+          fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
+          # as apt-repo.yml: every release oldest first, this one last
+          sh tools/release/apt-repo.sh site "$fpr" "$PREV" assets
+
+      - name: Install and upgrade, as users do (Debian 13)
+        run: |
+          set -eux
+          docker run --rm -v "$PWD:/w" -w /w debian:trixie sh tools/release/repo-test.sh site "$PREV"

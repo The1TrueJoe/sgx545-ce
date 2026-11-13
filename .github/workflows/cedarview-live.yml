@@ -1,7 +1,9 @@
-# The Cedarview test stick v3 (kit/cedarview-live): live Debian 13 with the
-# packages docs/INSTALL.md installs (m2-drm's kernel .deb, sgx545-firmware,
+# The Cedarview test stick (kit/cedarview-live, series in SERIES): live Debian 13
+# with the packages docs/INSTALL.md installs (the kernel .deb, sgx545-firmware,
 # mesa-sgx), the GPU tests, the blit variants and a desktop smoke test, as one
 # USB image; booted in QEMU (BIOS and UEFI) before it is kept. Open code only.
+# The kernel and tests come from m2-drm and Mesa from dev; on a release/* branch
+# all three come from that branch, so the stick pairs the release's kernel and Mesa.
 name: cedarview-live
 
 on:
@@ -40,9 +42,11 @@ jobs:
             gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$1" -D "$3"
             echo "$1: run $id" | tee -a sources.txt
           }
-          get powervr-sgx-deb-cedarview-kit m2-drm debs
-          get mesa-sgx-trixie dev debs
-          get powervr-sgx-cedarview m2-drm tests
+          k=m2-drm m=dev
+          case $GITHUB_REF_NAME in release/*) k=$GITHUB_REF_NAME m=$GITHUB_REF_NAME ;; esac
+          get powervr-sgx-deb-cedarview-kit $k debs
+          get mesa-sgx-trixie $m debs
+          get powervr-sgx-cedarview $k tests
           ls -l debs tests
 
       - name: Microkernel variant B (the transfer bank) from ukernel/
