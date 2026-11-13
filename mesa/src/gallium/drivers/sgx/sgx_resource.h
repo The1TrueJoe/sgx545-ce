@@ -83,6 +83,9 @@ struct sgx_resource {
    /* a render stored into zls after the CPU copy (data) was last brought
     * up from it: a map reads it back first (sgx_transfer_map) */
    bool zls_stored;
+   /* a depth texture's CPU copy brought up from zls by a map, which its
+    * sampled copy doesn't have yet (sgx_resource_zls_for_sampling) */
+   bool zls_unsampled;
 };
 
 static inline struct sgx_resource *
