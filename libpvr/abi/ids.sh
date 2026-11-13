@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright © 2026 Joseph Telaak
 # Bridge index of every PVRSRV_BRIDGE_* in this build: libpvr/abi/bridge-ids.txt ("index NAME").
 # Each id becomes the size of a common symbol, so the compiler does the #if logic and nm reads it.
 R=$(cd "$(dirname "$0")/../.." && pwd)

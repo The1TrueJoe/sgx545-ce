@@ -11,7 +11,7 @@
  *
  *   sgx_frame_test [-d node] [-n frames] [-r] [-c] [-f] [-v] [-T] [-o last.bin]
  *     -d   the kernel driver's node (default: /dev/dri/renderD128 if it is
- *          there, else /dev/dri/card0); powervr_sgx or pvrsrvkm
+ *          there, else /dev/dri/card0); powervr_sgx
  *     -c   check every frame (reading uncached GPU memory: slow), not only the
  * last -f   render straight into /dev/fb0 (wrapped; pvrsrvkm only), not a GPU
  * buffer -v   the winsys prints every allocation and frame -T   the triangle

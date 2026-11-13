@@ -17,7 +17,7 @@ create_screen(int fd, const struct pipe_screen_config *config,
    return sgx_screen_create(fd, config, ro);
 }
 
-/* fd: the GPU's node (powervr_sgx, or pvrsrvkm); the screen keeps a dup of it */
+/* fd: the GPU's node (powervr_sgx); the screen keeps a dup of it */
 struct pipe_screen *
 sgx_drm_screen_create(int fd, const struct pipe_screen_config *config)
 {
