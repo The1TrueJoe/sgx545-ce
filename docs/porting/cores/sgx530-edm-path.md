@@ -243,3 +243,22 @@ and raises SW_EVENT (`str` EUR_CR_EVENT_STATUS = 0x4000, commits); `free_done`
 `render_complete`. The host's SW_EVENT IRQ signals the oldest job's `dma_fence` and
 advances the CCB read offset — exactly once per render. This is completion-coupling
 option (a), sized to one SW_EVENT per render so there is no double-complete.
+
+## 6b. OMAP3 teardown: don't touch gated SGX registers after power-off (C)
+
+On a single-context OMAP3 core, the driver's unload/teardown must not write SGX
+registers after the microkernel has powered off. Confirmed on the HC-250
+(combined run, edm_init on m2-drm): k_power completes (its `ui32PowerStatus` store
+commits — a ctlblk store, like the heartbeat) and gates the clocks; then `fw_stop`'s
+`deinit_script()` (SRVINIT "Deinit": `0xa58`, `0xa68`/`0xa6c`/`0xa70`,
+`USE_CODE_BASE_15`, `EVENT_HOST_ENABLE*`, `CLKGATECTL*`) writes those registers on the
+now-gated OMAP3 target-module and **bus-errors** — ti-sysc/genpd idles the whole
+module when it goes idle. That fault in the `rmmod` syscall path was the earlier
+`rmmod=139` crash + half-torn GOING module.
+
+**Fix (validated):** a host-side stop that keeps the clocks up through `deinit_script`
+(or runs it before the power-off gate) and skips the DDK power-down handshake. With it
+the unload is clean — `rmmod=0`, unbind/rebind ×3 with no wedge, 0 lockdep. This is
+**OMAP3-specific**: on CE5300/PCI the SGX registers stay powered after power-off, so
+the shared `fw_stop` never hit it. (Validated by the clean unload, not a forced stock
+crash, which would wedge the board.)
