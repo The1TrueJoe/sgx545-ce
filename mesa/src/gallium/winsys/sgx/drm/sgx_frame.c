@@ -118,6 +118,20 @@ sgxws_bo_cpu_written(struct sgxws_bo *bo)
       bo->impl->cpu_dirty = true;
 }
 
+/* once a process: what the texture heap couldn't hold goes to the general
+ * heap */
+static void
+texture_heap_full(void)
+{
+   static bool said;
+
+   if (!said) {
+      said = true;
+      mesa_logw("sgx: the texture heap is full; sampled buffers go to the "
+                "general heap");
+   }
+}
+
 int
 sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
                uint32_t size, uint32_t align)
@@ -135,16 +149,20 @@ sgxws_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgxws_mem mem,
              ? sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, SGXWS_ATTRIBS_COLOR,
                                    size, align)
              : -ENOMEM;
-      if (e)
+      if (e) {
+         texture_heap_full();
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, SGXWS_ATTRIBS_COLOR,
                                  size, align);
+      }
       if (!e)
          sgxws_bo_prepare_target(d, bo);
       return e;
    case SGXWS_MEM_TEXTURE:
       e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_TEXTURE, 0x3, size, align);
-      if (e)
+      if (e) {
+         texture_heap_full();
          e = sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x3, size, align);
+      }
       return e;
    case SGXWS_MEM_VERTEX:
       return sgxws_bo_alloc_heap(d, bo, SGX_HEAP_GENERAL, 0x1, size, align);

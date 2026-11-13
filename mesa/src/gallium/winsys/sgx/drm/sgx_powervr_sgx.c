@@ -523,8 +523,10 @@ psgx_bo_alloc(struct sgxws_dev *d, struct sgxws_bo *bo, enum sgx_heap heap,
    va = va_alloc(dd, heap, bytes, align > 0x1000 ? align : 0x1000);
    simple_mtx_unlock(&dd->lock);
    if (!va) {
-      mesa_loge("sgx: heap %u has no room for %#llx bytes", heap,
-                (unsigned long long)bytes);
+      /* (a full texture heap is the caller's to fall back from) */
+      if (heap != SGX_HEAP_TEXTURE)
+         mesa_loge("sgx: heap %u has no room for %#llx bytes", heap,
+                   (unsigned long long)bytes);
       e = -ENOMEM;
       goto fail_map;
    }
