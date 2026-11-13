@@ -390,6 +390,13 @@ class Asm:
     def phas(self):
         self.i("phas.i #0, #0 [wait=7]")
 
+    def inc32(self, reg, tmp):
+        """reg += 1 over all 32 bits. imae truncates its multiplicands to 16 bits, so
+        `imae r, r, #1, #1` wraps at 0x10000; the 32-bit value must be the addend.
+        tmp is clobbered."""
+        self.i(f"limm r{tmp}, #1")
+        self.i(f"imae r{reg}, r{tmp}, #1, r{reg} [t2=u32]")
+
     def dispatch(self, bit, label):
         """if EUR_CR_EVENT_STATUS (in r2) has `bit` set, branch to `label`"""
         self.i(f"limm r3, #{bit}")
@@ -1810,7 +1817,7 @@ def build(a):
     a.i("wdf")
     a.i("test.and.eq p0, r5, r5")                     # no complete address -> skip
     a.i("(p0) ba rd_wops")
-    a.i("imae r4, r4, #1, #1 [t2=u32]")               # pending + 1
+    a.inc32(4, 3)                                     # pending + 1 (rd_wops reloads r3)
     a.i("st.a.d r5, #0, r4 [moe]")                    # *complete = pending + 1
     a.i("idf")
     a.i("wdf")
@@ -1903,7 +1910,7 @@ def build(a):
     a.i("wdf")
     a.i("test.and.eq p0, r10, r10")                      # no complete addr -> skip
     a.i("(p0) ba xfer_dstsync_done")
-    a.i("imae r9, r9, #1, #1 [t2=u32]")                  # pending + 1
+    a.inc32(9, 4)                                        # pending + 1 (r4 reloaded below)
     a.i("st.a.d r10, #0, r9 [moe]")                      # *write-ops-complete = pending + 1
     a.i("idf")
     a.i("wdf")
