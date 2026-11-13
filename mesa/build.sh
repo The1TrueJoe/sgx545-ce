@@ -56,6 +56,11 @@ if [ "$(cat "$TREE/.sgx-patched" 2>/dev/null)" != "$PATCHSUM" ]; then
 fi
 # the overlay, every build
 (cd "$HERE/src" && tar cf - .) | (cd "$TREE/src" && tar xf -)
+# the fixed USSE programs, assembled by sgx-asm (built from this tree's sgx.xml)
+if [ -z "${SGX_ASM:-}" ]; then
+	SGX_MESA_TREE="$TREE" sh "$REPO/ukernel/sgx-asm.sh" "$B/sgx-asm" >/dev/null
+	export SGX_ASM="$B/sgx-asm/sgx-asm"
+fi
 python3 "$REPO/tools/gen/mkusse.py" > "$TREE/src/gallium/winsys/sgx/drm/sgx_usse_progs.h"
 # the powervr_sgx uAPI (Mesa carries uAPI headers in include/drm-uapi) and the
 # packers for its command streams, from their one definition
