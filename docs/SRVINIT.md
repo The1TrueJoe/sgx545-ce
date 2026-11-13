@@ -215,24 +215,13 @@ USE code base 15 (the kernel code heap, set by the script below) plus the
 offset in 8-byte instructions << 4, as in `docs/PDS.md`. The entry offsets
 are **constant** (microkernel entry points); the words are **computed**.
 
-| program | data | code |
-|---|---|---|
-| pds0 | ds0[0] doutu(0xd60), ds0[1] 2 | `movs doutu, ds0[0], ds0[1], ds1[0], ds0[0]`; halt |
-| pds1 | ds0[0] TA3D control address, ds0[1] 0x3c0003f, ds0[2] `(off·2 & 0xffff0) \| ((seg+15) & 15)` for 0xdf0 (no bit 27), ds0[3] 2 | if in0 == 0, first `movs doutd` (the TA3D address, control 0x3c0003f); then `movs doutu` to 0xdf0 |
-| pds2 | as pds0, for 0xe20 | as pds0 |
-| pds3 | ds0[0] 2; ds1[0..2] 0, 0x100, 0x200; ds1[3..5] doutu(0x7050, 0x2cd0, 0x5670); ds1[6] doutu(0x30); ds1[7] 0xffffff; ds1[8] 0x100; ds1[9..11] 0x400090, 0x200, 0x300400 | `douta` in0, in2, in4 to PA0–PA2 (DOUTA control 0 / 0x100 / 0x200: bits 8+ pick the register). With t = in1 & 0xffffff: any bit of 0x100 → 0x30. Otherwise the first of 0x400090, 0x200, 0x300400 with a bit in t selects 0x7050, 0x2cd0 or 0x5670, if t has no other bit and in0 is 0. Anything else → 0x30. 40 instructions. |
-| pds4 | ds0[0,2,4] doutu(0x73a0, 0x2ea0, 0x5740), ds0[1,3,5] 2; ds1[0] 0, ds1[1] 0x200, ds1[3] 0x4000f, ds1[4] 0x120080 | `douta` in0 to PA0 and in4 to PA2; in0 & 0x4000f → 0x73a0, else in0 & 0x120080 → 0x2ea0, else 0x5740. 14 instructions. |
-
-The word 2 beside each DOUTU word 0 is DOUTU word 1: the MOVS swizzle sends
-it as w1 (pds3's `07003885` sends ds1[3], ds0[0] = 2, ds0[1]; confirmed by
-the PDS session, `docs/PDS.md`). The 0x100 and 0x200 in pds3 and pds4 are
-DOUTA control words. 0x4000f, 0x120080 and 0x3c0003f are not decoded.
-
-Who points at which program: `pds0` is the event program (script register
-0xa68 below); `pds1`, `pds2`, `pds3` and `pds4` are referenced only from the
-microkernel's own immediates. The masks, DOUTA control words and data
-constants are **constant** (from libsrv_init); what they mean to the
-microkernel (which event bits are which) is not decoded.
+The DDK's build uses five such programs: two only start a microkernel entry
+(a DOUTU and a halt), one DMAs the TA3D control block into the secondary
+attributes before starting an entry, and two dispatch hardware events and the
+microkernel's deferred tasks to their entries. `pds0` is the event program
+(script register 0xa68 below); the others are referenced only from the
+microkernel's own immediates. The open microkernel needs only entry programs,
+which powervr_sgx writes itself (`pvrsgx_pds.c`).
 
 ## SGX_BRIDGE_INIT_INFO
 

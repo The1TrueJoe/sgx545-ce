@@ -10,11 +10,11 @@ bytes.
 | `ukernel.py` | the microkernel in USSE assembly (entries as labels; register-programming tables = docs/UKERNEL.md §7) |
 | `build.py` | assembles it with `sgx-asm` (built from `sgx.xml` by `sgx-asm.sh`; `SGX_ASM` points at it) into the firmware image, plus a JSON manifest of entry byte-offsets |
 | `test_emu.py` | drives each entry through the offline emulator (`tools/ukernel/`) and asserts docs/UKERNEL.md's behaviour; no GPU, no trace |
-| `run_ours.py` | runs ours through a whole frame and **diffs the core registers it programs against the DDK's**, per phase |
+| `run_ours.py` | runs ours through a whole frame and lists the core registers it programs, per phase |
 | `build.sh` | build + test |
 
     ukernel/build.sh                                    # build + the no-dependency tests
-    python3 ukernel/run_ours.py TRACE --ddk DDK_FW      # frame-level match vs the DDK
+    python3 ukernel/run_ours.py TRACE                   # the registers a frame programs
 
 `TRACE` is a pvrtrace log (a DDK capture, or a `tools/gen` `frame-fake -t`
 run, which builds on any machine). `srvinit` will grow a mode that loads this
