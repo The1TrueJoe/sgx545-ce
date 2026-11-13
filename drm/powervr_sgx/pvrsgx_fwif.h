@@ -49,7 +49,11 @@ static_assert(sizeof(struct pvrsgx_fw_ta3d_ctl) == 0x100);
 /* struct pvrsgx_fw_ta_cmd.ta_flags */
 #define PVRSGX_TA_FIRST_KICK		BIT(0)
 #define PVRSGX_TA_LAST_KICK		BIT(1)
-#define PVRSGX_TA_FIRST_RENDER		BIT(4)	/* the RT dataset's first render */
+/*
+ * Invalidate the USE code cache before the TA: the DDK's microkernel tests it;
+ * the open one invalidates before every job and ignores it.
+ */
+#define PVRSGX_TA_INVAL_USE		BIT(4)
 #define PVRSGX_TA_FLAGS_BASE		0x60	/* set on every kick */
 
 /* struct pvrsgx_fw_ta_cmd.ta_flags2 */

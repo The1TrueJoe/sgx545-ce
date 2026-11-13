@@ -836,7 +836,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	cmd->size = sizeof(*cmd);
 	cmd->ta_flags = PVRSGX_TA_FLAGS_BASE | (first ? PVRSGX_TA_FIRST_KICK : 0) |
 			(last ? PVRSGX_TA_LAST_KICK : 0) |
-			(first && !f ? PVRSGX_TA_FIRST_RENDER : 0);
+			(first && !f ? PVRSGX_TA_INVAL_USE : 0);
 	cmd->bg_pds[0] = pds_word(pds, in->bg_pds_secondary_addr, in->bg_pds_secondary_rows);
 	cmd->bg_pds[1] = BG_PDS_MIDDLE;
 	cmd->bg_pds[2] = pds_word(pds, in->bg_pds_primary_addr, in->bg_pds_primary_rows);
