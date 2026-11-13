@@ -3,7 +3,7 @@
 Follow-up to `2026-10-28-1230-hwr-sleep-in-timer.md`: the driver's two recovery
 callers ran in softirq context and slept there. This round moves them to
 workqueues. The same test kernel also carries srvinit's DEVINITPART2 dispatch
-fix. One CI kernel, booted once from RAM on the EA3, tested both.
+fix. One CI kernel, booted once from RAM on the CE5300 board, tested both.
 
 ## The change (um-re 5d1ae00)
 

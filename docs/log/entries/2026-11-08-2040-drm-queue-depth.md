@@ -1,6 +1,6 @@
 # Deep queues: no hang at 6, 32 or 64 renders in flight
 
-EA3 (ea3-v2) RAM boot of 3d0604b with `powervr_sgx_frame` from 3190030, 2026-11-08
+CE5300 board (ce5300-v2) RAM boot of 3d0604b with `powervr_sgx_frame` from 3190030, 2026-11-08
 ~20:40 UTC. Nothing flashed, and p1 was clean afterwards.
 
 The question came from Minecraft with Mesa's `SGX545_SLOTS=6`: one job's commands were

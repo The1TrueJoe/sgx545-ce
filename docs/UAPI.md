@@ -115,7 +115,7 @@ An imported dma-buf is a data object. It maps in every heap except the USSE ones
 addresses 32 bits of physical memory, so without an IOMMU `VM_MAP` refuses an import
 with a page above 4 GiB (`-EFAULT`): the DMA layer would have bounced that page, and the
 GPU would write the bounce copy. The GPU doesn't snoop the CPU caches, not even through
-cache-consistent PTEs (EA1, 2026-11-09), and an import's pages may be cached on the CPU
+cache-consistent PTEs (CE5310 board, 2026-11-09), and an import's pages may be cached on the CPU
 side. **So a job must list every import it reads or writes in its BO list** (`READ` or
 `WRITE`), on explicit sync too: the kernel flushes each listed import before the job and
 again once it is done, and only those. An unlisted import gets no coherence: the GPU may

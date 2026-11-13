@@ -12,7 +12,7 @@ before/after SGX-recovery count and `uptime` on the box:
   sanity clean, then the store wedges/reboots                              -> store IS a DoS
   sanity itself wedges                                                     -> box wasn't good; abort
 
-The EA1 has no smart plug: if the store wedges and HW recovery doesn't bring it back, stop."""
+The CE5310 board has no smart plug: if the store wedges and HW recovery doesn't bring it back, stop."""
 from iso import T, out
 
 DIRBASE = 0xc84

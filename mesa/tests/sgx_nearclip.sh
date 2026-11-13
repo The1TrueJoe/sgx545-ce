@@ -1,6 +1,6 @@
 #!/bin/sh
 # triangles crossing the eye plane (a vertex behind the camera, as Minecraft's
-# first-person arm has), textured, against the DDK on the EA1
+# first-person arm has), textured, against the DDK on the CE5310 board
 cd /tmp/mesa
 printf '#!/bin/sh\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\n' > ddk-probe.sh; chmod +x ddk-probe.sh
 export PROBE_TEX=1 PROBE_ATTRS=2 PROBE_TEXPAT=1 PROBE_TEXSIZE="16 16"

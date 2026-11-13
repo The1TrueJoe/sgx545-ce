@@ -40,4 +40,4 @@ destination sync update and host interrupt) are all reproduced and
 register/sync-identical to the DDK for a single replayed frame. What remains
 is the `srvinit --ours` loader (so the box starts our image), and — for
 multi-frame/Minecraft, not a single frame — the fuller 3D teardown. Then the
-EA3, step by step. No hardware has been touched.
+CE5300 board, step by step. No hardware has been touched.

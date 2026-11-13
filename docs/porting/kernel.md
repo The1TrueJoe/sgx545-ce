@@ -195,7 +195,7 @@ powervr_sgx_hang -n 3
 rmmod powervr_sgx
 ```
 with every frame right from suspended, the hang rounds back to suspended afterwards, and
-`rmmod` clean while suspended ([log](../log/entries/2026-11-03-1700-drm-runtime-pm-ea1.md)).
+`rmmod` clean while suspended ([log](../log/entries/2026-11-03-1700-drm-runtime-pm-ce5310.md)).
 
 Traps:
 - The first runtime-PM run froze the board: a register read on a suspended core
@@ -228,7 +228,7 @@ Traps:
   caches with the next command, or it reads the last client's programs (commit 8da962c,
   `powervr_sgx_blit -2`).
 - The SGX doesn't snoop CPU caches: flush the imports a job lists before it runs and
-  after it is done ([log](../log/entries/2026-11-04-0100-drm-prime-ea1.md)).
+  after it is done ([log](../log/entries/2026-11-04-0100-drm-prime-ce5310.md)).
 - Unbind must free what freeing releases: a freed object kept its VM, the VM its PB, and
   `drm_mm` wasn't clean at `rmmod` (commit 4ae6750, KUnit `powervr_sgx_kobj`).
 - A VM's mappings must go when its handle and its last context are gone, once its jobs

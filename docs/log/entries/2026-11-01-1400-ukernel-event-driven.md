@@ -39,5 +39,5 @@ cross-builds; the DDK `-f` path is untouched.
 
 This is the hardware path, offline-complete. What remains for M1 is the
 missing commands (transfer, cleanup, power, get-misc-info, HWR re-init) and
-the full render teardown with multi-render bookkeeping, then the EA3 run when
+the full render teardown with multi-render bookkeeping, then the CE5300 board run when
 the box is back.

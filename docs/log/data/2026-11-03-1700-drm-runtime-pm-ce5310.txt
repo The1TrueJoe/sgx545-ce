@@ -1,0 +1,69 @@
+# powervr_sgx on the CE5310 board (ce5310-v1, board), RAM boot of 1d170e9, 2026-11-03 ~17:00 UTC, DDK microkernel, runtime_pm=1
+
+# ---- load, idle
+suspended
+auto
+firmware running: 0 lost: 0 resets: 0 irqs: 0
+hostctl init 0x1 power 0x2c cleanup 0x0 uk-lockups 0 int 0x0/0x0 assert 0x0
+powered: 0
+irq=26
+ 26:          0          0          0          0  IO-APIC   0-fasteoi   powervr_sgx
+
+# ---- the first resume: powervr_sgx_test -v submit-null-job
+submit-null-job
+  null job signalled in 19505 us
+  ok
+1/1 passed
+active
+suspended
+
+# ---- 20 frames, each from suspended; uAPI; blits; frames on 2 contexts
+20/20 frames from suspended right
+21408
+37980
+33/33 passed
+all blits right
+20/20 frames right
+firmware running: 1 lost: 0 resets: 0 irqs: 132
+
+# ---- powervr_sgx_hang -n 3
+round 0: render right
+round 0: mixed render + transfer right
+  render from suspended: 17003 us
+round 0: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  devcoredump: 27790 bytes
+round 0: hang recovery right
+round 1: render right
+round 1: mixed render + transfer right
+  render from suspended: 13185 us
+round 1: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 1 -> 2
+  devcoredump: 27790 bytes
+round 1: hang recovery right
+round 2: render right
+round 2: mixed render + transfer right
+  render from suspended: 13108 us
+round 2: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 2 -> 3
+  devcoredump: 27790 bytes
+round 2: hang recovery right
+all right
+exit 0
+[   73.390484] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 4, consumed 4); resetting
+[   73.410778] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   77.166474] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 4, consumed 4); resetting
+[   77.186775] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   81.070480] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 4, consumed 4); resetting
+[   81.090789] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 3 irqs: 210
+suspended
+
+# ---- rmmod while suspended, reload, frames, rmmod
+suspended
+rmmod-ok
+reinsmod-ok
+suspended
+2/2 frames right
+suspended
+rmmod2-ok

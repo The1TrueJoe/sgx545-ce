@@ -1,7 +1,7 @@
 # Idle "0x2 tasks" HWR: root cause is the missing active-power idle signal (offline analysis)
 
-Offline analysis of the residual from `2026-11-02-2100-ukernel-ea1-kick-serviced.md`
-(no hardware this entry; the EA1 is mesa-gallium's). Root cause found; a concrete
+Offline analysis of the residual from `2026-11-02-2100-ukernel-ce5310-kick-serviced.md`
+(no hardware this entry; the CE5310 board is mesa-gallium's). Root cause found; a concrete
 fix is proposed, with one design choice for the next step.
 
 ## What SGXOSTimer actually checks
@@ -10,7 +10,7 @@ fix is proposed, with one design choice for the next step.
 
 - If the device is **powered down** (`SGXIsDevicePowered` false) it resets its
   counter and does nothing — **no lockup check while powered down.**
-- Otherwise it reads `reg(ui32EDMTaskReg0) ^ reg(ui32EDMTaskReg1)` — on the EA1
+- Otherwise it reads `reg(ui32EDMTaskReg0) ^ reg(ui32EDMTaskReg1)` — on the CE5310 board
   `srvinit` sets these to **0xb14 / 0xb20** (`srvinit.c:542`). If that value is
   **unchanged for 3 consecutive ticks** (and no reset happened in between), it
   declares `SGX lockup (0x%x tasks)` and triggers HWR. "0x2 tasks" is just that
@@ -92,10 +92,10 @@ long-term behavior. Recommend landing A, HW-confirming the idle GPU powers down
 The offline emulator models neither the active-power MISR nor power-down, so it
 can only check that the idle path writes `hostctl[8] |= 0x2` and raises
 `SW_EVENT` — the actual power-down and the silenced watchdog are HW-only. So
-this fix wants an EA1 slot to confirm, coordinated with mesa-gallium under the
+this fix wants an CE5310 board slot to confirm, coordinated with mesa-gallium under the
 gpu.lock rules.
 
-## HW confirmation (EA1, 2026-11-02 ~21:27 real UTC) — fix A works
+## HW confirmation (CE5310 board, 2026-11-02 ~21:27 real UTC) — fix A works
 
 Implemented fix A: at `kick_end`, when the kernel CCB is empty (`WO == RO`) and
 nothing is in flight (`SC_INFLIGHT == 0`, `SC_XFER == 0`), set
@@ -107,13 +107,13 @@ transfers are untouched.
 Offline: `test_emu` 5/5, `run_ours` 5/5, `test_commands` 5/5 including a new
 `active-power` guard (idle raises ACTIVE_POWER + the host IRQ).
 
-On the EA1 (cold boot, `srvinit -o`): `srvinit` returns rc=0 "microkernel
+On the CE5310 board (cold boot, `srvinit -o`): `srvinit` returns rc=0 "microkernel
 started" (kick still serviced), and over ~60 s idle the kernel logged **0
 `SGXOSTimer detected SGX lockup` lines and 0 `HWRecoveryResetSGX`** — versus 6+
 within the first 20 s before the fix. Load settled to 0.03. The watchdog is
 silent because the host powered the idle GPU down (`SGXIsDevicePowered` false),
 which is exactly the active-power handshake the fix adds. Evidence:
-`docs/log/data/2026-11-02-2145-ea1-active-power-confirmed.dmesg.log`.
+`docs/log/data/2026-11-02-2145-ce5310-active-power-confirmed.dmesg.log`.
 
 Fix A is the queue-drain idle signal; the render-idle case (raise the same at
 the end of `render_done`) and the DDK-style timer-based active-power (option B)

@@ -1,5 +1,5 @@
 #!/bin/sh
-# on the EA3: run a GPU client under the GPU lock, and kill it (and every
+# on the CE5300 board: run a GPU client under the GPU lock, and kill it (and every
 # glretrace/java) at the first new SGX recovery, so one bad frame costs one
 # recovery and not a storm that wedges the GPU. GPUWATCH_KILL=0 only counts
 # them (a reference run that has to finish).

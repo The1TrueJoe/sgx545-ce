@@ -1,6 +1,6 @@
 #!/bin/sh
 # texture reads the PDS does before the shader runs (non-dependent), against
-# the DDK on the EA1: a projected read of a whole vec4 varying and a plain
+# the DDK on the CE5310 board: a projected read of a whole vec4 varying and a plain
 # read of a vec4 varying's .xy (gl4es' fixed-function texturing)
 cd /tmp/mesa
 printf '#!/bin/sh\nLD_PRELOAD=/opt/sgx-i386/usr/lib/sgx-busidshim.so exec /opt/sgx-i386/lib/ld-linux.so.2 --library-path /opt/sgx-i386/usr/lib:/opt/sgx-i386/lib /tmp/mesa/probe-i386\n' > ddk-probe.sh; chmod +x ddk-probe.sh

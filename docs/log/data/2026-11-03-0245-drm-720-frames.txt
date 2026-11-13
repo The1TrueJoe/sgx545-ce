@@ -1,4 +1,4 @@
-# powervr_sgx frame runs by process order, EA1 RAM boots, 2026-11-03
+# powervr_sgx frame runs by process order, CE5310 board RAM boots, 2026-11-03
 
 ## driver before the TA-flag 0x10 change (4401757), one boot
 ### process 1: powervr_sgx_frame -r -k 2 -n 10 (256x256)

@@ -1,7 +1,7 @@
-# TA-finish event never acknowledged: the microkernel re-triggered ta_finished forever (EA1, fixed)
+# TA-finish event never acknowledged: the microkernel re-triggered ta_finished forever (CE5310 board, fixed)
 
-A chain sentinel on the EA1 located why the open microkernel's first TA/3D frame
-stalled (prior entry: `2026-11-02-2150-ukernel-ea1-first-frame`), and the fix
+A chain sentinel on the CE5310 board located why the open microkernel's first TA/3D frame
+stalled (prior entry: `2026-11-02-2150-ukernel-ce5310-first-frame`), and the fix
 let the frame advance one whole stage — from "stuck at kick 1" to "kick 2's TA
 runs and hangs".
 
@@ -16,7 +16,7 @@ constant to a free control-block scratch word that lands on the kernel's
 
 ## What the markers showed (before the fix)
 
-`data/2026-11-03-0020-ea1-sentinel-ta-finish.dmesg.log`:
+`data/2026-11-03-0020-ce5310-sentinel-ta-finish.dmesg.log`:
 
 ```
 (T3C-D0) 0x3200AB10 0x00000000 0x00000000 0x0000C01C   <- do_ta reached CR_TA_KICK
@@ -56,7 +56,7 @@ test_commands 5/5, run_ours fake/v1/v2/xfer/xfer-rect all MATCH).
 
 ## What the fix did on HW (verification run)
 
-`data/2026-11-03-0025-ea1-tafinish-ack-kick2-lockup.dmesg.log`, same cold-boot
+`data/2026-11-03-0025-ce5310-tafinish-ack-kick2-lockup.dmesg.log`, same cold-boot
 recipe with the fixed microkernel:
 
 ```
@@ -77,9 +77,9 @@ is harmless now, but is **unverified** on HW because `render_done` never runs ye
 
 ## Box / method
 
-EA1, cold boot each run (plain `reboot`, no plug), both sgxinit boot scripts held
+CE5310 board, cold boot each run (plain `reboot`, no plug), both sgxinit boot scripts held
 off for the srvinit window, restored + rebooted to normal after. `gpu.lock` taken
 with `flock` (mesa-gallium handed the slot off and stood down; the flock file is
-persistent, never `rm`ed). EA1 clock runs ~5m fast; times above are real UTC.
+persistent, never `rm`ed). CE5310 board clock runs ~5m fast; times above are real UTC.
 Box left healthy (0 lockups, DDK boot). Commit: the acknowledge only; sentinel
 markers reverted.

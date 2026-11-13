@@ -1,0 +1,92 @@
+# powervr_sgx on the CE5300 board (ce5300-v2, board), RAM boots, 2026-11-03 ~06:30 UTC, DDK microkernel
+# 1) 37dca03, runtime_pm=0; 2) 37dca03, runtime_pm=1: first resume froze the SoC (Bench power-cycle); 3) 1d170e9 (no quiesce after a clean stop), runtime_pm=1
+
+# ---- 1) runtime_pm=0: uAPI, frames, blits, powervr_sgx_hang -n 3
+33/33 passed
+20/20 frames right
+all blits right
+round 0: render right
+round 0: mixed render + transfer right
+  no runtime PM
+round 0: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  devcoredump: 27799 bytes
+round 0: hang recovery right
+round 1: render right
+round 1: mixed render + transfer right
+  no runtime PM
+round 1: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 1 -> 2
+  devcoredump: 27794 bytes
+round 1: hang recovery right
+round 2: render right
+round 2: mixed render + transfer right
+  no runtime PM
+round 2: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 2 -> 3
+  devcoredump: 27795 bytes
+round 2: hang recovery right
+all right
+exit 0
+[  351.713865] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 668, consumed 668); resetting
+[  353.889808] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 16, consumed 16); resetting
+[  356.001690] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 16, consumed 16); resetting
+firmware running: 1 lost: 0 resets: 3 irqs: 125
+kernel PD 0x02dd3000 idle PD 0x04946000
+
+# ---- 2) runtime_pm=1 on 37dca03: suspended (power 0x2c, powered 0); powervr_sgx_test submit-null-job -> no reply; serial ends at the device open:
+#   [  369.146476] powervr_sgx 0000:01:02.0: [drm] shader validation (D9) not implemented: clients are not isolated
+
+# ---- 3) 1d170e9, runtime_pm=1: a NULL job from suspended:
+#   null job signalled in 19592 us; runtime_status active, then suspended 1 s later
+# 20 frames, each from suspended; uAPI; blits; frames on 2 contexts
+20/20 frames from suspended right
+10949
+59902
+33/33 passed
+all blits right
+20/20 frames right
+firmware running: 1 lost: 0 resets: 0 irqs: 132
+
+# ---- powervr_sgx_hang -n 3 (idle case + forced hangs) under runtime PM
+round 0: render right
+round 0: mixed render + transfer right
+  render from suspended: 16181 us
+round 0: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 0 -> 1
+  devcoredump: 27790 bytes
+round 0: hang recovery right
+round 1: render right
+round 1: mixed render + transfer right
+  render from suspended: 13339 us
+round 1: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 1 -> 2
+  devcoredump: 27790 bytes
+round 1: hang recovery right
+round 2: render right
+round 2: mixed render + transfer right
+  render from suspended: 13398 us
+round 2: idle (runtime PM) right
+  faulting render: wait 0, B state 1, resets 2 -> 3
+  devcoredump: 27790 bytes
+round 2: hang recovery right
+all right
+exit 0
+[   81.832411] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 4, consumed 4); resetting
+[   81.852684] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   85.861110] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 4, consumed 4); resetting
+[   85.881380] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+[   89.762019] powervr_sgx 0000:01:02.0: [drm] *ERROR* job timed out (ccb 4, consumed 4); resetting
+[   89.781285] powervr_sgx 0000:01:02.0: [drm] microkernel started again
+firmware running: 1 lost: 0 resets: 3 irqs: 210
+suspended
+
+# ---- rmmod while suspended, reload, frames, rmmod
+suspended
+rmmod-ok
+[   89.785261] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+[   96.629994] powervr_sgx 0000:01:02.0: [drm] microkernel: core rev 0x1000e id 0x1150000, DDK 0x10711 build 862890, build options 0x60218
+reinsmod-ok
+suspended
+2/2 frames right
+rmmod2-ok

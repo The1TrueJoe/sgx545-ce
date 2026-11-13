@@ -3,11 +3,11 @@
 The P1-P4 run (`docs/log/entries/2026-11-02-0710-isolation-p1p4.md`) left one question open and
 flagged it critical (gap G1): a client USSE task can *read* `EUR_CR_*` registers, but does a
 *write* to an **effective** register take effect? Joseph decided D9 on it — run the register-write
-test first, on the EA1, before committing to shader validation — naming `BIF_DIR_LIST_BASE0`
+test first, on the CE5310 board, before committing to shader validation — naming `BIF_DIR_LIST_BASE0`
 (0xc84), the page-directory base the BIF requestors translate through: if a client can `str` its
 own directory there, the per-VM page directory the whole uAPI leans on is worthless.
 
-Answer, on the EA1 (core rev 1.0.14): **the write does not change the register — a client cannot
+Answer, on the CE5310 board (core rev 1.0.14): **the write does not change the register — a client cannot
 repoint translation this way.** The store grants no translation escape. Whether a client register
 store is *otherwise* harmful (a denial of service) was **undetermined on the first run** (the box
 was concurrently being wedged and rebooted by another session's dEQP chunk, so the reboot that
@@ -69,9 +69,9 @@ comes straight from the frame's own before/after reads, independent of anything 
 
 ## Was the store a denial of service? Undetermined — the run was confounded
 
-Minutes after, the EA1 went unreachable and rebooted. The first write-up read that as the store wedging
+Minutes after, the CE5310 board went unreachable and rebooted. The first write-up read that as the store wedging
 the box into a reboot loop needing a power cycle. Reconciling with the mesa-gallium session's logs showed
-both wrong. (The EA1's clock runs ~5 min 11 s fast, so box-read times — the lock mtime, `uptime`, box
+both wrong. (The CE5310 board's clock runs ~5 min 11 s fast, so box-read times — the lock mtime, `uptime`, box
 `dmesg` — are ~5 min ahead; the table is real UTC, from mesa's Mac clock.)
 
 | real UTC | event |
@@ -84,7 +84,7 @@ both wrong. (The EA1's clock runs ~5 min 11 s fast, so box-read times — the lo
 | ~20:17 | **I take the lock (box-clock mtime 20:22) and run both suites** — safe clean, then the one store, `render done`, register unchanged |
 | ~20:17:35–20:18:06 | ~70 SGX recoveries while my test (and WPE) ran; mesa had nothing running (its chunk died with the box) |
 | ~20:19:30 | **reboot again** (box clock 20:24:30); stable after |
-| ~20:46 | Joseph power-cycles the EA1 (cutting a fresh mesa chunk started ~20:45:25) — 29 min after my store, unrelated to it |
+| ~20:46 | Joseph power-cycles the CE5310 board (cutting a fresh mesa chunk started ~20:45:25) — 29 min after my store, unrelated to it |
 
 So the **first wedge and the ~20:17 reboot were mesa's dEQP, before my store ever ran** — its flock was
 held continuously ~20:04:20 to the box's death, so nothing of mine could overlap. My store ran just after
@@ -149,7 +149,7 @@ is unchanged.
 
 ## Box
 
-EA1 (10.0.0.110 — the EA1's address now; the fleet note's 10.0.0.127 is stale). Ran as a second client
+CE5310 board (board — the CE5310 board's address now; the fleet note's board is stale). Ran as a second client
 beside the WPE compositor under `flock /tmp/gpu.lock`; mesa-gallium and open-ukernel warned first. The
 box's instability in this window was a concurrent dEQP chunk's, not established as the store's; it
 self-recovered by 20:24 with no power cycle. Stopped after the one store, not retried then, per the

@@ -21,7 +21,7 @@ The ~35% lockup_TA looked like a two-event-task race (kick 2 racing kick 1's TA
 on the shared flag / CCB). ta3d-state's race_interleave.py sweeps every two-task
 interleaving and the current code fails 283+26 of them with a double 0x200 kick.
 A hardware `lock #1`/`release #1` mutex (event entry / every a.end()) closes all
-of them: 358/358 + 61/61. But on the EA3 it made NO difference — 7/10 frames vs
+of them: 358/358 + 61/61. But on the CE5300 board it made NO difference — 7/10 frames vs
 6/10, and the failed frames show the identical lockup_TA signature (EVENT_STATUS2
 0x80, 0x2 tasks, isp_end_tile no, BIF_FAULT 0). So the two-task interleave is not
 what fails on hardware: either the EDM runs one event task at a time, or HW

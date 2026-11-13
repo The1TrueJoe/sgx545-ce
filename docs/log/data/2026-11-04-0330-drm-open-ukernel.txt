@@ -1,5 +1,5 @@
 # powervr_sgx on the open microkernel (um-re 273225c, ukernel md5 ce4f372c, wrapped by drm/tools/mkukfw.py, features 0)
-# EA1 RAM boot of b24d0aa (run 41757864040), 2026-11-04 ~03:33 UTC
+# CE5310 board RAM boot of b24d0aa (run 41757864040), 2026-11-04 ~03:33 UTC
 
 # ---- load
 [   22.449368] powervr_sgx 0000:01:02.0: [drm] powervr_sgx/sgx545_ukernel.bin: open microkernel ukernel-273225c, interface 1.0, features 0x0

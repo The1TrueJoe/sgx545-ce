@@ -1,11 +1,11 @@
 # Minecraft on our driver: no flicker, and three times as fast
 
-After first light in a world (entry `2026-10-28-2100-minecraft-world-ea1`), the
-user watched it on the EA1's monitor. The panel flickered, and the title
+After first light in a world (entry `2026-10-28-2100-minecraft-world-ce5310`), the
+user watched it on the CE5310 board's monitor. The panel flickered, and the title
 screen seemed to redraw, rotate and scale. Ours was also several times slower
 than the DDK.
 
-![a jungle in the bench world on our driver: vines, water, grass](../img/2026-10-28-2250-ea1-bench-world.png)
+![a jungle in the bench world on our driver: vines, water, grass](../img/2026-10-28-2250-ce5310-bench-world.png)
 
 ## Measuring like for like
 
@@ -45,7 +45,7 @@ In the bench world the DDK runs at **28-37 FPS**.
   equals the frame, 0 of 345,600 pixels off. fb0 is simplefb and can't pan,
   so there is no flipping.
 
-  ![six panel dumps 0.3 s apart: every one a finished frame](../img/2026-10-28-2130-ea1-backbuffer-burst.png)
+  ![six panel dumps 0.3 s apart: every one a finished frame](../img/2026-10-28-2130-ce5310-backbuffer-burst.png)
 
 - **A stale program in every masked clear** (`957dbd7`). The clear's
   color-masked PDS programs were made on first use, in frame memory that the
@@ -91,7 +91,7 @@ The render thread's CPU is the limit. A profile of that thread:
 
 ## Later the same night: 10 -> 19 FPS
 
-![the bench world at ~19 FPS](../img/2026-10-29-0000-ea1-bench-19fps.png)
+![the bench world at ~19 FPS](../img/2026-10-29-0000-ce5310-bench-19fps.png)
 
 | step | ours, FPS | what changed |
 |---|---|---|

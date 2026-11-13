@@ -1,4 +1,4 @@
-# powervr_sgx D9 shader validator on the EA3 (ea3-v2), RAM boot of b6d98a3 (tests: cd78c67), 2026-11-03 ~07:30 UTC, DDK microkernel
+# powervr_sgx D9 shader validator on the CE5300 board (ce5300-v2), RAM boot of b6d98a3 (tests: cd78c67), 2026-11-03 ~07:30 UTC, DDK microkernel
 # uAPI suite (38 tests incl. code-bo, upload-code-*), frames/blits/hang with every shader through UPLOAD_CODE into read-only code objects, then E1b (powervr_sgx_hang -E)
 
 HELD-BY-US

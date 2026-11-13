@@ -1,7 +1,7 @@
 """Patch libGLESv2.so.1.7.862890 so a discarding shader drawn as points or
 lines takes the triangle path (ISPA pass type 4 or 2, atst8 feedback,
 ctx+0x7a0 = 1) instead of the depth-only path (pass type 5, ctx+0x7a0 = 9),
-which renders a broken frame on the SGX545 (EA3, 2026-10-28).
+which renders a broken frame on the SGX545 (CE5300 board, 2026-10-28).
 
 At 0x39d55 (FUN_00049a00) the driver reads the primitive (ctx+0xc74) and,
 for points/lines, switches to pass type 5. Replace the read with

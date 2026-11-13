@@ -4,7 +4,7 @@ Where the time goes on the Xfce desktop (Xorg with glamor, xfwm4 compositing
 through GLX) while a person uses it, on a CE5300 box.
 
 ```
-BOX=10.0.0.110 BOX_PASS=... lag-run.sh ../../../../../mg-stage/x86_64-gl-HASH/usr OUT \
+BOX=board BOX_PASS=... lag-run.sh ../../../../../mg-stage/x86_64-gl-HASH/usr OUT \
     default slots3 nocomp xpresent vbloff software
 ```
 
@@ -52,15 +52,15 @@ For each workload the summary has:
   call chains). Use a Mesa build with debug info (`mesa/build.sh` keeps it)
   so the profiles name the driver's functions.
 
-## What the EA1 can't show
+## What the GPU board can't show
 
 - **Cedarview's scanout.** On gma500, lazy scanout moves a window-system
-  buffer to the display device, and the CPU copies each frame. The EA1 scans
+  buffer to the display device, and the CPU copies each frame. The board scans
   out of simpledrm, where the kernel copies the damage at dirtyfb. The copy's
   cost on a tester's machine shows only there: their `SGX_DEBUG=stats` "into
   scanout" latency and Xorg's CPU share.
 - **Input to scanout.** That needs a camera or a light sensor. Render latency
   and the frames a second the compositor reaches are the proxies here.
 - The testers' resolutions (1366x768 and 1920x1080 laptops and monitors)
-  unless the EA1's monitor is set to them, and their CPUs (N2600, D2500:
+  unless the board's monitor is set to them, and their CPUs (N2600, D2500:
   the same Saltwell class as the CE5300).

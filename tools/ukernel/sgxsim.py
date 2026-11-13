@@ -21,7 +21,7 @@ KCODE = 0x30000000
 KDATA = 0x32000000
 
 # srvinit's allocations (docs/SRVINIT.md, "Allocations"), at the addresses the
-# EA3 gave
+# CE5300 board gave
 A = {
     "kccb": 0x32000000, "ccbctl": 0x32002000, "kicker": 0x32002010,
     "ta3d": 0x32003000, "hostctl": 0x32003100, "misc": 0x32003160,
@@ -240,7 +240,7 @@ def install_hw_model(r):
     ukernel/run_ours.py."""
     r.v[0x138] = 0
 
-    # DIR_LIST_BASE0 (0xc84) holds the kernel/host page directory on HW (EA3
+    # DIR_LIST_BASE0 (0xc84) holds the kernel/host page directory on HW (CE5300 board
     # baseline 2026-11-03 = 0x01d77000), non-zero and != the ctx PD (PD_PHYS).
     # The DDK's dir-list slot allocator reads it to decide the slot: != ctx PD ->
     # take slot 1 (DIR_LIST_BASE1 0xc38 = ctx PD, BANK0 TA/3D -> 1). Seed it so
@@ -301,7 +301,7 @@ def install_hw_model(r):
             # registers are programmed — the DDK writes them (0x204..) before
             # 0x694/0x698. A microkernel that loads the DPM too early never sees
             # the 0x240 done event and hangs; model that so run_ours catches it
-            # (EA1 HW 2026-11-02: do_ta stalled in dpm_load before the TE regs).
+            # (CE5310 board HW 2026-11-02: do_ta stalled in dpm_load before the TE regs).
             if not regs.v.get(0x204):
                 return
             b = 0

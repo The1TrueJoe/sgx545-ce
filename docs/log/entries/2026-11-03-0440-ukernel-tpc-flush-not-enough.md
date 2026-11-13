@@ -27,7 +27,7 @@ necessary but NOT sufficient; B and C are still missing.
 ## Next
 
 Implement B (DPM handover) and C (background PDS words) — getting the exact
-bgblock-address derivation and B ordering from ta3d-state — then one EA1 run of
+bgblock-address derivation and B ordering from ta3d-state — then one CE5310 board run of
 A+B+C together. Held uncommitted with A (commit the full 3D-start fix once it
-renders). Data: `data/2026-11-03-0440-ea1-tpcflush-do3d-still-3dhang.dmesg.log`.
+renders). Data: `data/2026-11-03-0440-ce5310-tpcflush-do3d-still-3dhang.dmesg.log`.
 Committed render-path fixes stand through f852218 (read-offset, bLastInScene).

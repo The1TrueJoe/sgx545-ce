@@ -1,6 +1,6 @@
 # Uniforms past sa127 load from memory, right on the hardware
 
-EA1 (CE5310), 2026-11-03 ~03:00 UTC, desktop-GL build `x86_64-gl` with compiler 8af333d +
+CE5310 board (CE5310), 2026-11-03 ~03:00 UTC, desktop-GL build `x86_64-gl` with compiler 8af333d +
 d6ec64f and driver 3d78059 + 9bd56d3, piglit `shader_runner` on the surfaceless platform.
 
 An instruction names sa0-sa127, so a program's constants used to stop at sa127. Constants
@@ -37,7 +37,7 @@ index, adds it to the base register with `imae`, and loads each component with `
 an immediate offset, so it needs no register-offset form. Driver 1836bfc turns on
 `indirect_const_addr`, so `u[i]` reaches the compiler as an indexed load instead of a select.
 
-On the EA1 (~03:45 UTC), with 0 recoveries throughout:
+On the CE5310 board (~03:45 UTC), with 0 recoveries throughout:
 
 - the loops above pass, including 126 iterations over the full 250x250 target (under 1 s);
 - the static spills and combinations still pass;

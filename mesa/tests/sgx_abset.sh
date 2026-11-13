@@ -1,5 +1,5 @@
 #!/bin/sh
-# The whole A/B set against the DDK on the EA-1, under one GPU lock, stopping
+# The whole A/B set against the DDK on the CE5310 board, under one GPU lock, stopping
 # at the first SGX recovery (the box has no plug). Run on the box from /tmp/mesa,
 # with the panel free (mc-session and the web view stopped).
 # Prints each suite's lines, then the totals.

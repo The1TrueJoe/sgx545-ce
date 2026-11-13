@@ -1,6 +1,6 @@
 /*
  * sgxtex: SGX545 texture memory layout and the transfer-queue blit, as
- * measured from the Cedarview DDK 1.7 on an EA3 (docs/TEX.md).
+ * measured from the Cedarview DDK 1.7 on a CE5300 board (docs/TEX.md).
  *
  * Plain C99, no dependencies: meant to be copied into a driver.
  *
@@ -146,7 +146,7 @@ struct sgxtex_blit {
 /*
  * The background object is the triangle (0,0) (W,0) (0,H) over the whole
  * destination; words 3-8 of its block are the texture coordinates (u, v) at
- * those three vertices, interpolated across it (EA3, 2026-10-28). A
+ * those three vertices, interpolated across it (CE5300 board, 2026-10-28). A
  * sub-rectangle copy keeps the triangle, sets the coordinates so destination
  * pixel (x, y) samples source texel (sx - dx + x, sy - dy + y) scaled by
  * sw/dw, sh/dh, clips the PBE to the destination rectangle and the tiles to
@@ -157,7 +157,7 @@ struct sgxtex_blit {
  * pixels to the wrong places. Full-width bands are exact. For any other
  * rectangle of a twiddled surface: read it back to a linear scratch surface
  * (sgxtex_blit_build), copy the rectangle into that (this function), and
- * upload the scratch again; all three are exact on the EA3.
+ * upload the scratch again; all three are exact on the CE5300 board.
  */
 struct sgxtex_rect {
 	uint32_t x, y, w, h;
