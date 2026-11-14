@@ -277,8 +277,19 @@ struct pvrsgx_device {
 	atomic_t irq_count;
 	/** @pm_pinned: Runtime PM is held active (single-context bring-up). */
 	bool pm_pinned;
-	/** @cpu_latency: The core's CPU latency limit while awake (pvrsgx_pm.c). */
-	struct pm_qos_request cpu_latency;
+	/** @cpu_latency: The core's CPU latency limit while jobs are in flight. */
+	struct pvrsgx_cpu_latency {
+		/** @cpu_latency.req: The request, active while held. */
+		struct pm_qos_request req;
+		/** @cpu_latency.release: Drops it a while after the last job. */
+		struct delayed_work release;
+		/** @cpu_latency.lock: Orders adding and removing the request. */
+		struct mutex lock;
+		/** @cpu_latency.jobs: Jobs submitted and not yet freed. */
+		atomic_t jobs;
+		/** @cpu_latency.us: The limit, or 0 for none. */
+		u32 us;
+	} cpu_latency;
 #if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
 	/** @test_wr: KUnit only: sees every register write before it lands. */
 	void (*test_wr)(struct pvrsgx_device *sdev, u32 reg, u32 val);

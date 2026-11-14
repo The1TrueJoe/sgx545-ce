@@ -3,7 +3,6 @@
 
 #include <drm/drm_print.h>
 
-#include <linux/pm_qos.h>
 #include <linux/pm_runtime.h>
 
 #include "pvrsgx_device.h"
@@ -18,19 +17,6 @@
  * run_job until it leaves the active list.
  */
 #define AUTOSUSPEND_MS	500
-
-/* The core's CPU latency limit, held while the GPU is awake (pvrsgx_core_info). */
-static void cpu_latency_hold(struct pvrsgx_device *sdev, bool on)
-{
-	struct pm_qos_request *req = &sdev->cpu_latency;
-
-	if (!sdev->core->cpu_latency_us || cpu_latency_qos_request_active(req) == on)
-		return;
-	if (on)
-		cpu_latency_qos_add_request(req, sdev->core->cpu_latency_us);
-	else
-		cpu_latency_qos_remove_request(req);
-}
 
 int pvrsgx_power_get(struct pvrsgx_device *sdev)
 {
@@ -55,8 +41,6 @@ void pvrsgx_power_init(struct pvrsgx_device *sdev)
 {
 	struct device *dev = sdev->base.dev;
 
-	/* Awake from probe until the first runtime suspend. */
-	cpu_latency_hold(sdev, true);
 	pm_runtime_set_autosuspend_delay(dev, AUTOSUSPEND_MS);
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_mark_last_busy(dev);
@@ -97,7 +81,6 @@ void pvrsgx_power_fini(struct pvrsgx_device *sdev)
 			sdev->pm_pinned = false;
 		}
 	}
-	cpu_latency_hold(sdev, false);
 }
 
 /* Both under the reset lock: never in the middle of a reset's restart. */
@@ -109,7 +92,6 @@ static int pvrsgx_runtime_suspend(struct device *dev)
 	mutex_lock(&sdev->reset_lock);
 	pvrsgx_fw_stop(sdev);
 	mutex_unlock(&sdev->reset_lock);
-	cpu_latency_hold(sdev, false);
 	return 0;
 }
 
@@ -117,7 +99,6 @@ static int pvrsgx_runtime_resume(struct device *dev)
 {
 	struct pvrsgx_device *sdev = dev_get_drvdata(dev);
 
-	cpu_latency_hold(sdev, true);
 	/* A failed start loses the device: run_job then fails every job with -EIO. */
 	mutex_lock(&sdev->reset_lock);
 	if (!sdev->lost && pvrsgx_fw_start(sdev)) {
