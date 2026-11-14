@@ -123,7 +123,7 @@ static int inval_probe_show(struct seq_file *m, void *unused)
 			s21 = sgx_rd(sdev, SGX_CR_EVENT_STATUS2);
 			if ((s1 & ~s0) || (s21 & ~s20))
 				break;
-			udelay(10);
+			usleep_range(10, 20);
 		}
 		seq_printf(m, "%-11s 0x%04x: STATUS 0x%08x -> 0x%08x  STATUS2 0x%08x -> 0x%08x  after %u us",
 			   inv[i].name, inv[i].reg, s0, s1, s20, s21, us);

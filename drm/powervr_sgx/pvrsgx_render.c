@@ -47,7 +47,8 @@
 #define BG_PDS_MIDDLE		0x00030001
 /* Constant TA command words. */
 #define TA_CTL			0x50000000
-#define TE_AA_4X		(BIT(31) | BIT(30))	/* 2x in X and in Y, over the core's te_aa */
+/* 2x in X and in Y, ORed with the core's te_aa */
+#define TE_AA_4X		(BIT(31) | BIT(30))
 #define F32_1E_6		0x358637bd
 #define RT_FLAGS		0x88
 #define RT_FLAGS_4X		0xeaa26e26	/* the RT flags of a 4x render */
@@ -778,6 +779,7 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 	struct pvrsgx_rt_dataset *s = rj->rtds;
 	const struct drm_powervr_sgx_cmd_render *in = &rj->render.base;
 	const struct drm_powervr_sgx_ext_sgx545_render *x545 = &rj->render.sgx545_render;
+	const struct pvrsgx_core_family *fam = job->ctx->sdev->family;
 	bool first = k == 0, last = k == rj->nkicks - 1;
 	struct pvrsgx_fw_ta_cmd *cmd;
 	struct pvrsgx_fw_rt_deps *deps;
@@ -885,19 +887,19 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		job->done_val = deps->write_pending + 1;
 	}
 
-	cmd->te_aa = s->n.te_aa | (pvrsgx_ta_revert & BIT(2) ? 0x20000000 : job->ctx->sdev->family->te_aa);
+	cmd->te_aa = s->n.te_aa | (pvrsgx_ta_revert & BIT(2) ? 0x20000000 : fam->te_aa);
 	cmd->te_mtile[0] = s->n.mtile1;
 	cmd->te_mtile[1] = s->n.mtile2;
 	cmd->te_screen = s->n.te_screen;
 	cmd->mt_tiles = s->n.mt_tiles;
 	cmd->ta_flags2 = rj->kick[k].sgx545_ta_kick.ta_flags2 | (last ? PVRSGX_TA2_RENDER : 0);
 	cmd->vdm_base = (u32)rj->kick[k].base.vdm_base;
-	cmd->vdm_ctl = pvrsgx_ta_revert & BIT(3) ? 0xa2 : job->ctx->sdev->family->vdm_ctl;
+	cmd->vdm_ctl = pvrsgx_ta_revert & BIT(3) ? 0xa2 : fam->vdm_ctl;
 	cmd->region_headers = rgn_this;
 	cmd->tail_pointers = kobj_va(s->tailptr);
 	cmd->eps[0] = F32_1E_6;
 	cmd->eps[1] = F32_1E_6;
-	cmd->screen_size = (s->h - 1) << (pvrsgx_ta_revert & BIT(1) ? 16 : job->ctx->sdev->family->screen_y_shift) |
+	cmd->screen_size = (s->h - 1) << (pvrsgx_ta_revert & BIT(1) ? 16 : fam->screen_y_shift) |
 			   (s->w - 1);
 	cmd->params_base = r->pb->base;
 	cmd->rt_flags = s->n.rt_flags;
