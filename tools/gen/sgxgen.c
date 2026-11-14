@@ -679,12 +679,14 @@ struct sgx_ctx *sgx_ctx_create(struct sgx_dev *d)
 	c->state_emit[2] = usse_load(c, &usse_state_emit_2, 1);
 	pds_d0(&t, 0, 0x2000);
 	pds_d0(&t, 1, 0);
-	pds_d0(&t, 2, 0x0016000e);
+	/* SGXGEN_TERM530=<word>: the 530 form seen from the vendor stack, one second
+	 * DOUTA of <word> (0x00030003 for a 64x64 target: the last tile, y<<16 | x) */
+	pds_d0(&t, 2, getenv("SGXGEN_TERM530") ? env_u32("SGXGEN_TERM530") : 0x0016000e);
 	pds_d0(&t, 3, 0x100);
 	pds_d0(&t, 4, doutu_w0(c, c->state_emit[2], 1, 0));
 	pds_d0(&t, 5, 0);
 	CODE(&t, MOVS(MV, 0, 0x18, 0, 1, 2, 2, DOUTA));
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < (getenv("SGXGEN_TERM530") ? 1 : 3); i++)
 		CODE(&t, MOVS(MV, 1, 0x18, 0, 1, 2, 2, DOUTA));
 	CODE(&t, MOVS(MV, 2, 0, 0, 1, 2, 2, DOUTU));
 	CODE(&t, HALT);
@@ -1101,6 +1103,17 @@ static void vdm(struct sgx_ctx *c, uint32_t w)
 	*ring_alloc(&c->vdm, 4, 4).p = w;
 }
 
+/* A PDS program's address in a VDM word, >>4. The SGX545 takes it absolute; the
+ * SGX530 takes it as an offset from the PDS exec base (the PDS pixel heap base),
+ * like the TA/3D state words (vendor stack on an OMAP3630 board, 2026-11-14).
+ * SGXGEN_VDM_REL selects the 530 form (bring-up knob). */
+static uint32_t vdm_pds(struct sgx_ctx *c, uint32_t va)
+{
+	if (getenv("SGXGEN_VDM_REL"))
+		va -= c->dev->heap_base[H_PDSPIXEL];
+	return va >> 4;
+}
+
 /* A TA state block goes to the MTE through a VDM state program: DMA the block into
  * USSE attributes, run a task that emits them (STATE.md section 2) */
 static void state_block(struct sgx_ctx *c, const uint32_t *blk, uint32_t n, uint32_t dma_dwords, uint32_t kind)
@@ -1117,7 +1130,7 @@ static void state_block(struct sgx_ctx *c, const uint32_t *blk, uint32_t n, uint
 	pds_d0(&p, 1, dma_ctrl(dma_dwords, 0, kind, 1));
 	pds_d0(&p, 2, 0);
 	pds_d0(&p, 3, 0);
-	pds_d0(&p, 4, doutu_w0(c, c->state_emit[n], 1, 0));
+	pds_d0(&p, 4, doutu_w0(c, c->state_emit[n], 1, 0) | (getenv("SGXGEN_STATE_BIT21") ? 0x200000 : 0));
 	pds_d0(&p, 5, 0);
 	CODE(&p, TST1(S1_DS0(0)));
 	CODE(&p, BRA_P0(6));
@@ -1128,7 +1141,7 @@ static void state_block(struct sgx_ctx *c, const uint32_t *blk, uint32_t n, uint
 	CODE(&p, MOVS(MV, 2, 0, 0, 1, 2, 0, DOUTU));
 	CODE(&p, HALT);
 	va = pds_emit(&c->pds_vtx, &p, &rows);
-	vdm(c, 0x40000000 | va >> 4);
+	vdm(c, 0x40000000 | vdm_pds(c, va));
 	/* info: rows, the rotating buffer index + 0x2000, 0x2020400, dwords */
 	vdm(c, rows << 26 | ((c->vdm_counter + 0x2000) | 0x2020400 | ((n + 3) >> 2)));
 	c->vdm_counter = (c->vdm_counter + 1) & 3;
@@ -1165,7 +1178,7 @@ static void vdm_draw(struct sgx_ctx *c, uint32_t prim, uint32_t count, uint32_t 
 	vdm(c, idx & ~1u);				/* 16-bit indices */
 	vdm(c, (batch - 1) << 28);
 	vdm(c, 0x003fffff);
-	vdm(c, (vpt - 1) << 28 | va >> 4);
+	vdm(c, (vpt - 1) << 28 | vdm_pds(c, va));
 	vdm(c, (out_dwords + 3) >> 2 << 24 | ((in_dwords * 4 + 0xf) >> 4) << 7 |
 	       (vpt - 1 < 3 ? vpt - 1 : 3) << 22 | rows);
 }
@@ -1296,7 +1309,7 @@ int sgx_draw(struct sgx_ctx *c, const struct sgx_draw *d)
 	for (uint32_t i = 0; i < vs->sec_init_n; i++)
 		vsec.p[6 + i] = vs->sec_init[i];
 	sec = pds_secondary(&c->pds_vtx, vsec.va, dma_ctrl(10, 0, 1, 1), doutu_w0(c, c->empty_v, 1, 0), 0, &vrows);
-	vdm(c, 0x40000000 | sec >> 4);
+	vdm(c, 0x40000000 | vdm_pds(c, sec));
 	vdm(c, vrows << 26 | 0xe100 | (10 + 3) >> 2);
 
 	/* SGXGEN_FAULT: vertices from an unmapped address, a TA page fault (recovery tests) */
@@ -1314,9 +1327,9 @@ static uint32_t vdm_end(struct sgx_ctx *c)
 {
 	uint32_t at = c->vdm.bo.va + c->vdm.used;
 
-	vdm(c, 0x40000000 | c->empty_state >> 4);
+	vdm(c, 0x40000000 | vdm_pds(c, c->empty_state));
 	vdm(c, 1u << 26 | 0xe100);
-	vdm(c, 0x60000000 | c->terminate >> 4);
+	vdm(c, 0x60000000 | vdm_pds(c, c->terminate));
 	vdm(c, 3u << 26 | 0x2022401);
 	vdm(c, 0xc0000000);
 	return at;
