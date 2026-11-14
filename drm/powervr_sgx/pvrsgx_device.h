@@ -226,8 +226,19 @@ struct pvrsgx_device {
 
 	/** @irq_count: SW_EVENT interrupts taken (debugfs). */
 	atomic_t irq_count;
-	/** @cpu_latency: The core's CPU latency limit while awake (pvrsgx_pm.c). */
-	struct pm_qos_request cpu_latency;
+	/** @cpu_latency: The core's CPU latency limit while jobs are in flight. */
+	struct pvrsgx_cpu_latency {
+		/** @cpu_latency.req: The request, active while held. */
+		struct pm_qos_request req;
+		/** @cpu_latency.release: Drops it a while after the last job. */
+		struct delayed_work release;
+		/** @cpu_latency.lock: Orders adding and removing the request. */
+		struct mutex lock;
+		/** @cpu_latency.jobs: Jobs submitted and not yet freed. */
+		atomic_t jobs;
+		/** @cpu_latency.us: The limit, or 0 for none. */
+		u32 us;
+	} cpu_latency;
 };
 
 #define to_pvrsgx_device(drm) container_of_const(drm, struct pvrsgx_device, base)

@@ -116,8 +116,8 @@ struct pvrsgx_core_info {
 	/** @fw_name: The open microkernel under /lib/firmware. */
 	const char *fw_name;
 	/**
-	 * @cpu_latency_us: A CPU wake-up latency limit held while the GPU is
-	 * awake, or 0 for none.
+	 * @cpu_latency_us: A CPU wake-up latency limit held while jobs are in
+	 * flight (pvrsgx_job.c), or 0 for none.
 	 */
 	u32 cpu_latency_us;
 };

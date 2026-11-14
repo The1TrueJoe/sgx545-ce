@@ -24,6 +24,7 @@
 #include <linux/dma-fence-chain.h>
 #include <linux/dma-resv.h>
 #include <linux/module.h>
+#include <linux/pm_qos.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -338,6 +339,62 @@ static enum drm_gpu_sched_stat pvrsgx_timedout_job(struct drm_sched_job *sched_j
 	return DRM_GPU_SCHED_STAT_RESET;
 }
 
+/*
+ * A CPU latency limit, for a core whose display needs one while the GPU works
+ * (pvrsgx_core_info): taken at a job's submit, released CPU_LATENCY_RELEASE_MS
+ * after the last job in flight is freed, so an idle desktop gets the deep
+ * C-states back between frames. Independent of runtime PM.
+ */
+#define CPU_LATENCY_RELEASE_MS	100
+
+static void cpu_latency_release(struct work_struct *work)
+{
+	struct pvrsgx_cpu_latency *cl = container_of(to_delayed_work(work),
+						     struct pvrsgx_cpu_latency, release);
+
+	mutex_lock(&cl->lock);
+	if (!atomic_read(&cl->jobs) && cpu_latency_qos_request_active(&cl->req))
+		cpu_latency_qos_remove_request(&cl->req);
+	mutex_unlock(&cl->lock);
+}
+
+static void cpu_latency_init(struct pvrsgx_cpu_latency *cl, u32 us)
+{
+	cl->us = us;
+	atomic_set(&cl->jobs, 0);
+	mutex_init(&cl->lock);
+	INIT_DELAYED_WORK(&cl->release, cpu_latency_release);
+}
+
+/* At submit, where sleeping is allowed. */
+static void cpu_latency_get(struct pvrsgx_cpu_latency *cl)
+{
+	if (!cl->us)
+		return;
+	atomic_inc(&cl->jobs);
+	mutex_lock(&cl->lock);
+	if (!cpu_latency_qos_request_active(&cl->req))
+		cpu_latency_qos_add_request(&cl->req, cl->us);
+	mutex_unlock(&cl->lock);
+}
+
+/* From free_job or a failed submit: n jobs gone. */
+static void cpu_latency_put(struct pvrsgx_cpu_latency *cl, u32 n)
+{
+	if (cl->us && n && atomic_sub_and_test(n, &cl->jobs))
+		mod_delayed_work(system_dfl_wq, &cl->release,
+				 msecs_to_jiffies(CPU_LATENCY_RELEASE_MS));
+}
+
+/* With every job freed. */
+static void cpu_latency_fini(struct pvrsgx_cpu_latency *cl)
+{
+	cancel_delayed_work_sync(&cl->release);
+	if (cpu_latency_qos_request_active(&cl->req))
+		cpu_latency_qos_remove_request(&cl->req);
+	mutex_destroy(&cl->lock);
+}
+
 static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 {
 	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
@@ -351,6 +408,7 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 	kvfree(job->bo_flags);
 	pvrsgx_prime_put(job);
 	pvrsgx_render_job_fini(job);
+	cpu_latency_put(&job->ctx->sdev->cpu_latency, 1);
 	context_put(job->ctx);
 	kfree(job);
 }
@@ -375,6 +433,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 
 	spin_lock_init(&sdev->fence_lock);
 	INIT_LIST_HEAD(&sdev->active);
+	cpu_latency_init(&sdev->cpu_latency, sdev->core->cpu_latency_us);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
 	sdev->fence_context = dma_fence_context_alloc(1);
@@ -421,6 +480,7 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	cancel_work_sync(&sdev->reap_work);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = NULL;
+	cpu_latency_fini(&sdev->cpu_latency);
 }
 
 static enum drm_sched_priority sched_priority(s32 p)
@@ -886,6 +946,8 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 		ja[i].bos = NULL;
 		ja[i].bo_flags = NULL;
 		ja[i].nbos = 0;
+		/* Held from here to free_job, which every pushed job reaches. */
+		cpu_latency_get(&job->ctx->sdev->cpu_latency);
 		drm_sched_entity_push_job(&job->base);
 		ja[i].job = NULL;	/* the scheduler owns it now */
 	}
@@ -899,3 +961,7 @@ out:
 	kvfree(in);
 	return err;
 }
+
+#if IS_ENABLED(CONFIG_DRM_POWERVR_SGX_KUNIT_TEST)
+#include "tests/pvrsgx_cpu_latency_test.c"
+#endif
