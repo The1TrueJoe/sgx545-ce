@@ -24,6 +24,7 @@
 #include <linux/dma-resv.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
+#include <linux/pm_qos.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -505,6 +506,78 @@ out:
 }
 
 /* The puts that can reach a VM's release, which takes reservations. */
+/*
+ * A CPU latency limit, for a core whose display needs one while the GPU works
+ * (pvrsgx_core_info): taken at a job's submit, released CPU_LATENCY_RELEASE_MS
+ * after the last job in flight is freed, so an idle desktop gets the deep
+ * C-states back between frames. Independent of runtime PM.
+ */
+#define CPU_LATENCY_RELEASE_MS	100
+
+static void cpu_latency_release(struct work_struct *work)
+{
+	struct pvrsgx_cpu_latency *cl = container_of(to_delayed_work(work),
+						     struct pvrsgx_cpu_latency, release);
+
+	mutex_lock(&cl->lock);
+	if (!atomic_read(&cl->jobs) && cpu_latency_qos_request_active(&cl->req))
+		cpu_latency_qos_remove_request(&cl->req);
+	mutex_unlock(&cl->lock);
+}
+
+static void cpu_latency_init(struct pvrsgx_cpu_latency *cl, u32 us)
+{
+	cl->us = us;
+	atomic_set(&cl->jobs, 0);
+	mutex_init(&cl->lock);
+	INIT_DELAYED_WORK(&cl->release, cpu_latency_release);
+}
+
+/* At submit, where sleeping is allowed. */
+static void cpu_latency_get(struct pvrsgx_cpu_latency *cl)
+{
+	if (!cl->us)
+		return;
+	atomic_inc(&cl->jobs);
+	mutex_lock(&cl->lock);
+	if (!cpu_latency_qos_request_active(&cl->req))
+		cpu_latency_qos_add_request(&cl->req, cl->us);
+	mutex_unlock(&cl->lock);
+}
+
+/* From free_job or a failed submit: n jobs gone. */
+static void cpu_latency_put(struct pvrsgx_cpu_latency *cl, u32 n)
+{
+	if (cl->us && n && atomic_sub_and_test(n, &cl->jobs))
+		mod_delayed_work(system_dfl_wq, &cl->release,
+				 msecs_to_jiffies(CPU_LATENCY_RELEASE_MS));
+}
+
+/* With every job freed. */
+static void cpu_latency_fini(struct pvrsgx_cpu_latency *cl)
+{
+	cancel_delayed_work_sync(&cl->release);
+	if (cpu_latency_qos_request_active(&cl->req))
+		cpu_latency_qos_remove_request(&cl->req);
+	mutex_destroy(&cl->lock);
+}
+
+/* What a job holds from submit to free_job: runtime PM and the latency limit. */
+static int job_hold(struct pvrsgx_device *sdev)
+{
+	int err = pvrsgx_power_get(sdev);
+
+	if (!err)
+		cpu_latency_get(&sdev->cpu_latency);
+	return err;
+}
+
+static void job_unhold(struct pvrsgx_device *sdev, u32 n)
+{
+	cpu_latency_put(&sdev->cpu_latency, n);
+	pvrsgx_power_put(sdev, n);
+}
+
 static void free_job_work(struct work_struct *work)
 {
 	struct pvrsgx_job *job = container_of(work, struct pvrsgx_job, free_work);
@@ -521,7 +594,7 @@ static void pvrsgx_free_job(struct drm_sched_job *sched_job)
 	struct pvrsgx_device *sdev = job->ctx->sdev;
 
 	/* Taken at submit, for this job: the GPU may suspend once none are left. */
-	pvrsgx_power_put(sdev, 1);
+	job_unhold(sdev, 1);
 
 	drm_sched_job_cleanup(sched_job);
 	dma_fence_put(job->hw_fence);
@@ -570,6 +643,7 @@ int pvrsgx_job_init(struct pvrsgx_device *sdev)
 	spin_lock_init(&sdev->fence_lock);
 	mutex_init(&sdev->reset_lock);
 	INIT_LIST_HEAD(&sdev->active);
+	cpu_latency_init(&sdev->cpu_latency, sdev->core->cpu_latency_us);
 	INIT_DELAYED_WORK(&sdev->poll_work, poll_work_fn);
 	INIT_WORK(&sdev->reap_work, reap_work_fn);
 	sdev->wq = alloc_workqueue("powervr_sgx", WQ_MEM_RECLAIM | WQ_UNBOUND | WQ_HIGHPRI, 0);
@@ -692,6 +766,7 @@ void pvrsgx_job_fini(struct pvrsgx_device *sdev)
 	pvrsgx_coredump_fini(sdev);
 	dma_fence_put(sdev->last_fence);
 	sdev->last_fence = NULL;
+	cpu_latency_fini(&sdev->cpu_latency);
 }
 
 static enum drm_sched_priority sched_priority(s32 p)
@@ -1085,9 +1160,9 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 	 * no reservation is held, to free_job; never in run_job, which signals fences.
 	 */
 	for (u32 i = 0; i < n; i++) {
-		err = pvrsgx_power_get(to_pvrsgx_device(drm));
+		err = job_hold(to_pvrsgx_device(drm));
 		if (err) {
-			pvrsgx_power_put(to_pvrsgx_device(drm), i);
+			job_unhold(to_pvrsgx_device(drm), i);
 			goto out;
 		}
 	}
@@ -1150,7 +1225,7 @@ int pvrsgx_ioctl_submit_jobs(struct drm_device *drm, void *data, struct drm_file
 out_exec:
 	drm_exec_fini(&exec);
 	/* The references of the jobs not pushed. */
-	pvrsgx_power_put(to_pvrsgx_device(drm), n - pushed);
+	job_unhold(to_pvrsgx_device(drm), n - pushed);
 out:
 	/* Armed jobs not pushed are cleaned up while their entity still exists. */
 	for (u32 i = 0; i < n; i++)

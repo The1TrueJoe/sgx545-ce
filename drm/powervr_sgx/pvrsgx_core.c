@@ -206,6 +206,13 @@ static const struct pvrsgx_core_info cores[] = {
 		.core_rev = 0x0001000d,
 		.clock_hz = 400000000,
 		.fw_name = "powervr_sgx/sgx545_ukernel.bin",
+		/*
+		 * A CPU in C4 while the GPU draws underruns the display FIFO
+		 * (PIPEBSTAT bit 31; the screen jumps sideways). intel_idle's
+		 * Atom states exit in 10 (C1E), 20 (C2), 100 (C4) and 140 us
+		 * (C6): 50 us keeps every CPU out of C4 and C6 only.
+		 */
+		.cpu_latency_us = 50,
 	},
 	{
 		/*
