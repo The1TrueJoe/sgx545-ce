@@ -9,6 +9,55 @@ the OMAP3630 board: a vendor-stack capture (a separate analysis-side session, in
 `sgx530-vendor-setup.md`), plus cheap black-box checks from this side (runbook §"fresh black-box
 hypotheses").
 
+## UPDATE 2026-11-14: the vendor stack renders the 64x64 scene; what its render stream looks like
+
+**How it was observed.** On the OMAP3630 board, cold-booted into a capture kernel with the GPL
+openpvrsgx 1.14.3699939 services module and the version-matched vendor user space (DDK
+1.14.3699939), a small GLES2 test drew a 64x64 pbuffer: clear to (0, 0, 0.5, 1), then one
+flat red triangle over the lower-left half. A GPL hook in the services module's TA kick
+copied the kick's command and every page mapped in the GPU's MMU contexts, except the
+parameter buffer and the USSE code heaps, before the GPU ran it. The words below were read
+back from those pages with our own layouts (PDS.md, STATE.md). No vendor code or binary was
+read. The vendor EGL needs a KMS device whose driver reports the name `tilcdc`. omapdrm on a
+fixed DPI panel, renamed by an LD_PRELOAD shim on `DRM_IOCTL_VERSION`, satisfies it.
+
+- **It renders correctly (C).** The readback has the triangle red and every other pixel the
+  clear colour. So nothing about this scene is beyond the SGX530 at rev 0x00010205.
+- **VDM words give PDS programs as offsets from the PDS exec base (C).** On the SGX545 they are
+  absolute (`type<<28 | addr>>4`, PDS.md). On the SGX530 the field is
+  `(addr - PDS pixel heap base) >> 4`, the same origin as the TA/3D state words. This holds
+  for the type 4 and type 6 state words and for the draw's vertex-fetch word. Read as
+  absolute, they point at unmapped memory. Read relative to the PDS pixel heap base, every one
+  lands on a program of the expected form (the state-program template, the vertex fetch).
+- **The vertex shader launch carries no write-retire context (C).** The vertex-fetch DOUTU
+  has word 0 bit 21 clear, with code base 10 and 0 temporaries in the two draws seen. Words 1
+  and 2 are both 0. So the hypothesis that vertex tasks need the §9 bit 21 + word 2 context is
+  **refuted**.
+- **Bit 21 is set on some other launches (C, what it means: G).**
+  - The state programs that DMA a TA state block launch their emit task with word 0 bit 21 set.
+  - One pixel secondary program (DOUTD of its uniforms, then DOUTU) does the same.
+  - State programs without a DMA don't. Neither do the TA terminate's task or the pixel
+    primary programs.
+- **Pixel DOUTU word 2 is 0x20 (C).** On the SGX545 every DDK DOUTU has word 2 = 0 (PDS.md).
+  On the SGX530 the pixel programs seen have 0x20 there. Vertex and state launches keep 0.
+- **The TA terminate (VDM type 6) is two DOUTAs (C).** The first is `(0x2000, 0)`. The second
+  is `(0x00030003, 0x100)`, which is the 64x64 target's last tile, y<<16 | x. Then comes a
+  state-emit DOUTU. The SGX545's form has three `(0x16000e, 0x100)` DOUTAs. Just before the
+  terminate, a type 4 state program writes `DOUTA (0x800, 0), (0, 0x100)`.
+
+**Applied to our stack (C, null).** sgxgen knobs on `wip/sgx530-kick-test`: `SGXGEN_VDM_REL`
+(relative VDM PDS addresses), `SGXGEN_TERM530=0x00030003` and `SGXGEN_STATE_BIT21`. Each was
+tried alone and then all together, with the 8-word interleave. Every run gives the same hang:
+region headers and tail pointers all zero, no BIF fault, no TA_FINISHED, `consumed 2`.
+
+**Where that points (D).** In every variant the microkernel's bounded wait `0xd` gives up once
+per TA kick (control block word 0x28 = 0xd, word 0x29 = 2). That wait is the TA-side cache
+invalidate in `invalidate()`, which waits for `0x138` bits `0x27`: the SGX545's done bits. It
+comes before the TA start. So the next check is the microkernel's TA kick on the SGX530. Do
+the invalidate done bits differ, and does the TA start at all? The TA/VDM status registers
+after the hang would answer that. The coredump doesn't dump them yet. Keep the three sgxgen
+changes, since the vendor stream shows the SGX530 needs them, but they aren't the blocker.
+
 ## UPDATE 2026-11-13: full 64x64 kick on silicon — microkernel + command layer PROVEN; only blocker left is sgxgen's PDS data layout
 
 The driver's `edm_init` + host-played kick ran a 64x64 frame on SGX530 silicon (core rev
