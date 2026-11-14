@@ -506,55 +506,6 @@ out:
 }
 
 /* The puts that can reach a VM's release, which takes reservations. */
-static void free_job_work(struct work_struct *work)
-{
-	struct pvrsgx_job *job = container_of(work, struct pvrsgx_job, free_work);
-
-	pvrsgx_prime_put(job);
-	pvrsgx_render_job_fini(job);
-	context_put(job->ctx);
-	kfree(job);
-}
-
-static void pvrsgx_free_job(struct drm_sched_job *sched_job)
-{
-	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
-	struct pvrsgx_device *sdev = job->ctx->sdev;
-
-	/* Taken at submit, for this job: the GPU may suspend once none are left. */
-	job_unhold(sdev, 1);
-
-	drm_sched_job_cleanup(sched_job);
-	dma_fence_put(job->hw_fence);
-	kfree(job->hw_fence_mem);	/* never run */
-	INIT_WORK(&job->free_work, free_job_work);
-	queue_work(sdev->free_wq, &job->free_work);
-}
-
-static const struct drm_sched_backend_ops pvrsgx_sched_ops = {
-	.run_job = pvrsgx_run_job,
-	.timedout_job = pvrsgx_timedout_job,
-	.free_job = pvrsgx_free_job,
-};
-
-/*
- * Teach lockdep that the locks run_job, the completion and the timeout take
- * are taken while fences are pending, which reclaim can wait for: an
- * allocation that can reclaim, made under any of them, is then reported at
- * once instead of when memory runs low.
- */
-static void lockdep_prime(struct pvrsgx_device *sdev)
-{
-	if (!IS_ENABLED(CONFIG_LOCKDEP))
-		return;
-	fs_reclaim_acquire(GFP_KERNEL);
-	might_lock(&sdev->reset_lock);
-	might_lock(&sdev->done_lock);
-	might_lock(&sdev->ccb_lock);
-	might_lock(&sdev->kobj_lock);
-	fs_reclaim_release(GFP_KERNEL);
-}
-
 /*
  * A CPU latency limit, for a core whose display needs one while the GPU works
  * (pvrsgx_core_info): taken at a job's submit, released CPU_LATENCY_RELEASE_MS
@@ -625,6 +576,55 @@ static void job_unhold(struct pvrsgx_device *sdev, u32 n)
 {
 	cpu_latency_put(&sdev->cpu_latency, n);
 	pvrsgx_power_put(sdev, n);
+}
+
+static void free_job_work(struct work_struct *work)
+{
+	struct pvrsgx_job *job = container_of(work, struct pvrsgx_job, free_work);
+
+	pvrsgx_prime_put(job);
+	pvrsgx_render_job_fini(job);
+	context_put(job->ctx);
+	kfree(job);
+}
+
+static void pvrsgx_free_job(struct drm_sched_job *sched_job)
+{
+	struct pvrsgx_job *job = to_pvrsgx_job(sched_job);
+	struct pvrsgx_device *sdev = job->ctx->sdev;
+
+	/* Taken at submit, for this job: the GPU may suspend once none are left. */
+	job_unhold(sdev, 1);
+
+	drm_sched_job_cleanup(sched_job);
+	dma_fence_put(job->hw_fence);
+	kfree(job->hw_fence_mem);	/* never run */
+	INIT_WORK(&job->free_work, free_job_work);
+	queue_work(sdev->free_wq, &job->free_work);
+}
+
+static const struct drm_sched_backend_ops pvrsgx_sched_ops = {
+	.run_job = pvrsgx_run_job,
+	.timedout_job = pvrsgx_timedout_job,
+	.free_job = pvrsgx_free_job,
+};
+
+/*
+ * Teach lockdep that the locks run_job, the completion and the timeout take
+ * are taken while fences are pending, which reclaim can wait for: an
+ * allocation that can reclaim, made under any of them, is then reported at
+ * once instead of when memory runs low.
+ */
+static void lockdep_prime(struct pvrsgx_device *sdev)
+{
+	if (!IS_ENABLED(CONFIG_LOCKDEP))
+		return;
+	fs_reclaim_acquire(GFP_KERNEL);
+	might_lock(&sdev->reset_lock);
+	might_lock(&sdev->done_lock);
+	might_lock(&sdev->ccb_lock);
+	might_lock(&sdev->kobj_lock);
+	fs_reclaim_release(GFP_KERNEL);
 }
 
 int pvrsgx_job_init(struct pvrsgx_device *sdev)
