@@ -79,6 +79,9 @@ struct pvrsgx_core_regs {
 	u32 clkgatectl2_units;
 	u32 clkgatestatus;
 	u32 clkgatestatus_dpm;
+	u32 clkgatectlovr;
+	u32 pds_inv2;			/* SGX530 only (0 elsewhere) */
+	u32 pds_inv3;
 	u32 soft_reset_bif;
 	u32 soft_reset_cores;		/* every unit's reset but the BIF's */
 	u32 event_kick2;

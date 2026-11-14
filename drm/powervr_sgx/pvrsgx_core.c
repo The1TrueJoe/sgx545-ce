@@ -30,6 +30,7 @@ static const struct pvrsgx_core_regs sgx545_regs = {
 	.clkgatectl2_units = SGX_CR_CLKGATECTL2_UNITS,
 	.clkgatestatus = SGX_CR_CLKGATESTATUS,
 	.clkgatestatus_dpm = SGX_CR_CLKGATESTATUS_DPM_CLKS,
+	.clkgatectlovr = 0x000c,
 	.soft_reset_bif = SGX_CR_SOFT_RESET_BIF_RESET,
 	.soft_reset_cores = SGX_CR_SOFT_RESET_DPM_RESET | SGX_CR_SOFT_RESET_TA_RESET |
 			    SGX_CR_SOFT_RESET_USE_RESET | SGX_CR_SOFT_RESET_ISP_RESET |
@@ -100,6 +101,9 @@ static const struct pvrsgx_core_regs sgx530_regs = {
 	.clkgatectl_dpm = GENMASK(17, 16),
 	.clkgatestatus = 0x0004,
 	.clkgatestatus_dpm = BIT(16),
+	.clkgatectlovr = 0x0008,
+	.pds_inv2 = 0x0ad8,
+	.pds_inv3 = 0x0adc,
 	.soft_reset_bif = BIT(0),
 	/* 2D b1, DPM b2, TA b3, USE b4, ISP b5, TSP b6 */
 	.soft_reset_cores = GENMASK(6, 1),

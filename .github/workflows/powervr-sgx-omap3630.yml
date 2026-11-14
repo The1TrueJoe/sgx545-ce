@@ -11,7 +11,7 @@ permissions:
 on:
   workflow_dispatch:
   push:
-    branches: [m2-drm, sgx530, wip/multicore]
+    branches: [m2-drm, sgx530, wip/multicore, 'wip/sgx530-*']
     paths:
       - drm/powervr_sgx/**
       - drm/ci/omap3630*

@@ -65,6 +65,12 @@
 #define   SGX_CR_BIF_INT_STAT_FLUSH_COMPLETE	BIT(19)
 #define SGX_CR_BIF_FAULT			0x0c08
 #define SGX_CR_BIF_DIR_LIST_BASE0		0x0c84
+#define SGX_CR_BIF_TA_REQ_BASE			0x0c90
+#define SGX_CR_BIF_3D_REQ_BASE			0x0cac
+#define SGX_CR_BIF_ZLS_REQ_BASE			0x0cb0
+#define SGX_CR_PDS_INV0				0x0ad0
+#define SGX_CR_PDS_INV1				0x0ad4
+#define SGX_CR_PDS_INV_CSC			0x0ae0
 #define SGX_CR_BIF_DIR_LIST_BASE1		0x0c38
 #define SGX_CR_BIF_BANK_SET			0x0c74
 #define SGX_CR_BIF_BANK0			0x0c78
