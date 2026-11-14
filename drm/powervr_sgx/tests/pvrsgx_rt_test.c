@@ -13,8 +13,8 @@ static void rt_test_720x480_1x(struct kunit *test)
 {
 	struct pvrsgx_rt_numbers n;
 
-	rt_numbers(&n, 720, 480, 1);
-	KUNIT_EXPECT_EQ(test, n.te_aa, 0x20000000);
+	rt_numbers(&n, 720, 480, 1, 5);
+	KUNIT_EXPECT_EQ(test, n.te_aa, 0);	/* the SGX545 ORs in its 0x20000000 at the kick */
 	KUNIT_EXPECT_EQ(test, n.mtile1, 0x82010018);
 	KUNIT_EXPECT_EQ(test, n.mtile2, 0x02010018);
 	KUNIT_EXPECT_EQ(test, n.te_screen, 0x0001d016);
@@ -29,12 +29,24 @@ static void rt_test_720x480_1x(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, (n.zls_xt - 1) << 3, 0xb0);
 }
 
+/* The SGX530's 16x16 tiles: the vendor stack's 64x64 TA command on an OMAP3630 board. */
+static void rt_test_sgx530_64x64(struct kunit *test)
+{
+	struct pvrsgx_rt_numbers n;
+
+	rt_numbers(&n, 64, 64, 1, 4);
+	KUNIT_EXPECT_EQ(test, n.te_screen, 0x00003003);
+	KUNIT_EXPECT_EQ(test, n.mtile1, 0x01004004);
+	KUNIT_EXPECT_EQ(test, n.mtile2, 0x01004004);
+	KUNIT_EXPECT_EQ(test, n.mt_tiles, 0x10);
+}
+
 static void rt_test_720x480_4x(struct kunit *test)
 {
 	struct pvrsgx_rt_numbers n;
 
-	rt_numbers(&n, 720, 480, 4);
-	KUNIT_EXPECT_EQ(test, n.te_aa, 0xe0000000);
+	rt_numbers(&n, 720, 480, 4, 5);
+	KUNIT_EXPECT_EQ(test, n.te_aa | 0x20000000, 0xe0000000);
 	KUNIT_EXPECT_EQ(test, n.mtile1, 0x8180c012);
 	KUNIT_EXPECT_EQ(test, n.mtile2, 0x02010018);
 	KUNIT_EXPECT_EQ(test, n.te_screen, 0x0001d016);
@@ -52,6 +64,7 @@ static void rt_test_720x480_4x(struct kunit *test)
 static struct kunit_case pvrsgx_rt_test_cases[] = {
 	KUNIT_CASE(rt_test_720x480_1x),
 	KUNIT_CASE(rt_test_720x480_4x),
+	KUNIT_CASE(rt_test_sgx530_64x64),
 	{}
 };
 
