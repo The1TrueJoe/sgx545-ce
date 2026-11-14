@@ -297,13 +297,22 @@ static uint32_t doutu_w0(struct sgx_ctx *c, uint32_t va, int vertex, uint32_t te
  * shader task's temp/memory writes unless the launch carries the write-retire
  * context (bit21), the way §9 did for the microkernel's EDM task. Emit/state
  * tasks don't take this (they retire on emit); only the main shaders do. */
+static uint32_t env_u32(const char *name)
+{
+	const char *v = getenv(name);
+
+	return v ? (uint32_t)strtoul(v, NULL, 0) : 0;
+}
+
 static uint32_t doutu_w0_shader(struct sgx_ctx *c, uint32_t va, int vertex, uint32_t temps)
 {
 	uint32_t w0 = doutu_w0(c, va, vertex, temps);
 
 	if (getenv("SGXGEN_SHADER_BIT21"))
 		w0 |= 0x200000;
-	return w0;
+	/* SGXGEN_VS_W0OR / SGXGEN_FS_W0OR: bits ORed into the vertex / pixel main
+	 * shader's DOUTU word 0 (530 write-retire probes). */
+	return w0 | env_u32(vertex ? "SGXGEN_VS_W0OR" : "SGXGEN_FS_W0OR");
 }
 
 /* LIMM rN, #v (STATE.md, from the DDK's end-of-tile generator) */
@@ -411,7 +420,7 @@ static uint32_t pds_pixel(struct sgx_ctx *c, uint32_t task_w0, uint32_t task_w1,
 
 	pds_d0(&p, 0, task_w0);
 	pds_d0(&p, 1, task_w1);
-	pds_d1(&p, 0, 0);
+	pds_d1(&p, 0, env_u32("SGXGEN_FS_W2"));	/* DOUTU word 2 (0; 530 probes) */
 	pds_d1(&p, 1, douti);
 	CODE(&p, MOVS(MV, 0, 0, 0, 1, 2, 3, DOUTU));
 	if (douti) {
@@ -1144,7 +1153,7 @@ static void vdm_draw(struct sgx_ctx *c, uint32_t prim, uint32_t count, uint32_t 
 	pds_d0(&p, 0, vb);
 	pds_d0(&p, 1, attr_dwords - 1);		/* DOUTD: dwords-1, attribute register 0 */
 	pds_d1(&p, 0, stride);
-	pds_d1(&p, 1, 0);
+	pds_d1(&p, 1, env_u32("SGXGEN_VS_W2"));	/* DOUTU word 2 (0; 530 probes) */
 	pds_d0(&p, 2, vs_w0);
 	pds_d0(&p, 3, 0);
 	CODE(&p, ALU(OP_MUL16, 0, S1_IN(0), S2_DS1(0), U_DS1(0x32)));	/* index * stride */
