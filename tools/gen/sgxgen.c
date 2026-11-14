@@ -714,7 +714,9 @@ static void rt_numbers(struct sgx_rt_numbers *r, uint32_t w, uint32_t h)
 {
 	uint32_t n, big, m;
 
-	r->xt = (w + 31) >> 5;
+	/* SGXGEN_TILE16: the SGX530's 16x16 tiles (the vendor stack's 64x64 TA
+	 * command has 4x4 tiles); the SGX545's are 32 wide */
+	r->xt = getenv("SGXGEN_TILE16") ? (w + 15) >> 4 : (w + 31) >> 5;
 	r->yt = (h + 15) >> 4;
 	if (w * h < 0x4b000) {
 		r->mode = 0;

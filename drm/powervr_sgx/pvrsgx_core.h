@@ -152,6 +152,14 @@ struct pvrsgx_core_family {
 	 * already gives up client isolation on such a core.
 	 */
 	bool data_no_edmprotect;
+	/** @tile_w_log2: log2 of a tile's width in pixels (tiles are 16 high). */
+	u32 tile_w_log2;
+	/** @screen_y_shift: Where the TA command's screen size word puts h - 1. */
+	u32 screen_y_shift;
+	/** @te_aa: The TA command's TE anti-aliasing word, single sampled. */
+	u32 te_aa;
+	/** @vdm_ctl: The TA command's VDM control word. */
+	u32 vdm_ctl;
 	/** @cmds: What its client commands are checked against (pvrsgx_cmd_defs.c). */
 	const struct pvrsgx_cmd_core *cmds;
 	/** @init_regs: Init script part 2's register writes, in order. */

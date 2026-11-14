@@ -166,6 +166,10 @@ static const struct pvrsgx_core_family families[] = {
 		.num_dir_lists = 16,
 		.va_bits = 32,
 		.heaps = &sgx545_heaps,
+		.tile_w_log2 = 5,
+		.screen_y_shift = 16,
+		.te_aa = 0x20000000,
+		.vdm_ctl = 0xa2,
 		.cmds = &pvrsgx_cmd_core_sgx545,
 		.init_regs = sgx545_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx545_init_regs),
@@ -185,6 +189,15 @@ static const struct pvrsgx_core_family families[] = {
 		.event_pds_guessed = true,
 		/* Its task's stores to EDMPROTECT pages fault. */
 		.data_no_edmprotect = true,
+		/*
+		 * The vendor stack's TA command for a 64x64 target on an OMAP3630
+		 * board: 4x4 tiles, so 16x16 ones; screen (h-1)<<12 | (w-1); TE AA 0;
+		 * VDM control 0x1a2.
+		 */
+		.tile_w_log2 = 4,
+		.screen_y_shift = 12,
+		.te_aa = 0,
+		.vdm_ctl = 0x1a2,
 		.cmds = &pvrsgx_cmd_core_sgx530,
 		.init_regs = sgx530_init_regs,
 		.num_init_regs = ARRAY_SIZE(sgx530_init_regs),

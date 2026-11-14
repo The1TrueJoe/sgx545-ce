@@ -47,9 +47,7 @@
 #define BG_PDS_MIDDLE		0x00030001
 /* Constant TA command words. */
 #define TA_CTL			0x50000000
-#define TE_AA			0x20000000
-#define TE_AA_4X		(TE_AA | BIT(31) | BIT(30))	/* 2x in X and in Y */
-#define VDM_CTL			0xa2
+#define TE_AA_4X		(BIT(31) | BIT(30))	/* 2x in X and in Y, over the core's te_aa */
 #define F32_1E_6		0x358637bd
 #define RT_FLAGS		0x88
 #define RT_FLAGS_4X		0xeaa26e26	/* the RT flags of a 4x render */
@@ -332,11 +330,25 @@ void pvrsgx_render_ctx_fini(struct pvrsgx_device *sdev, struct pvrsgx_context *c
  * and the region and tail pointer arrays follow. Its macrotile registers
  * stay in pixel tiles, as does the screen.
  */
-static void rt_numbers(struct pvrsgx_rt_numbers *r, u32 w, u32 h, u32 samples)
+/*
+ * Bring-up: ta_revert puts the SGX545's TA command values back on another core,
+ * one bit each, to bisect: b0 tile width, b1 screen size packing, b2 TE AA, b3
+ * VDM control. 0 (the default) uses the core's own.
+ */
+static unsigned int pvrsgx_ta_revert;
+module_param_named(ta_revert, pvrsgx_ta_revert, uint, 0444);
+MODULE_PARM_DESC(ta_revert, "Bring-up: use the SGX545's TA command values (b0 tiles, b1 screen, b2 TE AA, b3 VDM ctl; default 0)");
+
+static u32 core_tile_w_log2(const struct pvrsgx_core_family *f)
+{
+	return pvrsgx_ta_revert & BIT(0) ? 5 : f->tile_w_log2;
+}
+
+static void rt_numbers(struct pvrsgx_rt_numbers *r, u32 w, u32 h, u32 samples, u32 tile_w_log2)
 {
 	u32 aa = samples == 4 ? 2 : 1, xt, yt, mx, my, n, big, m;
 
-	r->xt = (w + 31) >> 5;
+	r->xt = (w + BIT(tile_w_log2) - 1) >> tile_w_log2;
 	r->yt = (h + 15) >> 4;
 	xt = r->xt * aa;
 	yt = r->yt * aa;
@@ -369,7 +381,7 @@ static void rt_numbers(struct pvrsgx_rt_numbers *r, u32 w, u32 h, u32 samples)
 	for (big = 1; m; m >>= 1)
 		big <<= 1;
 	r->tailptr_bytes = big * big * 4;
-	r->te_aa = aa == 2 ? TE_AA_4X : TE_AA;
+	r->te_aa = aa == 2 ? TE_AA_4X : 0;	/* | the core's te_aa, at the kick */
 	r->rt_flags = aa == 2 ? RT_FLAGS_4X : RT_FLAGS;
 }
 
@@ -509,7 +521,7 @@ struct pvrsgx_rt_dataset *pvrsgx_rtds_create(struct pvrsgx_context *ctx, u32 w, 
 	s->w = w;
 	s->h = h;
 	s->samples = samples;
-	rt_numbers(&s->n, w, h, samples);
+	rt_numbers(&s->n, w, h, samples, core_tile_w_log2(sdev->family));
 
 	err = pvrsgx_kobj_new(sdev, &s->rtword, PVRSGX_KRANGE_KDATA, 4, 0, NULL);
 	err = err ?: pvrsgx_kobj_new(sdev, &s->rtdata, PVRSGX_KRANGE_KDATA,
@@ -697,7 +709,7 @@ int pvrsgx_render_job_init(struct drm_file *file, struct pvrsgx_job *job,
 		pvrsgx_heaps(sdev)->pds_pixel.end - pvrsgx_heaps(sdev)->pds_pixel.base;
 	cctx.limits[PVRSGX_CMD_LIMIT_TILES_X] = rj->rtds->n.xt - 1;
 	cctx.limits[PVRSGX_CMD_LIMIT_TILES_Y] = rj->rtds->n.yt - 1;
-	cctx.rt_pad_width = rj->rtds->n.xt * 32;
+	cctx.rt_pad_width = rj->rtds->n.xt << core_tile_w_log2(sdev->family);
 	cctx.rt_pad_height = rj->rtds->n.yt * 16;
 	cctx.rt_samples = rj->rtds->samples;
 	cctx.mapped = pvrsgx_cmd_mapped;
@@ -873,19 +885,20 @@ int pvrsgx_render_job_build(struct pvrsgx_job *job, u32 k, u32 data[6])
 		job->done_val = deps->write_pending + 1;
 	}
 
-	cmd->te_aa = s->n.te_aa;
+	cmd->te_aa = s->n.te_aa | (pvrsgx_ta_revert & BIT(2) ? 0x20000000 : job->ctx->sdev->family->te_aa);
 	cmd->te_mtile[0] = s->n.mtile1;
 	cmd->te_mtile[1] = s->n.mtile2;
 	cmd->te_screen = s->n.te_screen;
 	cmd->mt_tiles = s->n.mt_tiles;
 	cmd->ta_flags2 = rj->kick[k].sgx545_ta_kick.ta_flags2 | (last ? PVRSGX_TA2_RENDER : 0);
 	cmd->vdm_base = (u32)rj->kick[k].base.vdm_base;
-	cmd->vdm_ctl = VDM_CTL;
+	cmd->vdm_ctl = pvrsgx_ta_revert & BIT(3) ? 0xa2 : job->ctx->sdev->family->vdm_ctl;
 	cmd->region_headers = rgn_this;
 	cmd->tail_pointers = kobj_va(s->tailptr);
 	cmd->eps[0] = F32_1E_6;
 	cmd->eps[1] = F32_1E_6;
-	cmd->screen_size = (s->h - 1) << 16 | (s->w - 1);
+	cmd->screen_size = (s->h - 1) << (pvrsgx_ta_revert & BIT(1) ? 16 : job->ctx->sdev->family->screen_y_shift) |
+			   (s->w - 1);
 	cmd->params_base = r->pb->base;
 	cmd->rt_flags = s->n.rt_flags;
 
