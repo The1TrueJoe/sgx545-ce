@@ -58,6 +58,27 @@ the invalidate done bits differ, and does the TA start at all? The TA/VDM status
 after the hang would answer that. The coredump doesn't dump them yet. Keep the three sgxgen
 changes, since the vendor stream shows the SGX530 needs them, but they aren't the blocker.
 
+**Follow-up the same day (C).**
+- **The TA starts and stalls.** 1 s into the kick, `CLKGATESTATUS` reads 0x00111000 against
+  0x00110000 idle. That's TA b12 on, with the TA gate on auto. `BIF_TA_REQ_BASE` has been
+  programmed (0 → the PB base), and `BIF_MEM_REQ_STAT` shows two reads outstanding that
+  never complete. There is no BIF fault and no event. `EVENT_STATUS2` b4 sets: this header
+  lists only b0/b1, so what b4 means is G.
+- **The invalidate done bits aren't in the named event registers.** With the GPU idle, a
+  host write of 1 to each of `PDS_INV0`-`3` and `PDS_INV_CSC` changes neither
+  `EVENT_STATUS` nor `EVENT_STATUS2` within 1 ms. The SGX545 reports them in 0x138, which
+  this header doesn't name.
+- **The vendor's TA command has four per-kick words that differ from ours:**
+  - TE screen: **16x16 tiles**. A 64x64 target is 4x4 tiles (0x00003003). The SGX545's
+    tiles are 32 wide.
+  - Screen size: `(h-1)<<12 | (w-1)`, against the SGX545's `<<16`.
+  - TE AA: 0, against 0x20000000.
+  - VDM control: 0x1a2, against 0xa2.
+
+  The macrotile words and macrotile count match ours. The driver now takes all four per
+  core (`wip/sgx530-kick-test`, with a `ta_revert` bring-up parameter). With them, and with
+  every client form above, the hang is unchanged.
+
 ## UPDATE 2026-11-13: full 64x64 kick on silicon — microkernel + command layer PROVEN; only blocker left is sgxgen's PDS data layout
 
 The driver's `edm_init` + host-played kick ran a 64x64 frame on SGX530 silicon (core rev
