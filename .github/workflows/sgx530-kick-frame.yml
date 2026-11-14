@@ -31,6 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: sgx-asm, from sgx.xml (tools/gen/mkusse.py assembles with it)
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-mako
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
+
       - name: Build frame-fake (native, no GPU)
         run: |
           set -eux
@@ -99,6 +107,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends linux-libc-dev
           mkdir -p hdr/include
           cp -r /usr/include/drm hdr/include/
+
+      - name: sgx-asm, from sgx.xml (tools/gen/mkusse.py assembles with it)
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-mako
+          sh ukernel/sgx-asm.sh "$RUNNER_TEMP/sgx-asm"
+          echo "SGX_ASM=$RUNNER_TEMP/sgx-asm/sgx-asm" >> "$GITHUB_ENV"
 
       - name: Build the DRM frame client, static armhf
         run: |
